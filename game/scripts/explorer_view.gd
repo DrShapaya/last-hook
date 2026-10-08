@@ -17,7 +17,7 @@ var rope_start := Vector3.ZERO
 var rope_end := Vector3.ZERO
 
 func setup(world: MountainWorld) -> void:
-	body = preload("res://scenes/player.tscn").instantiate() as ExplorerRig
+	body = preload("res://scenes/player_sprite.tscn").instantiate() as ExplorerRig
 	add_child(body)
 	body.setup()
 	rope_material = world.mat("braided_rope",Color.WHITE,true)

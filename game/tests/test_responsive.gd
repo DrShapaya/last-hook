@@ -115,7 +115,10 @@ func run_tests() -> void:
 	quit(0 if failures.is_empty() else 1)
 
 func root_embedded(owner_part: Sprite3D, limb_root: Node3D) -> bool:
-	var image := owner_part.texture.get_image()
+	var atlas := owner_part.texture as AtlasTexture
+	var image := atlas.atlas.get_image() if atlas else owner_part.texture.get_image()
+	if image.is_compressed(): image.decompress()
+	if atlas: image = image.get_region(atlas.region)
 	var socket := owner_part.to_local(limb_root.global_position)
 	if socket.z>=0: return false
 	for offset in [Vector2.ZERO,Vector2(-.018,0),Vector2(.018,0),Vector2(0,-.018),Vector2(0,.018)]:

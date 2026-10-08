@@ -44,6 +44,7 @@ var reel := 0.0
 var focus_remaining := .7
 var aim_direction := Vector2.UP
 var elapsed := 0.0
+var animation_time := 0.0
 var camera_y := 7.0
 var camera_x := 0.0
 var snapshot_timer := 0.0
@@ -838,6 +839,7 @@ func _move_camera(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	if state not in ["pause","revive","result"]: animation_time += delta
 	hint_timer = maxf(0,hint_timer-delta)
 	if state=="play" and not preview:
 		snapshot_timer += delta
@@ -850,7 +852,7 @@ func _process(delta: float) -> void:
 		world.set_loot_prices_visible(state=="play")
 	var target := sim.anchor if sim.attached else bolt_pos
 	var warning := sim.attached and anchor_id>=0 and anchor_time>2.1 and int(world.anchor_by_id(anchor_id).get("kind",0))==1
-	explorer.draw(sim,target,sim.attached or bolt_active,bolt_active,elapsed,warning,model.level(2))
+	explorer.draw(sim,target,sim.attached or bolt_active,bolt_active,animation_time,warning,model.level(2))
 	hud.update_play()
 	if not capture_path.is_empty() and elapsed>1.1 and not capture_queued:
 		capture_queued = true

@@ -1,0 +1,96 @@
+{
+  "date": "2026-10-08",
+  "tool": "built-in image_gen.imagegen",
+  "mode": "generate, followed by one precise-object-edit for plant spacing",
+  "generation": [
+    {
+      "name": "rope-albedo",
+      "prompt": "Use case: stylized-concept. Asset type: square seamless game rope albedo texture, fully opaque, fills entire image edge to edge. A straight unwrapped surface of warm tan braided climbing rope, densely interlaced diagonal hemp fibers with broad readable crossing strands, subtle natural roughness. The rope length runs vertically in UV space. Even flat diffuse material color, no directional lighting or ambient shadows, no highlights. Continuous repeating weave that matches at top/bottom and left/right borders. This is a flat material texture, NOT a photograph of a cylindrical rope, NOT a spool, knot, silhouette or rope on a background. No border, no text, no watermark. Stylized adventure game material, honey brown and beige fibers, no objects.",
+      "reference_images": [],
+      "transparent_background": false
+    },
+    {
+      "name": "hook-head",
+      "prompt": "Use case: stylized-concept. Purpose: production raster game asset for Last Hook, first location only: sunlit fractured gray mountain with moss, roots and weathered timber. Match the provided image only for material quality, character identity and warm stylized 3D art direction; do not copy its composition. Polished stylized 3D render, readable broad forms and restrained fine detail, orthographic side-game camera, modest visible depth, consistent soft light from upper left, clean edges, no environment, no floor, no cast shadow outside the object, no text, numbers, frames, watermarks, labels or checkerboard. Asset type: one isolated grappling hook head sprite, large and centered with 12 percent clear transparent padding. Broadside view with its shaft pointing straight UP, rope attachment eyelet at the BOTTOM. One compact forged-steel climbing grapple: three stout hooked prongs fan upward from a dark steel central shaft, two clearly visible hooked side prongs and one depth prong, rounded strong silhouette, sharpened tips, subtle worn silver edges, warm brass collar. Lower eyelet clearly open. No rope, cable, hand, glow, sparks, character or scenery. Entire hook fully visible, balanced utilitarian design. Actual transparent background.",
+      "reference_images": [
+        "references/target-look-v2.png"
+      ],
+      "transparent_background": true
+    },
+    {
+      "name": "backpack",
+      "prompt": "Use case: stylized-concept. Purpose: production raster game asset for Last Hook, first location only: sunlit fractured gray mountain with moss, roots and weathered timber. Match the provided image only for material quality, character identity and warm stylized 3D art direction; do not copy its composition. Polished stylized 3D render, readable broad forms and restrained fine detail, orthographic side-game camera, modest visible depth, consistent soft light from upper left, clean edges, no environment, no floor, no cast shadow outside the object, no text, numbers, frames, watermarks, labels or checkerboard. Asset type: isolated backpack attachment for the reference explorer. One brown leather mountaineering backpack, olive rolled bedroll strapped horizontally on top, two small pockets, metal buckles, teal canteen on the side. Match the reference backpack closely. Fixed three-quarter side view consistent with a character facing RIGHT: bag back visible on left and side visible on right. Pack upright with vertical central axis, unrotated, neutral pose. Leather straps terminate neatly and do not extend into an imagined torso. No character, body, head, arms, hands or legs, no loose gear outside bag. Large centered object, fully inside frame with 12 percent transparent padding. True transparent background.",
+      "reference_images": [
+        "game/assets/art/explorer-v2.png"
+      ],
+      "transparent_background": true
+    },
+    {
+      "name": "character-parts",
+      "prompt": "Use case: stylized-concept. Purpose: production raster game asset for Last Hook, first location only: sunlit fractured gray mountain with moss, roots and weathered timber. Match the provided image only for material quality, character identity and warm stylized 3D art direction; do not copy its composition. Polished stylized 3D render, readable broad forms and restrained fine detail, orthographic side-game camera, modest visible depth, consistent soft light from upper left, clean edges, no environment, no floor, no cast shadow outside the object, no text, numbers, frames, watermarks, labels or checkerboard. Asset type: a clean 4 by 4 modular cutout character body-parts sprite atlas on TRUE TRANSPARENCY, suitable for 2D skeletal animation, square high-resolution sheet. Keep the exact explorer identity from the reference: mustard yellow rounded cube head with two dark oval eyes, moss-green outdoors jacket, brown belt, charcoal trousers, brown climbing boots and dark leather gloves. Reconstruct neutral unposed body PARTS, not the assembled climbing pose. Every item isolated in its own equal grid cell with generous transparent margins. Exactly 16 cells, no drawn grid and no labels. Row 1 left to right: (1) yellow cube HEAD with open eyes, neck attachment below, (2) SAME HEAD with eyes CLOSED for blink animation, (3) green jacket TORSO from neck to waist, sleeveless arm sockets, without arms/head/pelvis/backpack, (4) PELVIS belt and short dark trouser hip block only, without thighs. Row 2: (5) near UPPER ARM green sleeve shoulder to elbow, (6) far UPPER ARM same length slightly darker, (7) near FOREARM green sleeve elbow to wrist, (8) far FOREARM slightly darker. Row 3: (9) near closed glove HAND with short wrist cuff only, (10) far closed glove HAND only, (11) near THIGH trouser segment hip to knee, (12) far THIGH same length slightly darker. Row 4: (13) near SHIN trouser segment knee to ankle, (14) far SHIN same length slightly darker, (15) near BOOT toe points RIGHT, (16) far BOOT toe points RIGHT slightly darker. All parts in the SAME orthographic three-quarter SIDE view facing right with no perspective foreshortening. Arms and legs point straight down in rest pose, no bent knees or elbows, limb upper and lower sections separated. Use consistent PIXEL SCALE across every cell, do not enlarge hands to fill cells: head width about 170 pixels, torso height about 180, upper arms and forearms each about 100, thighs about 110, shins about 100, hands about 55 on a 1536-ish square sheet. Small rounded hidden overlap ends at shoulder, elbow, wrist, hip, knee, ankle to allow rotation without gaps. No backpack or rope or assembled figure, no connecting limbs, no floating marks.",
+      "reference_images": [
+        "game/assets/art/explorer-v2.png"
+      ],
+      "transparent_background": true
+    },
+    {
+      "name": "rock-obstacles",
+      "prompt": "Use case: stylized-concept. Asset type: modular sprite atlas for the first location of Last Hook, a sunlit fractured gray mountain with moss and old timber. The reference image is STYLE AND MATERIAL reference only. Polished stylized 3D game art, clean broad readable forms, weathered gray stone, rich moss green, warm brown wood, soft consistent upper-left daylight. Fixed orthographic SIDE ELEVATION for a 2.5D climbing game, camera perpendicular to mountain face, slight visible thickness, all assets at the same view angle. All objects isolated on a genuinely TRANSPARENT background, not a scene. A clean 3 by 3 grid of nine assets, ONE asset per cell, generous clear padding at every cell edge, no touching or overlap between cells. Consistent art scale, each asset fully inside its cell. No text, labels, numbers, grid lines, frames, UI, watermark, floor plane, backdrop, cast shadows outside objects, no mountain image. Distinct silhouettes; do not repeat one shape in different colors. Subject, row-major order: (1) squat asymmetric mossy boulder with wide flat foothold top, (2) tall tilted sharp rock tooth, (3) long narrow horizontal rock shelf with broken underside, (4) cluster of three pointed stone spikes rising upward, (5) broad slanted rock slab with one deep crack and tiny moss patches, (6) curved stone overhang slab with downward tooth, (7) large irregular hanging boulder with weak crumbling attachment above, (8) jagged horizontal cluster of loose rubble forming a low obstacle, (9) small fractured rock arch with a clearly TRANSPARENT hole through the middle. First mountain biome only; no snow, lava, crystals, ruins, roots or wood in this sheet. Show top surfaces on shelves clearly. Preserve open gaps and holes as alpha.",
+      "reference_images": [
+        "references/target-look-v2.png"
+      ],
+      "transparent_background": true
+    },
+    {
+      "name": "plants-roots",
+      "prompt": "Use case: stylized-concept. Asset type: modular sprite atlas for the first location of Last Hook, a sunlit fractured gray mountain with moss and old timber. The reference image is STYLE AND MATERIAL reference only. Polished stylized 3D game art, clean broad readable forms, weathered gray stone, rich moss green, warm brown wood, soft consistent upper-left daylight. Fixed orthographic SIDE ELEVATION for a 2.5D climbing game, camera perpendicular to mountain face, slight visible thickness, all assets at the same view angle. All objects isolated on a genuinely TRANSPARENT background, not a scene. A clean 3 by 3 grid of nine assets, ONE asset per cell, generous clear padding at every cell edge, no touching or overlap between cells. Consistent art scale, each asset fully inside its cell. No text, labels, numbers, grid lines, frames, UI, watermark, floor plane, backdrop, cast shadows outside objects, no mountain image. Distinct silhouettes; do not repeat one shape in different colors. Subject, row-major order: (1) low mound of vivid moss with grass tufts, (2) fern clump with five broad fronds, (3) small leafy mountain shrub, (4) thick gnarled horizontal tree branch growing from a small cut base at left, twig leaves near right tip, readable as a climbing grip, (5) long vertical hanging ivy vine curtain, (6) heavy crooked exposed tree ROOT with a curved hook-like end and tiny moss, (7) dead dry forked branch with a clean broken base, (8) thorny bramble cluster with visibly sharp brown thorns and sparse leaves, (9) shallow carpet of clover and grass spilling over an edge, transparent underneath. Each plant a single isolated coherent clump with no surrounding terrain, no pot, no rock base, no flowers, no trees with entire crowns. Green foliage grouped into readable silhouettes, avoid hair-thin noisy strands.",
+      "reference_images": [
+        "references/target-look-v2.png"
+      ],
+      "transparent_background": true
+    },
+    {
+      "name": "barriers",
+      "prompt": "Use case: stylized-concept. Asset type: modular sprite atlas for the first location of Last Hook, a sunlit fractured gray mountain with moss and old timber. The reference image is STYLE AND MATERIAL reference only. Polished stylized 3D game art, clean broad readable forms, weathered gray stone, rich moss green, warm brown wood, soft consistent upper-left daylight. Fixed orthographic SIDE ELEVATION for a 2.5D climbing game, camera perpendicular to mountain face, slight visible thickness, all assets at the same view angle. All objects isolated on a genuinely TRANSPARENT background, not a scene. A clean 3 by 3 grid of nine assets, ONE asset per cell, generous clear padding at every cell edge, no touching or overlap between cells. Consistent art scale, each asset fully inside its cell. No text, labels, numbers, grid lines, frames, UI, watermark, floor plane, backdrop, cast shadows outside objects, no mountain image. Distinct silhouettes; do not repeat one shape in different colors. Subject, row-major order: (1) horizontal weathered timber fence of three uprights and two planks, (2) crossed broken timber beams bound together with thick cord, (3) horizontal wooden spike barrier on a thick beam, three blunt jagged stakes pointing upward, (4) tall vertical broken plank barricade reinforced by one diagonal beam, (5) gnarled thick thorny root barrier with a pronounced arc and transparent center, (6) low dense tangled bramble wall, (7) a short sturdy gate of rusty iron bars in a weathered wood frame, (8) one long splintered fallen timber trunk angled slightly up, (9) heavy jagged rock lip descending from a horizontal overhang. Practical primitive obstacles for an abandoned mountain trail. Broken edges and open spaces remain transparent. No skulls, gore, weapons, traps with blood, advanced technology or architecture from another location.",
+      "reference_images": [
+        "references/target-look-v2.png"
+      ],
+      "transparent_background": true
+    },
+    {
+      "name": "timber-structures",
+      "prompt": "Use case: stylized-concept. Asset type: modular sprite atlas for the first location of Last Hook, a sunlit fractured gray mountain with moss and old timber. The reference image is STYLE AND MATERIAL reference only. Polished stylized 3D game art, clean broad readable forms, weathered gray stone, rich moss green, warm brown wood, soft consistent upper-left daylight. Fixed orthographic SIDE ELEVATION for a 2.5D climbing game, camera perpendicular to mountain face, slight visible thickness, all assets at the same view angle. All objects isolated on a genuinely TRANSPARENT background, not a scene. A clean 3 by 3 grid of nine assets, ONE asset per cell, generous clear padding at every cell edge, no touching or overlap between cells. Consistent art scale, each asset fully inside its cell. No text, labels, numbers, grid lines, frames, UI, watermark, floor plane, backdrop, cast shadows outside objects, no mountain image. Distinct silhouettes; do not repeat one shape in different colors. Subject, row-major order: (1) short wide wooden cliff platform with a clearly horizontal usable top, plank deck, two diagonal triangular supports below, (2) longer wooden platform with one missing plank and broken right end, (3) one separate triangular wall bracket made from two timber beams and iron bolts, (4) vertical old wooden ladder, seven clear rungs, (5) short rope suspension bridge segment, horizontal deck with four planks, ropes and two end posts, (6) one separate thick horizontal wooden beam with a rope-bound iron hook eye underneath, (7) small suspended timber pallet platform hanging from two ropes meeting at one upper ring, (8) small abandoned mountain trail rest shelter with plank roof and two posts, open transparent interior, no background, (9) wooden anchor post with metal ring and coiled short rope around its lower half. Clear modular endpoints for placing against cliff geometry, no embedded mountain. Structures have readable flat top surfaces and visibly separated supports. Do not turn the atlas into a village or landscape.",
+      "reference_images": [
+        "references/target-look-v2.png"
+      ],
+      "transparent_background": true
+    },
+    {
+      "name": "rope-strip",
+      "prompt": "Use case: stylized-concept. Asset type: a vertical repeating rope SPRITE STRIP for a climbing game. Exactly ONE perfectly straight, constant-width warm tan braided hemp rope running from the TOP image border to the BOTTOM image border along the exact vertical center. Tall narrow canvas. Rope takes about 20 percent of image width; generous completely transparent space on both sides. Braided chevrons repeat uniformly at constant pitch along the rope. The first and last weave period should match so the strip can repeat vertically. Polished stylized 3D game art, fine fibers subordinate to readable large crossing strands, subtle soft upper-left diffuse light, no hard rim light. The rope must TOUCH top and bottom edges, no visible caps, ends, fraying, tassels, coils, knots, curl, hook, metal or character. Straight centerline, no taper, no bends. TRUE transparent background, no shadow outside the rope, no floor, checkerboard, text or labels. This is the visible cutout of a rope, not a flat woven fabric sheet.",
+      "reference_images": [],
+      "transparent_background": true
+    }
+  ],
+  "edits": [
+    {
+      "name": "plants-roots-spaced",
+      "prompt": "Use case: precise-object-edit. Edit the provided nine-plant sprite atlas. Keep all NINE exact subjects, their materials, styling, lighting, colors, and row-major ordering. Fix ONLY layout and scale so each object fits inside its own non-overlapping rectangular cell, suitable for extracting independent AtlasTexture sprites. Use a strict 3 by 3 equal grid on a square image, no visible grid. Center each asset in its cell with at least 40 pixels of transparent clearance to every cell boundary. In particular SHORTEN the middle hanging ivy to stay fully inside the middle cell; its tail MUST NOT extend into the bottom thorn bush. SHRINK the wide branch in the middle-left cell and the dead branch in bottom-left cell to fit their cells. Shrink other objects as needed for the same padding. No object, twig, leaf or shadow may cross its cell boundaries. Background and ALL space between objects must be genuinely transparent, and the open spaces inside plants must remain transparent. Do not add a backdrop, floor, glow or shadows outside the cutouts. No new objects, no text, labels, grid lines or borders. Preserve detailed polished stylized 3D game appearance of reference.",
+      "reference_images": [
+        "plants-roots.png (original generated atlas)"
+      ],
+      "transparent_background": true
+    }
+  ],
+  "selected_images": [
+    "rope-albedo.png",
+    "rope-strip.png",
+    "hook-head.png",
+    "backpack.png",
+    "character-parts.png",
+    "rock-obstacles.png",
+    "plants-roots-spaced.png",
+    "barriers.png",
+    "timber-structures.png"
+  ]
+}

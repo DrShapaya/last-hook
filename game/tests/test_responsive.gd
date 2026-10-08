@@ -17,6 +17,7 @@ func run_tests() -> void:
 	if directory.is_empty():
 		quit(2)
 		return
+	DirAccess.make_dir_recursive_absolute(directory)
 	var game = load("res://scenes/main.tscn").instantiate()
 	root.add_child(game)
 	game.preview = true
@@ -54,6 +55,8 @@ func run_tests() -> void:
 		game.model.profile["levels"][2] = 3
 		game._process(.016)
 		check(game.explorer.bolt.visible and game.explorer.tip_count==3,"attached rope keeps the three-prong hook visible: %s" % dimensions)
+		var ends := mesh_ends(game.explorer.rope)
+		check(ends[0].distance_to(game.explorer.body.grip_position())<.001 and ends[1].distance_to(game.explorer.bolt.to_global(ExplorerView.HOOK_EYE))<.001,"rendered braided rope joins the actual hand and hook eyelet: %s" % dimensions)
 		game.bolt_active = true
 		game.sim.attached = false
 		game.bolt_pos = game.sim.pos+Vector2(1,3)
@@ -63,6 +66,12 @@ func run_tests() -> void:
 		game.state = "pause"
 		game.hud.show_pause()
 		check(area.encloses(game.hud.content.get_child(0).get_global_rect()),"pause controls remain inside the resized viewport: %s" % dimensions)
+	game.explorer.draw(game.sim,game.sim.pos+Vector2(-3,3),true,false,3.75,false,2)
+	var mirrored_ends := mesh_ends(game.explorer.rope)
+	check(game.explorer.body.facing==-1 and mirrored_ends[0].distance_to(game.explorer.body.grip_position())<.001,"the rig turns left while the rendered rope stays attached to the reaching hand")
+	check(game.explorer.body.head.texture==game.explorer.body.head_blink,"the character closes its eyes during the blink")
+	game.explorer.body.animate(game.sim,game.sim.pos+Vector2(3,3),true,4.0)
+	check(game.explorer.body.facing==1 and game.explorer.body.head.texture==game.explorer.body.head_open,"the rig turns back right and opens its eyes after the blink")
 	game.queue_free()
 	await process_frame
 	var output := FileAccess.open(directory.path_join("responsive-test-report.json"),FileAccess.WRITE)
@@ -70,3 +79,18 @@ func run_tests() -> void:
 	output.close()
 	print("RESPONSIVE_TESTS ",checks," checks, ",failures.size()," failures")
 	quit(0 if failures.is_empty() else 1)
+
+func mesh_ends(mesh_node: MeshInstance3D) -> Array[Vector3]:
+	var arrays := mesh_node.mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var end_v := 0.0
+	for point in uv: end_v = maxf(end_v,point.y)
+	var sums: Array[Vector3] = [Vector3.ZERO,Vector3.ZERO]
+	var counts := [0,0]
+	for index in range(vertices.size()):
+		for end in range(2):
+			if absf(uv[index].y-(0.0 if end==0 else end_v))<.0001:
+				sums[end] += mesh_node.to_global(vertices[index])
+				counts[end] += 1
+	return [sums[0]/maxi(1,counts[0]),sums[1]/maxi(1,counts[1])]

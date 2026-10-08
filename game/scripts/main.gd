@@ -56,6 +56,7 @@ var capture_queued := false
 var capture_overview := false
 var capture_location := 0
 var capture_tips := 1
+var capture_left := false
 var audio: AudioStreamPlayer
 var preview := false
 var run_seconds := 0.0
@@ -105,19 +106,20 @@ func _ready() -> void:
 		if argument.begins_with("--tips="):
 			capture_tips = clampi(int(argument.trim_prefix("--tips=")),1,3)
 		if argument=="--overview": capture_overview = true
+		if argument=="--left": capture_left = true
 	if not capture_path.is_empty():
 		preview = true
 		model.profile = GameModel.fresh_profile()
 		model.profile["levels"][2] = capture_tips
 		selected_location = capture_location
 		lobby_location = capture_location
-		if capture_screen in ["play","rope","inventory"]:
+		if capture_screen in ["play","rope","inventory","equipment","flight"]:
 			start_run(false)
 			run_seed = 58273
 			_create_world(run_seed,selected_location,summit_height+6)
 			var point: Dictionary = world.anchor_by_id(world.main_route[12])
 			anchor_id = point["id"]
-			sim.pos = point["pos"]+Vector2(-2.5,-3.5)
+			sim.pos = point["pos"]+Vector2(2.5 if capture_left else -2.5,-3.5)
 			var contact_fraction := world.hit_object(sim.pos,point["pos"],point,.32)
 			sim.anchor = sim.pos.lerp(point["pos"],maxf(0,contact_fraction))
 			anchor_contact = sim.anchor
@@ -144,6 +146,13 @@ func _ready() -> void:
 			camera_y = sim.pos.y+2.5
 			camera_x = sim.pos.x
 			hint_timer = 0
+			if capture_screen=="equipment":
+				camera.size = 9
+				hud.hide()
+			if capture_screen=="flight":
+				bolt_active = true
+				bolt_pos = sim.anchor
+				sim.attached = false
 		elif capture_screen == "result":
 			state = "result"
 			model.profile["gold"] = 4540
@@ -713,7 +722,7 @@ func finish_run(success: bool) -> void:
 	settlement["zone_bonus"] = zone_gold
 	if not preview:
 		model.profile["run_history"].append({"id":run_id,"seed":run_seed,"seconds":snappedf(run_seconds,.1),"height":settlement["highest"],"gold":int(settlement["total"])+zone_gold,"zone_bonus":zone_gold,"success":success,"shots":shots,"catches":catches,"reason":failure_reason,"levels":model.profile["levels"].duplicate()})
-		model.profile["run_history"][-1].merge({"build":"0.9.0","mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"first_summit":settlement["first"]})
+		model.profile["run_history"][-1].merge({"build":"0.10.0","mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"first_summit":settlement["first"]})
 		model.profile["run_history"] = model.profile["run_history"].slice(-30)
 		model.save()
 	hud.show_result(settlement)

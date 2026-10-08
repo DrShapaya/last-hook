@@ -1,0 +1,693 @@
+{
+  "version": 1,
+  "location": "green_peak",
+  "tool": "built-in image_gen.imagegen",
+  "format": "PNG + Godot AtlasTexture",
+  "notes": [
+    "Rasters only; the pack contains no mesh, rig or baked animation.",
+    "Atlas regions follow actual object bounds rather than equal cells. Sizes and pivots must be adjusted when building the character.",
+    "Rope repeat boundaries are generated and require visual verification in the final rope material."
+  ],
+  "images": [
+    {
+      "file": "rope-albedo.png",
+      "width": 1254,
+      "height": 1254,
+      "alpha": false
+    },
+    {
+      "file": "rope-strip.png",
+      "width": 1024,
+      "height": 1536,
+      "alpha": true
+    },
+    {
+      "file": "hook-head.png",
+      "width": 1189,
+      "height": 1323,
+      "alpha": true
+    },
+    {
+      "file": "backpack.png",
+      "width": 1254,
+      "height": 1254,
+      "alpha": true
+    },
+    {
+      "file": "character-parts.png",
+      "width": 1254,
+      "height": 1254,
+      "alpha": true
+    },
+    {
+      "file": "rock-obstacles.png",
+      "width": 1536,
+      "height": 1024,
+      "alpha": true
+    },
+    {
+      "file": "plants-roots-spaced.png",
+      "width": 1254,
+      "height": 1254,
+      "alpha": true
+    },
+    {
+      "file": "barriers.png",
+      "width": 1536,
+      "height": 1024,
+      "alpha": true
+    },
+    {
+      "file": "timber-structures.png",
+      "width": 1536,
+      "height": 1024,
+      "alpha": true
+    }
+  ],
+  "sprites": [
+    {
+      "name": "head-open",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/head-open.tres",
+      "region": [
+        23,
+        62,
+        292,
+        262
+      ]
+    },
+    {
+      "name": "head-blink",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/head-blink.tres",
+      "region": [
+        336,
+        60,
+        293,
+        264
+      ]
+    },
+    {
+      "name": "torso",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/torso.tres",
+      "region": [
+        660,
+        49,
+        270,
+        287
+      ]
+    },
+    {
+      "name": "pelvis",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/pelvis.tres",
+      "region": [
+        969,
+        164,
+        260,
+        179
+      ]
+    },
+    {
+      "name": "upper-arm-near",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/upper-arm-near.tres",
+      "region": [
+        87,
+        368,
+        182,
+        284
+      ]
+    },
+    {
+      "name": "upper-arm-far",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/upper-arm-far.tres",
+      "region": [
+        399,
+        368,
+        181,
+        284
+      ]
+    },
+    {
+      "name": "forearm-near",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/forearm-near.tres",
+      "region": [
+        721,
+        374,
+        130,
+        271
+      ]
+    },
+    {
+      "name": "forearm-far",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/forearm-far.tres",
+      "region": [
+        1032,
+        374,
+        130,
+        272
+      ]
+    },
+    {
+      "name": "hand-near",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/hand-near.tres",
+      "region": [
+        101,
+        729,
+        146,
+        177
+      ]
+    },
+    {
+      "name": "hand-far",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/hand-far.tres",
+      "region": [
+        414,
+        729,
+        146,
+        177
+      ]
+    },
+    {
+      "name": "thigh-near",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/thigh-near.tres",
+      "region": [
+        715,
+        665,
+        169,
+        294
+      ]
+    },
+    {
+      "name": "thigh-far",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/thigh-far.tres",
+      "region": [
+        1021,
+        666,
+        166,
+        293
+      ]
+    },
+    {
+      "name": "shin-near",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/shin-near.tres",
+      "region": [
+        97,
+        951,
+        141,
+        245
+      ]
+    },
+    {
+      "name": "shin-far",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/shin-far.tres",
+      "region": [
+        409,
+        950,
+        141,
+        246
+      ]
+    },
+    {
+      "name": "boot-near",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/boot-near.tres",
+      "region": [
+        662,
+        1020,
+        257,
+        186
+      ]
+    },
+    {
+      "name": "boot-far",
+      "category": "character",
+      "atlas": "character-parts.png",
+      "resource": "sprites/character/boot-far.tres",
+      "region": [
+        979,
+        1019,
+        258,
+        187
+      ]
+    },
+    {
+      "name": "mossy-boulder",
+      "category": "rocks",
+      "atlas": "rock-obstacles.png",
+      "resource": "sprites/rocks/mossy-boulder.tres",
+      "region": [
+        52,
+        65,
+        434,
+        271
+      ]
+    },
+    {
+      "name": "rock-tooth",
+      "category": "rocks",
+      "atlas": "rock-obstacles.png",
+      "resource": "sprites/rocks/rock-tooth.tres",
+      "region": [
+        623,
+        17,
+        246,
+        344
+      ]
+    },
+    {
+      "name": "narrow-shelf",
+      "category": "rocks",
+      "atlas": "rock-obstacles.png",
+      "resource": "sprites/rocks/narrow-shelf.tres",
+      "region": [
+        984,
+        121,
+        534,
+        202
+      ]
+    },
+    {
+      "name": "stone-spikes",
+      "category": "rocks",
+      "atlas": "rock-obstacles.png",
+      "resource": "sprites/rocks/stone-spikes.tres",
+      "region": [
+        85,
+        359,
+        332,
+        312
+      ]
+    },
+    {
+      "name": "cracked-slab",
+      "category": "rocks",
+      "atlas": "rock-obstacles.png",
+      "resource": "sprites/rocks/cracked-slab.tres",
+      "region": [
+        512,
+        391,
+        462,
+        301
+      ]
+    },
+    {
+      "name": "stone-overhang",
+      "category": "rocks",
+      "atlas": "rock-obstacles.png",
+      "resource": "sprites/rocks/stone-overhang.tres",
+      "region": [
+        1052,
+        376,
+        418,
+        296
+      ]
+    },
+    {
+      "name": "crumbling-boulder",
+      "category": "rocks",
+      "atlas": "rock-obstacles.png",
+      "resource": "sprites/rocks/crumbling-boulder.tres",
+      "region": [
+        91,
+        678,
+        342,
+        324
+      ]
+    },
+    {
+      "name": "loose-rubble",
+      "category": "rocks",
+      "atlas": "rock-obstacles.png",
+      "resource": "sprites/rocks/loose-rubble.tres",
+      "region": [
+        518,
+        735,
+        461,
+        223
+      ]
+    },
+    {
+      "name": "rock-arch",
+      "category": "rocks",
+      "atlas": "rock-obstacles.png",
+      "resource": "sprites/rocks/rock-arch.tres",
+      "region": [
+        1035,
+        698,
+        469,
+        274
+      ]
+    },
+    {
+      "name": "moss-grass",
+      "category": "plants",
+      "atlas": "plants-roots-spaced.png",
+      "resource": "sprites/plants/moss-grass.tres",
+      "region": [
+        15,
+        133,
+        403,
+        261
+      ]
+    },
+    {
+      "name": "fern",
+      "category": "plants",
+      "atlas": "plants-roots-spaced.png",
+      "resource": "sprites/plants/fern.tres",
+      "region": [
+        421,
+        62,
+        426,
+        330
+      ]
+    },
+    {
+      "name": "leafy-shrub",
+      "category": "plants",
+      "atlas": "plants-roots-spaced.png",
+      "resource": "sprites/plants/leafy-shrub.tres",
+      "region": [
+        854,
+        109,
+        383,
+        298
+      ]
+    },
+    {
+      "name": "leafy-branch",
+      "category": "plants",
+      "atlas": "plants-roots-spaced.png",
+      "resource": "sprites/plants/leafy-branch.tres",
+      "region": [
+        43,
+        517,
+        421,
+        200
+      ]
+    },
+    {
+      "name": "hanging-ivy",
+      "category": "plants",
+      "atlas": "plants-roots-spaced.png",
+      "resource": "sprites/plants/hanging-ivy.tres",
+      "region": [
+        544,
+        465,
+        192,
+        337
+      ]
+    },
+    {
+      "name": "hooked-root",
+      "category": "plants",
+      "atlas": "plants-roots-spaced.png",
+      "resource": "sprites/plants/hooked-root.tres",
+      "region": [
+        846,
+        481,
+        376,
+        311
+      ]
+    },
+    {
+      "name": "dead-branch",
+      "category": "plants",
+      "atlas": "plants-roots-spaced.png",
+      "resource": "sprites/plants/dead-branch.tres",
+      "region": [
+        27,
+        871,
+        366,
+        286
+      ]
+    },
+    {
+      "name": "thorn-bush",
+      "category": "plants",
+      "atlas": "plants-roots-spaced.png",
+      "resource": "sprites/plants/thorn-bush.tres",
+      "region": [
+        420,
+        867,
+        410,
+        282
+      ]
+    },
+    {
+      "name": "clover-edge",
+      "category": "plants",
+      "atlas": "plants-roots-spaced.png",
+      "resource": "sprites/plants/clover-edge.tres",
+      "region": [
+        849,
+        865,
+        386,
+        307
+      ]
+    },
+    {
+      "name": "timber-fence",
+      "category": "barriers",
+      "atlas": "barriers.png",
+      "resource": "sprites/barriers/timber-fence.tres",
+      "region": [
+        47,
+        38,
+        539,
+        234
+      ]
+    },
+    {
+      "name": "crossed-beams",
+      "category": "barriers",
+      "atlas": "barriers.png",
+      "resource": "sprites/barriers/crossed-beams.tres",
+      "region": [
+        605,
+        18,
+        393,
+        283
+      ]
+    },
+    {
+      "name": "wooden-spikes",
+      "category": "barriers",
+      "atlas": "barriers.png",
+      "resource": "sprites/barriers/wooden-spikes.tres",
+      "region": [
+        1028,
+        22,
+        469,
+        286
+      ]
+    },
+    {
+      "name": "plank-barricade",
+      "category": "barriers",
+      "atlas": "barriers.png",
+      "resource": "sprites/barriers/plank-barricade.tres",
+      "region": [
+        67,
+        301,
+        342,
+        360
+      ]
+    },
+    {
+      "name": "thorn-root-arch",
+      "category": "barriers",
+      "atlas": "barriers.png",
+      "resource": "sprites/barriers/thorn-root-arch.tres",
+      "region": [
+        454,
+        325,
+        551,
+        323
+      ]
+    },
+    {
+      "name": "bramble-wall",
+      "category": "barriers",
+      "atlas": "barriers.png",
+      "resource": "sprites/barriers/bramble-wall.tres",
+      "region": [
+        1012,
+        383,
+        487,
+        244
+      ]
+    },
+    {
+      "name": "iron-gate",
+      "category": "barriers",
+      "atlas": "barriers.png",
+      "resource": "sprites/barriers/iron-gate.tres",
+      "region": [
+        30,
+        680,
+        434,
+        296
+      ]
+    },
+    {
+      "name": "splintered-trunk",
+      "category": "barriers",
+      "atlas": "barriers.png",
+      "resource": "sprites/barriers/splintered-trunk.tres",
+      "region": [
+        490,
+        673,
+        543,
+        298
+      ]
+    },
+    {
+      "name": "rock-lip",
+      "category": "barriers",
+      "atlas": "barriers.png",
+      "resource": "sprites/barriers/rock-lip.tres",
+      "region": [
+        1062,
+        640,
+        448,
+        360
+      ]
+    },
+    {
+      "name": "cliff-platform",
+      "category": "structures",
+      "atlas": "timber-structures.png",
+      "resource": "sprites/structures/cliff-platform.tres",
+      "region": [
+        34,
+        36,
+        429,
+        245
+      ]
+    },
+    {
+      "name": "broken-platform",
+      "category": "structures",
+      "atlas": "timber-structures.png",
+      "resource": "sprites/structures/broken-platform.tres",
+      "region": [
+        539,
+        53,
+        554,
+        228
+      ]
+    },
+    {
+      "name": "wall-bracket",
+      "category": "structures",
+      "atlas": "timber-structures.png",
+      "resource": "sprites/structures/wall-bracket.tres",
+      "region": [
+        1182,
+        25,
+        297,
+        284
+      ]
+    },
+    {
+      "name": "ladder",
+      "category": "structures",
+      "atlas": "timber-structures.png",
+      "resource": "sprites/structures/ladder.tres",
+      "region": [
+        165,
+        302,
+        147,
+        358
+      ]
+    },
+    {
+      "name": "rope-bridge",
+      "category": "structures",
+      "atlas": "timber-structures.png",
+      "resource": "sprites/structures/rope-bridge.tres",
+      "region": [
+        490,
+        357,
+        575,
+        271
+      ]
+    },
+    {
+      "name": "hook-beam",
+      "category": "structures",
+      "atlas": "timber-structures.png",
+      "resource": "sprites/structures/hook-beam.tres",
+      "region": [
+        1156,
+        352,
+        328,
+        287
+      ]
+    },
+    {
+      "name": "hanging-platform",
+      "category": "structures",
+      "atlas": "timber-structures.png",
+      "resource": "sprites/structures/hanging-platform.tres",
+      "region": [
+        70,
+        660,
+        317,
+        348
+      ]
+    },
+    {
+      "name": "rest-shelter",
+      "category": "structures",
+      "atlas": "timber-structures.png",
+      "resource": "sprites/structures/rest-shelter.tres",
+      "region": [
+        536,
+        654,
+        493,
+        341
+      ]
+    },
+    {
+      "name": "anchor-post",
+      "category": "structures",
+      "atlas": "timber-structures.png",
+      "resource": "sprites/structures/anchor-post.tres",
+      "region": [
+        1224,
+        677,
+        217,
+        314
+      ]
+    }
+  ]
+}

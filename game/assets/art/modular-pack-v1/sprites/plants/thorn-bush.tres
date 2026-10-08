@@ -1,0 +1,9 @@
+[gd_resource type="AtlasTexture" load_steps=2 format=3]
+
+[ext_resource type="Texture2D" path="res://assets/art/modular-pack-v1/plants-roots-spaced.png" id="1"]
+
+[resource]
+resource_name = "thorn-bush"
+atlas = ExtResource("1")
+region = Rect2(420, 867, 410, 282)
+filter_clip = true

@@ -2,8 +2,8 @@ class_name ExplorerRig
 extends Node3D
 
 const ART := "res://assets/art/modular-pack-v1/"
-const UPPER_ARM := .26
-const FOREARM := .24
+const UPPER_ARM := .12
+const FOREARM := .11
 var head: Sprite3D
 var head_open: Texture2D
 var head_blink: Texture2D
@@ -42,10 +42,10 @@ func sprite(parent: Node3D, texture: Texture2D, title: String, height: float, at
 func setup() -> void:
 	name = "Походный персонаж"
 	var backpack := load(ART+"backpack.png") as Texture2D
-	sprite(self,backpack,"Рюкзак со скаткой",.74,Vector3(-.23,.16,-.10))
-	part(self,"torso",.50,Vector3(0,.22,0))
-	part(self,"pelvis",.24,Vector3(0,-.10,.01))
-	head = part(self,"head-open",.47,Vector3(0,.65,.04))
+	sprite(self,backpack,"Рюкзак со скаткой",.90,Vector3(-.19,.015,-.10))
+	part(self,"torso",.22,Vector3(0,-.11,0))
+	part(self,"pelvis",.11,Vector3(0,-.24,.01))
+	head = part(self,"head-open",.54,Vector3(0,.24,.04))
 	head_open = head.texture
 	head_blink = load(ART+"sprites/character/head-blink.tres") as Texture2D
 	for index in range(2):
@@ -53,21 +53,21 @@ func setup() -> void:
 		var suffix := "near" if near else "far"
 		var side := 1.0 if near else -1.0
 		var depth := .09 if near else -.04
-		var shoulder := joint(self,"Плечо "+suffix,Vector3(side*.24,.30,depth))
-		part(shoulder,"upper-arm-"+suffix,.335,Vector3.ZERO,Vector2(.64,.10)).rotation.z = .27
+		var shoulder := joint(self,"Плечо "+suffix,Vector3(side*.12,-.045,depth))
+		part(shoulder,"upper-arm-"+suffix,.155,Vector3.ZERO,Vector2(.64,.10)).rotation.z = .27
 		var elbow := joint(shoulder,"Локоть",Vector3(0,-UPPER_ARM,.01))
-		part(elbow,"forearm-"+suffix,.30,Vector3.ZERO,Vector2(.55,.08)).rotation.z = .075
+		part(elbow,"forearm-"+suffix,.14,Vector3.ZERO,Vector2(.55,.08)).rotation.z = .075
 		var hand := joint(elbow,"Кисть",Vector3(0,-FOREARM,.015))
-		part(hand,"hand-"+suffix,.17,Vector3.ZERO,Vector2(.50,.13))
+		part(hand,"hand-"+suffix,.10,Vector3.ZERO,Vector2(.50,.13))
 		shoulders.append(shoulder)
 		elbows.append(elbow)
 		hands.append(hand)
-		var hip := joint(self,"Бедро "+suffix,Vector3(side*.11,-.16,depth*.6))
-		part(hip,"thigh-"+suffix,.27,Vector3.ZERO,Vector2(.55,.10)).rotation.z = .09
-		var knee := joint(hip,"Колено",Vector3(0,-.21,.01))
-		part(knee,"shin-"+suffix,.24,Vector3.ZERO,Vector2(.50,.08))
-		var boot := joint(knee,"Стопа",Vector3(0,-.19,.01))
-		part(boot,"boot-"+suffix,.17,Vector3.ZERO,Vector2(.32,.25))
+		var hip := joint(self,"Бедро "+suffix,Vector3(side*.075,-.26,depth*.6))
+		part(hip,"thigh-"+suffix,.09,Vector3.ZERO,Vector2(.55,.10)).rotation.z = .09
+		var knee := joint(hip,"Колено",Vector3(0,-.065,.01))
+		part(knee,"shin-"+suffix,.08,Vector3.ZERO,Vector2(.50,.08))
+		var boot := joint(knee,"Стопа",Vector3(0,-.055,.01))
+		part(boot,"boot-"+suffix,.10,Vector3.ZERO,Vector2(.32,.25))
 		hips.append(hip)
 		knees.append(knee)
 		boots.append(boot)
@@ -100,12 +100,12 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 		hips[index].rotation.z = side*(.10+.18*stride)+clampf(sim.vel.x*facing*.025,-.16,.16)
 		knees[index].rotation.z = .12 if sim.grounded else .30+side*.12*stride
 		boots[index].rotation.z = -knees[index].rotation.z*.45
-	pose_arm(0,Vector2(-.30,-.13)+Vector2(-.08*stride,.04*sin(time*3)),-1)
+	pose_arm(0,Vector2(-.19,-.25)+Vector2(-.035*stride,.02*sin(time*3)),-1)
 	if tether:
 		var local_target := to_local(Vector3(target.x,target.y,global_position.z))
 		pose_arm(1,Vector2(local_target.x,local_target.y),1)
 	else:
-		pose_arm(1,Vector2(.33,-.12)+Vector2(.10*stride,.035*sin(time*3+1)),1)
+		pose_arm(1,Vector2(.20,-.24)+Vector2(.04*stride,.02*sin(time*3+1)),1)
 
 func grip_position() -> Vector3:
-	return hands[1].to_global(Vector3(0,-.055,.025))
+	return hands[1].to_global(Vector3(0,-.032,.025))

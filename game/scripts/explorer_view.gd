@@ -40,6 +40,7 @@ func setup(world: MountainWorld) -> void:
 	world.add_child(rope_outer)
 	bolt = Node3D.new()
 	bolt.name = "Кованый крюк"
+	bolt.scale = Vector3.ONE*.5
 	world.add_child(bolt)
 	var metal := world.mat("painted_hook",Color.WHITE,true)
 	metal.albedo_texture = load(ART+"hook-head.png") as Texture2D

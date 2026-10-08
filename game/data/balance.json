@@ -1,0 +1,33 @@
+{
+  "status": "playable_v9_session_validation_required",
+  "meters_per_unit": 10,
+  "zone_units": 20,
+  "summit_units": 120,
+  "fall_screen_margin_units": 0.9,
+  "fall_speed_limit_units": 8,
+  "rope_adjust_speed_units": 2.4,
+  "rope_drag_units_per_pixel": 0.025,
+  "gravity": 14,
+  "upgrade_prices": [90, 300, 1000, 3200, 15500],
+  "upgrade_weights": [1.0, 1.0, 0.9, 1.1, 0.75, 0.9, 1.0],
+  "rope_lengths": [5.5, 6.3, 7.4, 8.7, 10.2, 12.0],
+  "throw_speeds": [16, 20, 25, 30, 35, 40],
+  "impulse_factors": [1.0, 1.08, 1.16, 1.25, 1.35, 1.46],
+  "hook_radii": [0.32, 0.53, 0.76],
+  "tip_prices": [2400, 12000],
+  "capacities": [1, 2, 3, 4, 5, 6],
+  "magnet_radii": [0.0, 0.35, 0.65, 1.0, 1.4, 1.8],
+  "recovery_percents": [30, 43, 56, 69, 82, 95],
+  "loot_values": [40, 75, 130, 220, 360, 560],
+  "summit_repeat_bonus": 300,
+  "first_summit_gold": 1000,
+  "first_summit_diamonds": 20,
+  "new_zone_gold_per_index": 100,
+  "new_zone_diamonds": 3,
+  "diamond_revive_cost": 3,
+  "locations": [
+    {"id": "green_peak", "name": "Зелёная вершина", "price": 0, "currency": "gold", "height_units": 120},
+    {"id": "stone_spires", "name": "Каменные шпили", "price": 8000, "currency": "gold", "height_units": 140},
+    {"id": "sky_city", "name": "Небесный город", "price": 45, "currency": "diamonds", "height_units": 160}
+  ]
+}

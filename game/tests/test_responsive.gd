@@ -72,6 +72,9 @@ func run_tests() -> void:
 	check(game.explorer.body.head.texture==game.explorer.body.head_blink,"the character closes its eyes during the blink")
 	game.explorer.body.animate(game.sim,game.sim.pos+Vector2(3,3),true,4.0)
 	check(game.explorer.body.facing==1 and game.explorer.body.head.texture==game.explorer.body.head_open,"the rig turns back right and opens its eyes after the blink")
+	game.explorer.draw(game.sim,game.sim.pos+Vector2(0,3),true,false,4.0,false,1)
+	var wrist_at_head: Vector3 = game.explorer.body.head.to_local(game.explorer.body.hands[1].global_position)
+	check(absf(wrist_at_head.x)>game.explorer.body.head.texture.get_width()*game.explorer.body.head.pixel_size*.5,"a vertical reach keeps the wrist beside the face instead of intersecting the head")
 	game.queue_free()
 	await process_frame
 	var output := FileAccess.open(directory.path_join("responsive-test-report.json"),FileAccess.WRITE)

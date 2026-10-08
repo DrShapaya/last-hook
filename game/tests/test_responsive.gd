@@ -76,7 +76,10 @@ func run_tests() -> void:
 	var wrist_at_head: Vector3 = game.explorer.body.head.to_local(game.explorer.body.hands[1].global_position)
 	check(absf(wrist_at_head.x)>game.explorer.body.head.texture.get_width()*game.explorer.body.head.pixel_size*.5,"a vertical reach keeps the wrist beside the face instead of intersecting the head")
 	for index in range(2):
-		check(root_embedded(game.explorer.body.torso,game.explorer.body.shoulders[index]),"shoulder %d overlaps opaque jacket pixels and starts beneath the body" % index)
+		var shoulder_local: Vector3 = game.explorer.body.torso.to_local(game.explorer.body.shoulders[index].global_position)
+		var shoulder_pixel: Vector2 = Vector2(shoulder_local.x,-shoulder_local.y)/game.explorer.body.torso.pixel_size+game.explorer.body.torso.texture.get_size()*.5
+		var opening_pixel := Vector2(31,108) if index==0 else Vector2(259,83)
+		check(shoulder_pixel.distance_to(opening_pixel)<1,"shoulder %d is centred in the drawn armhole, rather than elsewhere on the jacket" % index)
 		check(root_embedded(game.explorer.body.pelvis,game.explorer.body.hips[index]),"hip %d overlaps opaque shorts pixels and starts beneath the body" % index)
 	game.sim.vel = Vector2.ZERO
 	game.sim.attached = false

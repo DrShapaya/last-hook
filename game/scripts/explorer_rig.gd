@@ -73,6 +73,29 @@ func limb_core(parent: Node3D, length: float, radius: float, color: Color) -> vo
 	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(core)
 
+func shoulder_cover(at: Vector3, size: Vector2, angle: float) -> void:
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for index in range(24):
+		for corner in [Vector2.ZERO,Vector2.from_angle(TAU*index/24.0),Vector2.from_angle(TAU*(index+1)/24.0)]:
+			surface.set_color(Color.WHITE if corner==Vector2.ZERO else Color(.68,.68,.68))
+			surface.set_uv((Vector2(184,457)+corner*Vector2(24,-43))/Vector2(1280,1280))
+			surface.set_normal(Vector3.BACK)
+			surface.add_vertex(Vector3(corner.x*size.x*.5,corner.y*size.y*.5,0))
+	var cover := MeshInstance3D.new()
+	cover.name = "Ткань плеча внутри проймы"
+	cover.mesh = surface.commit()
+	cover.position = at
+	cover.rotation.z = angle
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_texture = load(ART+"character-parts.png") as Texture2D
+	material.vertex_color_use_as_albedo = true
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	cover.material_override = material
+	cover.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(cover)
+
 func setup() -> void:
 	name = "Походный персонаж"
 	var backpack := load(ART+"backpack.png") as Texture2D
@@ -84,13 +107,15 @@ func setup() -> void:
 	head_open = head.texture
 	head_blink = load(ART+"sprites/character/head-blink.tres") as Texture2D
 	for index in range(2):
-		var near := index==1
+		# In this three-quarter drawing the visible, near armhole is on the left.
+		var near := index==0
 		var suffix := "near" if near else "far"
-		var shoulder_uv := Vector2(.82 if near else .20,.36)
-		var shoulder := joint(self,"Плечо "+suffix,socket_position(torso,shoulder_uv,-.03 if near else -.05))
+		var shoulder_uv := Vector2(31.0/270,108.0/287) if near else Vector2(259.0/270,83.0/287)
+		shoulder_cover(socket_position(torso,shoulder_uv,.012),Vector2(.056,.094) if near else Vector2(.028,.070),.10 if near else -.15)
+		var shoulder := joint(self,"Плечо "+suffix,socket_position(torso,shoulder_uv,.025 if near else -.025))
 		limb_core(shoulder,UPPER_ARM,.026,Color("4a4b2e"))
 		segment(shoulder,"upper-arm-"+suffix,UPPER_ARM,Vector2(.68,.12),Vector2(.37,.87))
-		var elbow := joint(shoulder,"Локоть",Vector3(0,-UPPER_ARM,.085 if near else .01))
+		var elbow := joint(shoulder,"Локоть",Vector3(0,-UPPER_ARM,.01 if near else .085))
 		limb_core(elbow,FOREARM,.023,Color("4a4b2e"))
 		segment(elbow,"forearm-"+suffix,FOREARM,Vector2(.55,.09),Vector2(.47,.88))
 		var hand := joint(elbow,"Кисть",Vector3(0,-FOREARM,.015))
@@ -98,7 +123,7 @@ func setup() -> void:
 		shoulders.append(shoulder)
 		elbows.append(elbow)
 		hands.append(hand)
-		var hip_uv := Vector2(.77 if near else .23,.65)
+		var hip_uv := Vector2(.23 if near else .77,.65)
 		var hip := joint(self,"Бедро "+suffix,socket_position(pelvis,hip_uv,-.04 if near else -.06))
 		limb_core(hip,.10,.029,Color("443a2d"))
 		segment(hip,"thigh-"+suffix,.10,Vector2(.60,.12),Vector2(.42,.88))

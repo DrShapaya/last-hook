@@ -41,14 +41,27 @@ func sprite(parent: Node3D, texture: Texture2D, title: String, height: float, at
 	parent.add_child(node)
 	return node
 
-func segment(parent: Node3D, title: String, length: float, socket: Vector2, end: Vector2) -> Sprite3D:
+func segment(parent: Node3D, title: String, length: float, socket: Vector2, end: Vector2, mirror := false, trim := Vector2(0,1)) -> Sprite3D:
 	var texture := load(ART+"sprites/character/"+title+".tres") as Texture2D
+	if trim!=Vector2(0,1):
+		var original := texture as AtlasTexture
+		var cropped := AtlasTexture.new()
+		cropped.atlas = original.atlas
+		cropped.region = Rect2(original.region.position+Vector2(0,texture.get_height()*trim.x),Vector2(texture.get_width(),texture.get_height()*(trim.y-trim.x)))
+		cropped.filter_clip = true
+		texture = cropped
+		socket.y = (socket.y-trim.x)/(trim.y-trim.x)
+		end.y = (end.y-trim.x)/(trim.y-trim.x)
+	if mirror:
+		socket.x = 1-socket.x
+		end.x = 1-end.x
 	var span := (end-socket)*texture.get_size()*Vector2(1,-1)
 	var angle := Vector2(0,-1).angle()-span.angle()
 	var node := sprite(parent,texture,title,texture.get_height()*length/span.length(),Vector3.ZERO,socket)
 	# Both the image and its offset rotate about the anatomical socket.
 	node.position = node.position.rotated(Vector3.BACK,angle)
 	node.rotation.z = angle
+	node.flip_h = mirror
 	return node
 
 func socket_position(owner_part: Sprite3D, uv: Vector2, depth: float) -> Vector3:
@@ -73,17 +86,17 @@ func limb_core(parent: Node3D, length: float, radius: float, color: Color) -> vo
 	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(core)
 
-func shoulder_cover(at: Vector3, size: Vector2, angle: float) -> void:
+func cloth_cover(parent: Node3D, at: Vector3, size: Vector2, angle: float, texture_center := Vector2(184,457), texture_span := Vector2(24,-43), edge_shade := .68) -> void:
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for index in range(24):
 		for corner in [Vector2.ZERO,Vector2.from_angle(TAU*index/24.0),Vector2.from_angle(TAU*(index+1)/24.0)]:
-			surface.set_color(Color.WHITE if corner==Vector2.ZERO else Color(.68,.68,.68))
-			surface.set_uv((Vector2(184,457)+corner*Vector2(24,-43))/Vector2(1280,1280))
+			surface.set_color(Color.WHITE if corner==Vector2.ZERO else Color(edge_shade,edge_shade,edge_shade))
+			surface.set_uv((texture_center+corner*texture_span)/Vector2(1280,1280))
 			surface.set_normal(Vector3.BACK)
 			surface.add_vertex(Vector3(corner.x*size.x*.5,corner.y*size.y*.5,0))
 	var cover := MeshInstance3D.new()
-	cover.name = "Ткань плеча внутри проймы"
+	cover.name = "Ткань поверх сустава"
 	cover.mesh = surface.commit()
 	cover.position = at
 	cover.rotation.z = angle
@@ -94,7 +107,7 @@ func shoulder_cover(at: Vector3, size: Vector2, angle: float) -> void:
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	cover.material_override = material
 	cover.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(cover)
+	parent.add_child(cover)
 
 func setup() -> void:
 	name = "Походный персонаж"
@@ -111,15 +124,16 @@ func setup() -> void:
 		var near := index==0
 		var suffix := "near" if near else "far"
 		var shoulder_uv := Vector2(31.0/270,108.0/287) if near else Vector2(259.0/270,83.0/287)
-		shoulder_cover(socket_position(torso,shoulder_uv,.012),Vector2(.056,.094) if near else Vector2(.028,.070),.10 if near else -.15)
+		if near: cloth_cover(self,socket_position(torso,shoulder_uv,.012),Vector2(.056,.094),.10)
 		var shoulder := joint(self,"Плечо "+suffix,socket_position(torso,shoulder_uv,.025 if near else -.025))
 		limb_core(shoulder,UPPER_ARM,.026,Color("4a4b2e"))
-		segment(shoulder,"upper-arm-"+suffix,UPPER_ARM,Vector2(.68,.12),Vector2(.37,.87))
-		var elbow := joint(shoulder,"Локоть",Vector3(0,-UPPER_ARM,.01 if near else .085))
+		segment(shoulder,"upper-arm-"+suffix,UPPER_ARM,Vector2(.68,.12),Vector2(.37,.87),not near,Vector2(0,.84))
+		var elbow := joint(shoulder,"Локоть",Vector3(0,-UPPER_ARM,.01))
 		limb_core(elbow,FOREARM,.023,Color("4a4b2e"))
-		segment(elbow,"forearm-"+suffix,FOREARM,Vector2(.55,.09),Vector2(.47,.88))
+		segment(elbow,"forearm-"+suffix,FOREARM,Vector2(.55,.09),Vector2(.47,.88),not near,Vector2(.13,.89))
+		cloth_cover(elbow,Vector3(0,0,.003),Vector2(.054,.038),0,Vector2(778 if near else 1090,490),Vector2(26,-22),.95)
 		var hand := joint(elbow,"Кисть",Vector3(0,-FOREARM,.015))
-		segment(hand,"hand-"+suffix,.067,Vector2(.40,.13),Vector2(.57,.69))
+		segment(hand,"hand-"+suffix,.067,Vector2(.40,.13),Vector2(.57,.69),not near)
 		shoulders.append(shoulder)
 		elbows.append(elbow)
 		hands.append(hand)
@@ -164,22 +178,22 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 		hips[index].rotation.z = side*.12*stride+clampf(sim.vel.x*facing*.018,-.10,.10)
 		knees[index].rotation.z = 0.0 if sim.grounded else .16+side*.08*stride
 		boots[index].rotation.z = -knees[index].rotation.z*.45
-	var far_shoulder := Vector2(shoulders[0].position.x,shoulders[0].position.y)
-	pose_arm(0,far_shoulder+Vector2(-.015-.012*stride,-.264+.005*sin(time*3)),-1)
+	var near_shoulder := Vector2(shoulders[0].position.x,shoulders[0].position.y)
+	pose_arm(0,near_shoulder+Vector2(-.015-.012*stride,-.264+.005*sin(time*3)),-1)
 	if tether:
 		var local_target := to_local(Vector3(target.x,target.y,global_position.z))
 		var shoulder := Vector2(shoulders[1].position.x,shoulders[1].position.y)
 		var reach := Vector2(local_target.x,local_target.y)-shoulder
 		# Short arms reach beside the large head, rather than through its face.
 		var reach_angle := minf(reach.angle(),.55) if reach.y>0 else reach.angle()
-		pose_arm(1,shoulder+Vector2.from_angle(reach_angle)*(UPPER_ARM+FOREARM-.008),1)
+		pose_arm(1,shoulder+Vector2.from_angle(reach_angle)*(UPPER_ARM+FOREARM-.008),-1)
 		var wrist := to_local(hands[1].global_position)
 		var wrist_angle := Vector2(local_target.x-wrist.x,local_target.y-wrist.y).angle()
 		hands[1].rotation.z = wrist_angle+PI*.5-shoulders[1].rotation.z-elbows[1].rotation.z
 	else:
 		hands[1].rotation.z = 0
-		var near_shoulder := Vector2(shoulders[1].position.x,shoulders[1].position.y)
-		pose_arm(1,near_shoulder+Vector2(.015+.012*stride,-.264+.005*sin(time*3+1)),1)
+		var far_shoulder := Vector2(shoulders[1].position.x,shoulders[1].position.y)
+		pose_arm(1,far_shoulder+Vector2(.015+.012*stride,-.264+.005*sin(time*3+1)),-1)
 
 func grip_position() -> Vector3:
 	return hands[1].to_global(Vector3(0,-.067,.025))

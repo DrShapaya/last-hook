@@ -722,7 +722,7 @@ func finish_run(success: bool) -> void:
 	settlement["zone_bonus"] = zone_gold
 	if not preview:
 		model.profile["run_history"].append({"id":run_id,"seed":run_seed,"seconds":snappedf(run_seconds,.1),"height":settlement["highest"],"gold":int(settlement["total"])+zone_gold,"zone_bonus":zone_gold,"success":success,"shots":shots,"catches":catches,"reason":failure_reason,"levels":model.profile["levels"].duplicate()})
-		model.profile["run_history"][-1].merge({"build":"0.10.4","mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"first_summit":settlement["first"]})
+		model.profile["run_history"][-1].merge({"build":"0.10.5","mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"first_summit":settlement["first"]})
 		model.profile["run_history"] = model.profile["run_history"].slice(-30)
 		model.save()
 	hud.show_result(settlement)

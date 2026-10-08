@@ -90,6 +90,16 @@ func run_tests() -> void:
 		var wrist: Vector3 = game.explorer.body.to_local(game.explorer.body.hands[index].global_position)
 		hands_below_shoulders = hands_below_shoulders and absf(wrist.x-game.explorer.body.shoulders[index].position.x)<.025 and wrist.y<game.explorer.body.shoulders[index].position.y-.24
 	check(hands_below_shoulders,"idle wrists hang below their shoulders instead of being splayed away from the torso")
+	var natural_rear_elbow := true
+	for target_offset in [Vector2(3,3),Vector2(-3,3),Vector2(0,3),Vector2(3,-2),Vector2(-3,-2)]:
+		game.explorer.body.animate(game.sim,game.sim.pos+target_offset,true,0)
+		var shoulder: Vector3 = game.explorer.body.to_local(game.explorer.body.shoulders[1].global_position)
+		var elbow: Vector3 = game.explorer.body.to_local(game.explorer.body.elbows[1].global_position)
+		var wrist: Vector3 = game.explorer.body.to_local(game.explorer.body.hands[1].global_position)
+		var reach := Vector2(wrist.x-shoulder.x,wrist.y-shoulder.y)
+		var upper := Vector2(elbow.x-shoulder.x,elbow.y-shoulder.y)
+		natural_rear_elbow = natural_rear_elbow and reach.cross(upper)<-.001
+	check(natural_rear_elbow,"rear elbow stays on the flexion side of the shoulder-to-wrist line when reaching in either direction")
 	game.queue_free()
 	await process_frame
 	var output := FileAccess.open(directory.path_join("responsive-test-report.json"),FileAccess.WRITE)

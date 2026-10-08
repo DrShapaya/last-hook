@@ -75,6 +75,18 @@ func run_tests() -> void:
 	game.explorer.draw(game.sim,game.sim.pos+Vector2(0,3),true,false,4.0,false,1)
 	var wrist_at_head: Vector3 = game.explorer.body.head.to_local(game.explorer.body.hands[1].global_position)
 	check(absf(wrist_at_head.x)>game.explorer.body.head.texture.get_width()*game.explorer.body.head.pixel_size*.5,"a vertical reach keeps the wrist beside the face instead of intersecting the head")
+	for index in range(2):
+		check(root_embedded(game.explorer.body.torso,game.explorer.body.shoulders[index]),"shoulder %d overlaps opaque jacket pixels and starts beneath the body" % index)
+		check(root_embedded(game.explorer.body.pelvis,game.explorer.body.hips[index]),"hip %d overlaps opaque shorts pixels and starts beneath the body" % index)
+	game.sim.vel = Vector2.ZERO
+	game.sim.attached = false
+	game.sim.grounded = true
+	game.explorer.body.animate(game.sim,game.sim.pos+Vector2(1,3),false,0)
+	var hands_below_shoulders := true
+	for index in range(2):
+		var wrist: Vector3 = game.explorer.body.to_local(game.explorer.body.hands[index].global_position)
+		hands_below_shoulders = hands_below_shoulders and absf(wrist.x-game.explorer.body.shoulders[index].position.x)<.025 and wrist.y<game.explorer.body.shoulders[index].position.y-.24
+	check(hands_below_shoulders,"idle wrists hang below their shoulders instead of being splayed away from the torso")
 	game.queue_free()
 	await process_frame
 	var output := FileAccess.open(directory.path_join("responsive-test-report.json"),FileAccess.WRITE)
@@ -82,6 +94,16 @@ func run_tests() -> void:
 	output.close()
 	print("RESPONSIVE_TESTS ",checks," checks, ",failures.size()," failures")
 	quit(0 if failures.is_empty() else 1)
+
+func root_embedded(owner_part: Sprite3D, limb_root: Node3D) -> bool:
+	var image := owner_part.texture.get_image()
+	var socket := owner_part.to_local(limb_root.global_position)
+	if socket.z>=0: return false
+	for offset in [Vector2.ZERO,Vector2(-.018,0),Vector2(.018,0),Vector2(0,-.018),Vector2(0,.018)]:
+		var pixel := Vector2(socket.x+offset.x,-socket.y+offset.y)/owner_part.pixel_size+Vector2(image.get_size())*.5
+		if pixel.x<0 or pixel.y<0 or pixel.x>=image.get_width() or pixel.y>=image.get_height(): return false
+		if image.get_pixel(int(pixel.x),int(pixel.y)).a<.2: return false
+	return true
 
 func mesh_ends(mesh_node: MeshInstance3D) -> Array[Vector3]:
 	var arrays := mesh_node.mesh.surface_get_arrays(0)

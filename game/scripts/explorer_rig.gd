@@ -5,6 +5,8 @@ const ART := "res://assets/art/modular-pack-v1/"
 const UPPER_ARM := .145
 const FOREARM := .13
 var head: Sprite3D
+var torso: Sprite3D
+var pelvis: Sprite3D
 var head_open: Texture2D
 var head_blink: Texture2D
 var shoulders: Array[Node3D] = []
@@ -49,35 +51,62 @@ func segment(parent: Node3D, title: String, length: float, socket: Vector2, end:
 	node.rotation.z = angle
 	return node
 
+func socket_position(owner_part: Sprite3D, uv: Vector2, depth: float) -> Vector3:
+	var pixels := (uv-Vector2(.5,.5))*owner_part.texture.get_size()
+	return owner_part.transform*Vector3(pixels.x*owner_part.pixel_size,-pixels.y*owner_part.pixel_size,0)+Vector3(0,0,depth)
+
+func limb_core(parent: Node3D, length: float, radius: float, color: Color) -> void:
+	# Continuous cloth beneath the textured pieces closes their hollow sockets.
+	var core := MeshInstance3D.new()
+	core.name = "Основа рукава или штанины"
+	var mesh := CapsuleMesh.new()
+	mesh.radius = radius
+	mesh.height = length+radius*2
+	mesh.radial_segments = 12
+	mesh.rings = 3
+	core.mesh = mesh
+	core.position = Vector3(0,-length*.5,-radius-.005)
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = color
+	core.material_override = material
+	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(core)
+
 func setup() -> void:
 	name = "Походный персонаж"
 	var backpack := load(ART+"backpack.png") as Texture2D
 	sprite(self,backpack,"Рюкзак со скаткой",.94,Vector3(-.20,-.025,-.12))
-	part(self,"torso",.31,Vector3(.015,-.075,0)).scale.x = 1.12
-	part(self,"pelvis",.17,Vector3(.015,-.255,.01))
+	torso = part(self,"torso",.31,Vector3(.015,-.075,0))
+	torso.scale.x = 1.12
+	pelvis = part(self,"pelvis",.17,Vector3(.015,-.255,.01))
 	head = part(self,"head-open",.54,Vector3(.015,.26,.04))
 	head_open = head.texture
 	head_blink = load(ART+"sprites/character/head-blink.tres") as Texture2D
 	for index in range(2):
 		var near := index==1
 		var suffix := "near" if near else "far"
-		var side := 1.0 if near else -1.0
-		var depth := .09 if near else -.04
-		var shoulder := joint(self,"Плечо "+suffix,Vector3(.015+side*.15,.005,depth))
+		var shoulder_uv := Vector2(.82 if near else .20,.36)
+		var shoulder := joint(self,"Плечо "+suffix,socket_position(torso,shoulder_uv,-.03 if near else -.05))
+		limb_core(shoulder,UPPER_ARM,.026,Color("4a4b2e"))
 		segment(shoulder,"upper-arm-"+suffix,UPPER_ARM,Vector2(.68,.12),Vector2(.37,.87))
-		var elbow := joint(shoulder,"Локоть",Vector3(0,-UPPER_ARM,.01))
+		var elbow := joint(shoulder,"Локоть",Vector3(0,-UPPER_ARM,.085 if near else .01))
+		limb_core(elbow,FOREARM,.023,Color("4a4b2e"))
 		segment(elbow,"forearm-"+suffix,FOREARM,Vector2(.55,.09),Vector2(.47,.88))
 		var hand := joint(elbow,"Кисть",Vector3(0,-FOREARM,.015))
 		segment(hand,"hand-"+suffix,.067,Vector2(.40,.13),Vector2(.57,.69))
 		shoulders.append(shoulder)
 		elbows.append(elbow)
 		hands.append(hand)
-		var hip := joint(self,"Бедро "+suffix,Vector3(.015+side*.08,-.29,depth*.6))
+		var hip_uv := Vector2(.77 if near else .23,.65)
+		var hip := joint(self,"Бедро "+suffix,socket_position(pelvis,hip_uv,-.04 if near else -.06))
+		limb_core(hip,.10,.029,Color("443a2d"))
 		segment(hip,"thigh-"+suffix,.10,Vector2(.60,.12),Vector2(.42,.88))
 		var knee := joint(hip,"Колено",Vector3(0,-.10,.01))
+		limb_core(knee,.085,.025,Color("443a2d"))
 		segment(knee,"shin-"+suffix,.085,Vector2(.57,.12),Vector2(.50,.86))
 		var boot := joint(knee,"Стопа",Vector3(0,-.085,.01))
-		part(boot,"boot-"+suffix,.14,Vector3.ZERO,Vector2(.34,.22))
+		part(boot,"boot-"+suffix,.13,Vector3.ZERO,Vector2(.34,.22))
 		hips.append(hip)
 		knees.append(knee)
 		boots.append(boot)
@@ -110,7 +139,8 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 		hips[index].rotation.z = side*.12*stride+clampf(sim.vel.x*facing*.018,-.10,.10)
 		knees[index].rotation.z = 0.0 if sim.grounded else .16+side*.08*stride
 		boots[index].rotation.z = -knees[index].rotation.z*.45
-	pose_arm(0,Vector2(-.20,-.23)+Vector2(-.025*stride,.015*sin(time*3)),-1)
+	var far_shoulder := Vector2(shoulders[0].position.x,shoulders[0].position.y)
+	pose_arm(0,far_shoulder+Vector2(-.015-.012*stride,-.264+.005*sin(time*3)),-1)
 	if tether:
 		var local_target := to_local(Vector3(target.x,target.y,global_position.z))
 		var shoulder := Vector2(shoulders[1].position.x,shoulders[1].position.y)
@@ -123,7 +153,8 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 		hands[1].rotation.z = wrist_angle+PI*.5-shoulders[1].rotation.z-elbows[1].rotation.z
 	else:
 		hands[1].rotation.z = 0
-		pose_arm(1,Vector2(.23,-.23)+Vector2(.025*stride,.015*sin(time*3+1)),1)
+		var near_shoulder := Vector2(shoulders[1].position.x,shoulders[1].position.y)
+		pose_arm(1,near_shoulder+Vector2(.015+.012*stride,-.264+.005*sin(time*3+1)),1)
 
 func grip_position() -> Vector3:
 	return hands[1].to_global(Vector3(0,-.067,.025))

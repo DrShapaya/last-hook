@@ -25,6 +25,7 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_rules.gd') (Join-Pa
 Invoke-TaskGodot @('--headless','--script','res://tests/test_integration.gd') (Join-Path $taskArtifacts 'build-integration.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_generation.gd') (Join-Path $taskArtifacts 'build-generation.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_responsive.gd') (Join-Path $taskArtifacts 'build-responsive.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_character_editing.gd') (Join-Path $taskArtifacts 'build-character-editing.log')
 
 if ($Target -in @('All','Windows')) {
     $taskWindows = Join-Path $taskRoot 'Builds\Windows'

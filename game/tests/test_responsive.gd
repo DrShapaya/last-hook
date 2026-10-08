@@ -66,6 +66,12 @@ func run_tests() -> void:
 		game.state = "pause"
 		game.hud.show_pause()
 		check(area.encloses(game.hud.content.get_child(0).get_global_rect()),"pause controls remain inside the resized viewport: %s" % dimensions)
+	# Art regressions use the reference rig so intentional edits to player.tscn
+	# do not prevent the user from building their own character.
+	game.explorer.body.free()
+	game.explorer.body = ExplorerRig.new()
+	game.explorer.add_child(game.explorer.body)
+	game.explorer.body.setup()
 	game.explorer.draw(game.sim,game.sim.pos+Vector2(-3,3),true,false,3.75,false,2)
 	var mirrored_ends := mesh_ends(game.explorer.rope)
 	check(game.explorer.body.facing==-1 and mirrored_ends[0].distance_to(game.explorer.body.grip_position())<.001,"the rig turns left while the rendered rope stays attached to the reaching hand")

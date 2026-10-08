@@ -1,6 +1,9 @@
 class_name ExplorerRig
 extends Node3D
 
+@export var animate_limbs := true
+@export var blinking_enabled := true
+
 const ART := "res://assets/art/modular-pack-v1/"
 const UPPER_ARM := .145
 const FOREARM := .13
@@ -16,6 +19,40 @@ var hips: Array[Node3D] = []
 var knees: Array[Node3D] = []
 var boots: Array[Node3D] = []
 var facing := 1.0
+var grip: Marker3D
+var authored := false
+var arm_rest: Array[Vector3] = []
+var leg_rest: Array[Vector3] = []
+var head_rest := 0.0
+var root_rest := 0.0
+var scale_rest := Vector3.ONE
+
+func bind_scene() -> void:
+	authored = true
+	head = get_node("Head")
+	torso = get_node("Torso")
+	pelvis = get_node("Pelvis")
+	grip = get_node("FarShoulder/Elbow/Hand/Grip")
+	head_open = head.texture
+	head_blink = load(ART+"sprites/character/head-blink.tres") as Texture2D
+	head_rest = head.rotation.z
+	root_rest = rotation.z
+	scale_rest = scale
+	for prefix in ["Near","Far"]:
+		var shoulder: Node3D = get_node(prefix+"Shoulder")
+		var elbow: Node3D = shoulder.get_node("Elbow")
+		var hand: Node3D = elbow.get_node("Hand")
+		var hip: Node3D = get_node(prefix+"Hip")
+		var knee: Node3D = hip.get_node("Knee")
+		var boot: Node3D = knee.get_node("Ankle")
+		shoulders.append(shoulder)
+		elbows.append(elbow)
+		hands.append(hand)
+		hips.append(hip)
+		knees.append(knee)
+		boots.append(boot)
+		arm_rest.append(Vector3(shoulder.rotation.z,elbow.rotation.z,hand.rotation.z))
+		leg_rest.append(Vector3(hip.rotation.z,knee.rotation.z,boot.rotation.z))
 
 func joint(parent: Node3D, title: String, at: Vector3) -> Node3D:
 	var node := Node3D.new()
@@ -110,6 +147,10 @@ func cloth_cover(parent: Node3D, at: Vector3, size: Vector2, angle: float, textu
 	parent.add_child(cover)
 
 func setup() -> void:
+	if is_instance_valid(head): return
+	if has_node("Head"):
+		bind_scene()
+		return
 	name = "Походный персонаж"
 	var backpack := load(ART+"backpack.png") as Texture2D
 	sprite(self,backpack,"Рюкзак со скаткой",.94,Vector3(-.20,-.025,-.12))
@@ -152,13 +193,17 @@ func setup() -> void:
 
 func pose_arm(index: int, destination: Vector2, bend: float) -> void:
 	var shoulder := shoulders[index]
+	var upper_rest := Vector2(elbows[index].position.x,elbows[index].position.y)
+	var lower_rest := Vector2(hands[index].position.x,hands[index].position.y)
+	var upper_length := maxf(.001,upper_rest.length())
+	var lower_length := maxf(.001,lower_rest.length())
 	var delta := destination-Vector2(shoulder.position.x,shoulder.position.y)
-	var distance := clampf(delta.length(),.09,UPPER_ARM+FOREARM-.008)
+	var distance := clampf(delta.length(),absf(upper_length-lower_length)+.001,upper_length+lower_length-.001)
 	delta = delta.normalized()*distance
-	var angle := delta.angle()+bend*acos(clampf((UPPER_ARM*UPPER_ARM+distance*distance-FOREARM*FOREARM)/(2*UPPER_ARM*distance),-1,1))
-	shoulder.rotation.z = angle+PI*.5
-	var elbow := Vector2(cos(angle),sin(angle))*UPPER_ARM
-	elbows[index].rotation.z = (delta-elbow).angle()+PI*.5-shoulder.rotation.z
+	var angle := delta.angle()+bend*acos(clampf((upper_length*upper_length+distance*distance-lower_length*lower_length)/(2*upper_length*distance),-1,1))
+	shoulder.rotation.z = angle-upper_rest.angle()
+	var elbow := Vector2.from_angle(angle)*upper_length
+	elbows[index].rotation.z = (delta-elbow).angle()-lower_rest.angle()-shoulder.rotation.z
 
 func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	var direction := target-sim.pos
@@ -166,34 +211,43 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 		facing = signf(direction.x)
 	elif not tether and absf(sim.vel.x)>.7:
 		facing = signf(sim.vel.x)
-	scale.x = facing
-	rotation.z = clampf(-sim.vel.x*.025,-.18,.18)
+	scale.x = facing*absf(scale_rest.x)
+	rotation.z = root_rest+clampf(-sim.vel.x*.025,-.18,.18)
 	if sim.attached: rotation.z += clampf(-direction.x*.02,-.08,.08)
-	var blink := fmod(time+1.1,4.8)<.13
+	var blink := blinking_enabled and fmod(time+1.1,4.8)<.13
 	head.texture = head_blink if blink else head_open
-	head.rotation.z = -rotation.z*.25
+	head.rotation.z = head_rest-(rotation.z-root_rest)*.25
+	if not animate_limbs: return
 	var stride := sin(time*6)*clampf(sim.vel.length()/7,0,1)
 	for index in range(2):
 		var side := 1.0 if index==1 else -1.0
-		hips[index].rotation.z = side*.12*stride+clampf(sim.vel.x*facing*.018,-.10,.10)
-		knees[index].rotation.z = 0.0 if sim.grounded else .16+side*.08*stride
-		boots[index].rotation.z = -knees[index].rotation.z*.45
+		var rest := leg_rest[index] if authored else Vector3.ZERO
+		hips[index].rotation.z = rest.x+side*.12*stride+clampf(sim.vel.x*facing*.018,-.10,.10)
+		var knee_motion := 0.0 if sim.grounded else .16+side*.08*stride
+		knees[index].rotation.z = rest.y+knee_motion
+		boots[index].rotation.z = rest.z-knee_motion*.45
+		if authored:
+			shoulders[index].rotation.z = arm_rest[index].x+side*.035*stride
+			elbows[index].rotation.z = arm_rest[index].y
+			hands[index].rotation.z = arm_rest[index].z
 	var near_shoulder := Vector2(shoulders[0].position.x,shoulders[0].position.y)
-	pose_arm(0,near_shoulder+Vector2(-.015-.012*stride,-.264+.005*sin(time*3)),-1)
+	if not authored: pose_arm(0,near_shoulder+Vector2(-.015-.012*stride,-.264+.005*sin(time*3)),-1)
 	if tether:
 		var local_target := to_local(Vector3(target.x,target.y,global_position.z))
 		var shoulder := Vector2(shoulders[1].position.x,shoulders[1].position.y)
 		var reach := Vector2(local_target.x,local_target.y)-shoulder
 		# Short arms reach beside the large head, rather than through its face.
 		var reach_angle := minf(reach.angle(),.55) if reach.y>0 else reach.angle()
-		pose_arm(1,shoulder+Vector2.from_angle(reach_angle)*(UPPER_ARM+FOREARM-.008),-1)
+		var arm_length := Vector2(elbows[1].position.x,elbows[1].position.y).length()+Vector2(hands[1].position.x,hands[1].position.y).length()
+		pose_arm(1,shoulder+Vector2.from_angle(reach_angle)*(arm_length-.008),-1)
 		var wrist := to_local(hands[1].global_position)
 		var wrist_angle := Vector2(local_target.x-wrist.x,local_target.y-wrist.y).angle()
 		hands[1].rotation.z = wrist_angle+PI*.5-shoulders[1].rotation.z-elbows[1].rotation.z
-	else:
+	elif not authored:
 		hands[1].rotation.z = 0
 		var far_shoulder := Vector2(shoulders[1].position.x,shoulders[1].position.y)
 		pose_arm(1,far_shoulder+Vector2(.015+.012*stride,-.264+.005*sin(time*3+1)),-1)
 
 func grip_position() -> Vector3:
+	if is_instance_valid(grip): return grip.global_position
 	return hands[1].to_global(Vector3(0,-.067,.025))

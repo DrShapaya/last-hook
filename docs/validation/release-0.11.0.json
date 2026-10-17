@@ -1,0 +1,71 @@
+{
+  "version": "0.11.0",
+  "date": "2026-10-17",
+  "engine": "Godot 4.7.2",
+  "checks": 452,
+  "suites": [
+    {
+      "suite": "rules",
+      "passed": true,
+      "checks": 71
+    },
+    {
+      "suite": "integration",
+      "passed": true,
+      "checks": 107
+    },
+    {
+      "suite": "generation",
+      "passed": true,
+      "checks": 32
+    },
+    {
+      "suite": "terrain",
+      "passed": true,
+      "checks": 26
+    },
+    {
+      "suite": "foundation",
+      "passed": true,
+      "checks": 20
+    },
+    {
+      "suite": "responsive",
+      "passed": true,
+      "checks": 75
+    },
+    {
+      "suite": "menus",
+      "passed": true,
+      "checks": 98
+    },
+    {
+      "suite": "character-editing",
+      "passed": true,
+      "checks": 8
+    },
+    {
+      "suite": "sprite-animation",
+      "passed": true,
+      "checks": 15
+    }
+  ],
+  "human_playtest": false,
+  "android_device_test": false,
+  "windows_exe_smoke_test": true,
+  "android_version_code": 17,
+  "android_signature_verified": true,
+  "android_alignment_verified": true,
+  "binaries": [
+    {
+      "sha256": "d18f3413df237386f291ce5379e2f4f1936b97922f0478be02b18170c472cbfe",
+      "bytes": 120406616,
+      "path": "Builds/Windows/LastHook.exe"
+    },
+    {
+      "sha256": "70e6a1b1e75690c7a84caceee0da90360255851ea458ad1aaf1b7bacd85a96da",
+      "bytes": 45666729,
+      "path": "Builds/Android/LastHook-debug.apk"
+    }
+  ]
+}

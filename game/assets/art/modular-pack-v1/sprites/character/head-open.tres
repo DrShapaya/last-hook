@@ -1,6 +1,6 @@
-[gd_resource type="AtlasTexture" load_steps=2 format=3]
+[gd_resource type="AtlasTexture" format=3 uid="uid://drkv7mviiaybl"]
 
-[ext_resource type="Texture2D" path="res://assets/art/modular-pack-v1/character-parts.png" id="1"]
+[ext_resource type="Texture2D" uid="uid://b6oemnbb6wyks" path="res://assets/art/modular-pack-v1/character-parts.png" id="1"]
 
 [resource]
 resource_name = "head-open"

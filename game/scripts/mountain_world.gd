@@ -1,7 +1,7 @@
 class_name MountainWorld
 extends Node3D
 
-const GENERATION_VERSION := 8
+const GENERATION_VERSION := 10
 const COLORS := [Color("e3b95e"),Color("b97bed"),Color("61d6a5"),Color("88dafa"),Color("ed99da")]
 var layout := MountainLayout.new()
 var visuals: MountainVisuals
@@ -26,12 +26,15 @@ var show_loot_prices := true
 static func generation_version_for(biome: int) -> int:
 	return GENERATION_VERSION if biome==0 else 4
 
-func setup(world_seed: int, world_location: int, saved_version: int = 0) -> void:
+func setup(world_seed: int, world_location: int, saved_version: int = 0, practice: bool = false) -> void:
 	seed_value = world_seed
 	location = world_location
 	generation_version = saved_version if saved_version>0 else generation_version_for(location)
+	if generation_version>=10 and location==0: layout = EncounterLayout.new()
+	if practice: layout = PracticeLayout.new()
 	layout.gentle_intro = generation_version>=7
 	layout.sparse_route = generation_version>=8
+	layout.safe_routes = generation_version>=9
 	if location!=0: layout = LegacyMountainLayout.new()
 	layout.setup(world_seed,world_location)
 	anchors = layout.anchors
@@ -96,9 +99,48 @@ func nearby_obstacles(low: float, high: float) -> Array[Dictionary]:
 	return result
 
 func rope_blocked(from: Vector2, to: Vector2) -> bool:
-	for obstacle in nearby_obstacles(minf(from.y,to.y),maxf(from.y,to.y)):
-		if rectangle_hit(from,to,obstacle["pos"],obstacle["dimensions"]*.5)>=0: return true
-	return false
+	return not rope_contact(from,to).is_empty()
+
+func rope_contact(from: Vector2, to: Vector2) -> Dictionary:
+	var best: Dictionary = {}
+	for obstacle in nearby_obstacles(minf(from.y,to.y)-.1,maxf(from.y,to.y)+.1):
+		var hit := SolidGeometry.cast(from,to,obstacle)
+		if not hit.is_empty() and (best.is_empty() or hit["fraction"]<best["fraction"]): best = hit
+	return best
+
+func update_rope_path(sim: RopeSim) -> bool:
+	if not sim.attached: return true
+	var root := sim.anchor
+	for point in sim.rope_pivots:
+		if rope_blocked(root,point):
+			sim.rope_pivots.clear()
+			break
+		root = point
+	# Unwrap only when the previous fixed point can see the body directly.
+	# Keeping the intervening corners until then prevents side-to-side jumps.
+	while not sim.rope_pivots.is_empty():
+		var previous: Vector2 = sim.anchor if sim.rope_pivots.size()==1 else sim.rope_pivots[-2]
+		if rope_blocked(previous,sim.pos): break
+		sim.rope_pivots.pop_back()
+	for iteration in range(6):
+		var pivot := sim.effective_anchor()
+		var collision := rope_contact(pivot,sim.pos)
+		if collision.is_empty(): return true
+		if sim.rope_pivots.size()>=4: return false
+		var best := Vector2.INF
+		var best_score := INF
+		for corner in SolidGeometry.corners(collision["object"]):
+			if corner.distance_to(pivot)<.05 or sim.rope_pivots.has(corner): continue
+			if rope_blocked(pivot,corner): continue
+			if sim.fixed_length()+pivot.distance_to(corner)>sim.length-.4: continue
+			var score := pivot.distance_to(corner)+corner.distance_to(sim.pos)
+			if score<best_score:
+				best = corner
+				best_score = score
+		if not best.is_finite(): return false
+		sim.rope_pivots.append(best)
+		sim.request_length(sim.target_length)
+	return not rope_blocked(sim.effective_anchor(),sim.pos)
 
 func mat(key: String, color: Color, unlit: bool = true) -> StandardMaterial3D:
 	if materials.has(key):
@@ -161,43 +203,54 @@ func cast_hook(from: Vector2, to: Vector2, grip: float) -> Dictionary:
 			best = fraction
 			result = {"object":object,"fraction":fraction,"contact":from.lerp(to,fraction)}
 	for obstacle in nearby_obstacles(minf(from.y,to.y),maxf(from.y,to.y)):
-		var fraction := rectangle_hit(from,to,obstacle["pos"],obstacle["dimensions"]*.5)
+		var contact := SolidGeometry.cast(from,to,obstacle)
+		var fraction: float = contact.get("fraction",-1.0)
 		if fraction>=0 and fraction<=best:
 			best = fraction
-			result = {"blocked":true,"fraction":fraction,"contact":from.lerp(to,fraction)}
+			result = {"blocked":true,"object":obstacle,"fraction":fraction,"contact":from.lerp(to,fraction),"normal":contact["normal"]}
 	return result
 
 func move_player(from: Vector2, to: Vector2, velocity: Vector2) -> Dictionary:
 	var position_value := from
 	var remaining := to-from
-	# Swept expanded rectangles prevent tunnelling and allow sliding.
-	for iteration in range(3):
-		var best := 2.0
-		var hit: Dictionary = {}
+	var grounded := false
+	var rest := false
+	var impact := 0.0
+	var contacts: Array[Vector2] = []
+	# Convex sweeps use the actual drawn contour expanded by body size.
+	# Resolve the remaining motion along each face; never discard the whole
+	# frame after a collision or reflect velocity into another solid.
+	for iteration in range(6):
+		var best: Dictionary = {}
 		for obstacle in nearby_obstacles(minf(position_value.y,position_value.y+remaining.y)-1,maxf(position_value.y,position_value.y+remaining.y)+1):
-			var half: Vector2 = obstacle["dimensions"]*.5+Vector2(.38,.48)
-			var fraction := rectangle_hit(position_value,position_value+remaining,obstacle["pos"],half)
-			if fraction>=0 and fraction<best:
-				best = fraction
-				hit = obstacle
-		if hit.is_empty():
+			var hit := SolidGeometry.cast(position_value,position_value+remaining,obstacle,SolidGeometry.BODY_HALF,true)
+			if not hit.is_empty() and (best.is_empty() or hit["fraction"]<best["fraction"]):
+				best = hit
+		if remaining.y<-.000001:
+			for ledge in ledges:
+				var top: float = ledge["top"]+SolidGeometry.BODY_HALF.y
+				if position_value.y<top-.004: continue
+				var fraction := (top-position_value.y)/remaining.y
+				if fraction<-.001 or fraction>1: continue
+				var x := position_value.x+remaining.x*maxf(0,fraction)
+				if x<float(ledge["left"])-.24 or x>float(ledge["right"])+.24: continue
+				if best.is_empty() or fraction<best["fraction"]:
+					best = {"fraction":maxf(0,fraction),"normal":Vector2(0,1),"depth":0.0,"object":{"rest":true}}
+		if best.is_empty():
 			position_value += remaining
 			break
-		var half: Vector2 = hit["dimensions"]*.5+Vector2(.38,.48)
-		var contact := position_value+remaining*best
-		var relative: Vector2 = contact-hit["pos"]
-		var normal := Vector2(signf(relative.x),0) if absf(half.x-absf(relative.x))<absf(half.y-absf(relative.y)) else Vector2(0,signf(relative.y))
-		if normal==Vector2.ZERO:
-			normal = Vector2.UP
-		if normal.x!=0:
-			contact.x = hit["pos"].x+normal.x*(half.x+.002)
-		else:
-			contact.y = hit["pos"].y+normal.y*(half.y+.002)
-		position_value = contact
-		remaining *= 1-best
+		var normal: Vector2 = best["normal"]
+		var fraction: float = best["fraction"]
+		position_value += remaining*fraction+normal*(float(best["depth"])+.0001)
+		remaining *= 1-fraction
 		remaining -= normal*minf(0,remaining.dot(normal))
+		impact = maxf(impact,-velocity.dot(normal))
 		velocity -= normal*minf(0,velocity.dot(normal))
-	return {"position":position_value,"velocity":velocity}
+		contacts.append(normal)
+		if normal.y>.6:
+			grounded = true
+			rest = bool(best["object"].get("rest",false))
+	return {"position":position_value,"velocity":velocity,"grounded":grounded,"rest":rest,"impact":impact,"contacts":contacts}
 
 func _build_find(find: Dictionary, parent: Node3D) -> void:
 	var holder := Node3D.new()
@@ -308,6 +361,38 @@ func update_visibility(center_y: float, center_x: float = 0) -> void:
 			child.position = Vector3(fposmod(origin.x-center_x*(1-factor)+40,80)-40,fposmod(origin.y-center_y*(1-factor)+30,60)-30,origin.z)
 func anchor_by_id(id: int) -> Dictionary:
 	return anchors[id] if id>=0 and id<anchors.size() else {}
+
+func revive_plan(safe_id: int, safe_pos: Vector2, maximum: float, contact: Vector2 = Vector2.INF) -> Dictionary:
+	var safe := anchor_by_id(safe_id)
+	if safe_id>=0 and (safe.is_empty() or safe["broken"] or not safe.get("permanent",false)):
+		return {"available":false,"anchors":[]}
+	var previous: Vector2 = safe["pos"] if safe_id>=0 else safe_pos
+	if safe_id>=0 and contact.is_finite(): previous = contact
+	var reserves: Array[int] = []
+	var exits := 0
+	for id in main_route:
+		var object := anchor_by_id(id)
+		if object["pos"].y<=previous.y+.01: continue
+		var target: Vector2 = object["pos"]
+		if object["broken"]:
+			if not layout.rescue_anchors.has(id): return {"available":false,"anchors":[]}
+			var reserve_id: int = layout.rescue_anchors[id]
+			target = anchors[reserve_id]["pos"]
+			reserves.append(reserve_id)
+			exits = 0
+		else:
+			exits += 1
+		if previous.distance_to(target)>maximum or not layout.transition_clear(previous,target):
+			return {"available":false,"anchors":[]}
+		previous = target
+	return {"available":exits>0,"anchors":reserves}
+
+func activate_rescue_anchors(ids: Array) -> void:
+	for id in ids:
+		var object := anchor_by_id(int(id))
+		if not object.get("reserve",false): continue
+		object["broken"] = false
+		if is_instance_valid(object.get("visual")): object["visual"].visible = true
 
 func consume_anchor(id: int) -> void:
 	var object := anchor_by_id(id)

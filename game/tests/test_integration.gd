@@ -415,7 +415,7 @@ func run_tests() -> void:
 	game.anchor_id = 0
 	game.release_hook()
 	check(permanent["permanent"] and not permanent["broken"] and permanent["visual"].visible,"rare permanent grip survives detaching and can be reused")
-	for legacy_version in [6,7]:
+	for legacy_version in [6,7,8,9]:
 		game.model.profile = GameModel.fresh_profile()
 		game.start_run(false)
 		game.run_seed = 58273
@@ -436,7 +436,7 @@ func run_tests() -> void:
 		check(game.model.profile["active"]["generation_version"]==legacy_version,"resaving an old attempt preserves its generator version")
 		game.finish_run(false)
 	game.start_run(false)
-	check(game.world.generation_version==8,"new attempts use the sparse v8 route after an old attempt finishes")
+	check(game.world.generation_version==10,"new attempts use encounter generation while old attempts keep their geometry")
 	game.model.profile["learned_controls"] = ["aim"]
 	game.sim.pos = game.world.anchors[0]["pos"]+Vector2(0,-3)
 	game.sim.attach(game.world.anchors[0]["pos"],5.5)
@@ -484,7 +484,10 @@ func climb_route(game, count: int, override_route: Array[int] = []) -> int:
 				print("BOT_STOP route=",route_index," state=",game.state," pos=",game.sim.pos," target=",target)
 				return reached
 			if game.sim.attached:
-				game.reel = 1.0
+				# Probe a wider arc if the short rope keeps the shot occluded.
+				# Generated phrases require more than a single minimum-length orbit.
+				game.reel = 1.0 if frame<240 else 0.0
+				if frame>=240: game.sim.request_length(3.3 if frame%360<180 else 2.0)
 				if absf(game.sim.pos.x)>14 and game.sim.vel.x*game.sim.pos.x>0:
 					game.pump = -signf(game.sim.pos.x)
 				elif absf(game.sim.vel.x)>.1:
@@ -492,7 +495,7 @@ func climb_route(game, count: int, override_route: Array[int] = []) -> int:
 				elif absf(game.pump)<.1:
 					game.pump = signf(target.x-game.sim.anchor.x)
 				var toward: Vector2 = (target-game.sim.pos).normalized()
-				var sight: Dictionary = game.world.cast_hook(game.sim.pos,target,.32)
+				var sight: Dictionary = game.world.cast_hook(game.sim.pos,target,game.model.hook_radius())
 				var clear_shot: bool = not sight.is_empty() and not sight.get("blocked",false) and int(sight["object"]["id"])==target_id
 				if clear_shot and game.sim.pos.distance_to(target)<5.2 and game.sim.vel.dot(toward)>.5:
 					game.release_hook()

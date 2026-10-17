@@ -1,5 +1,5 @@
 {
-  "status": "playable_v9_session_validation_required",
+  "status": "playable_v11_foundation_human_validation_required",
   "meters_per_unit": 10,
   "zone_units": 20,
   "summit_units": 120,
@@ -22,6 +22,7 @@
   "summit_repeat_bonus": 300,
   "first_summit_gold": 1000,
   "first_summit_diamonds": 20,
+  "summit_repeat_diamonds": 3,
   "new_zone_gold_per_index": 100,
   "new_zone_diamonds": 3,
   "diamond_revive_cost": 3,

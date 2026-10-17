@@ -7,12 +7,18 @@ $ErrorActionPreference = 'Stop'
 $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $taskGodot = Join-Path $PSScriptRoot 'godot\Godot_v4.7.2-stable_win64_console.exe'
 $taskProject = Join-Path $taskRoot 'game'
+$taskLocalAndroidSdk = Join-Path $PSScriptRoot 'android-sdk'
+if (-not $PSBoundParameters.ContainsKey('AndroidSdkPath') -and (Test-Path -LiteralPath (Join-Path $taskLocalAndroidSdk 'platform-tools\adb.exe'))) {
+    $AndroidSdkPath = $taskLocalAndroidSdk
+}
 $taskArtifacts = Join-Path $taskRoot 'artifacts'
 New-Item -ItemType Directory -Path $taskArtifacts -Force | Out-Null
 if (-not (Test-Path -LiteralPath $taskGodot)) { throw 'Portable Godot is missing from tools/godot.' }
 $env:LASTHOOK_SAVE_DIR = Join-Path $taskArtifacts 'build-test-profile'
 $env:APPDATA = Join-Path $taskArtifacts 'build-appdata'
-New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
+$env:TEMP = Join-Path $taskArtifacts 'build-temp'
+$env:TMP = $env:TEMP
+New-Item -ItemType Directory -Path $env:APPDATA,$env:TEMP -Force | Out-Null
 
 function Invoke-TaskGodot([string[]]$TaskArguments, [string]$TaskLog) {
     & $taskGodot --path $taskProject --log-file $TaskLog @TaskArguments
@@ -24,7 +30,10 @@ Invoke-TaskGodot @('--headless','--editor','--import','--quit') (Join-Path $task
 Invoke-TaskGodot @('--headless','--script','res://tests/test_rules.gd') (Join-Path $taskArtifacts 'build-rules.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_integration.gd') (Join-Path $taskArtifacts 'build-integration.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_generation.gd') (Join-Path $taskArtifacts 'build-generation.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_terrain.gd') (Join-Path $taskArtifacts 'build-terrain.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_gameplay_foundation.gd') (Join-Path $taskArtifacts 'build-foundation.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_responsive.gd') (Join-Path $taskArtifacts 'build-responsive.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_menus.gd') (Join-Path $taskArtifacts 'build-menus.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_character_editing.gd') (Join-Path $taskArtifacts 'build-character-editing.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_sprite_animation.gd') (Join-Path $taskArtifacts 'build-sprite-animation.log')
 

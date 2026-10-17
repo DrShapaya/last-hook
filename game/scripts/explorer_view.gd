@@ -88,20 +88,30 @@ func set_tip_count(count: int) -> void:
 
 func draw(sim: RopeSim, target: Vector2, tether: bool, flying_bolt: bool, time: float, warning: bool, tips: int = 1) -> void:
 	position = Vector3(sim.pos.x,sim.pos.y,3.2)
-	body.animate(sim,target,tether,time)
+	body.animate(sim,sim.effective_anchor() if sim.attached else target,tether,time)
 	var from := body.grip_position()
 	var to := Vector3(target.x,target.y,3.5)
 	set_tip_count(tips)
 	bolt.visible = tether
 	bolt.position = to
-	bolt.rotation.z = Vector2(to.x-from.x,to.y-from.y).angle()-PI*.5
+	var hook_from := Vector3(sim.rope_pivots[0].x,sim.rope_pivots[0].y,3.5) if sim.attached and not sim.rope_pivots.is_empty() else from
+	bolt.rotation.z = Vector2(to.x-hook_from.x,to.y-hook_from.y).angle()-PI*.5
 	rope_start = from
 	rope_end = bolt.to_global(HOOK_EYE)
 	rope.visible = tether
 	rope_outer.visible = tether
 	if tether:
-		var slack := maxf(0,sim.length-sim.pos.distance_to(sim.anchor)) if sim.attached else 0.0
-		var points := rope_points(rope_start,rope_end,slack)
+		var slack := maxf(0,sim.length-sim.path_distance()) if sim.attached else 0.0
+		var points := PackedVector3Array()
+		var previous := rope_start
+		if sim.attached:
+			for i in range(sim.rope_pivots.size()-1,-1,-1):
+				var pivot := sim.rope_pivots[i]
+				var corner := Vector3(pivot.x,pivot.y,3.5)
+				points.append_array(rope_points(previous,corner,slack))
+				slack = 0
+				previous = corner
+		points.append_array(rope_points(previous,rope_end,slack))
 		rope.mesh = rope_tube(points,.033)
 		rope_outer.mesh = rope_strip(points,.047)
 		rope_outer.position.z = -.045

@@ -36,7 +36,9 @@ func run_tests() -> void:
 	model.profile["levels"][5] = 6
 	check(model.retained(false)==190,"maximum retention is 95 percent")
 	model.bag.clear()
-	check(not model.try_pick({"id":3,"tier":1,"value":75}),"a new find type requires a better backpack")
+	check(model.try_pick({"id":3,"tier":5,"value":560}),"a reached valuable find fits an empty starter bag regardless of its tier")
+	check(not model.try_pick({"id":4,"tier":0,"value":40}),"unrestricted find tiers do not bypass starter capacity")
+	check(model.item_is_rare(expensive) and not model.item_is_rare(cheap),"rare and ordinary items of the same type remain distinguishable")
 	model.profile["gold"] = 1000000
 	model.profile["levels"][0] = 2
 	model.purchase(0)
@@ -53,8 +55,10 @@ func run_tests() -> void:
 	var first := model.settle("test-run-1","summit",30,false,0)
 	check(first["loot"]==60,"failed finite run uses retention")
 	var gold_after: int = model.profile["gold"]
+	var diamonds_after: int = model.profile["diamonds"]
 	var duplicate := model.settle("test-run-1","summit",30,false,0)
 	check(duplicate["duplicate"] and int(model.profile["gold"])==gold_after,"result cannot be settled twice")
+	check(model.profile["diamonds"]==diamonds_after and first["diamonds"]==0,"defeat and duplicate settlement never create diamonds")
 	var endless := model.settle("test-run-2","endless",40,false,0)
 	check(endless["loot"]==60 and not endless["success"],"endless also uses retention")
 	var win := model.settle("test-run-3","summit",120,true,0)
@@ -62,6 +66,27 @@ func run_tests() -> void:
 	check(model.profile["summit_cleared"] and win["first"],"first summit unlocks endless and location shop")
 	var win_again := model.settle("test-run-4","summit",120,true,0)
 	check(not win_again["first"] and win_again["finish"]==300,"first-summit reward cannot repeat")
+	check(win["diamonds"]==20 and win_again["diamonds"]==3,"first and repeat summit diamond rewards are separated")
+	var repeat_wallet: int = model.profile["diamonds"]
+	model.settle("test-run-4","summit",120,true,0)
+	check(model.profile["diamonds"]==repeat_wallet,"reloading a repeat summit result cannot duplicate its diamonds")
+	var renewable := GameModel.new(directory.path_join("renewable-tests.json"))
+	renewable.profile = GameModel.fresh_profile()
+	renewable.reach(120)
+	renewable.settle("first-peak","summit",120,true,0)
+	renewable.profile["gold"] = 10000
+	renewable.purchase_location(1)
+	renewable.settle("second-peak","summit",140,true,1)
+	renewable.profile["diamonds"] -= 4*int(renewable.balance["diamond_revive_cost"])
+	check(renewable.profile["diamonds"]==43,"four continuations reproduce the previous location-currency trap")
+	renewable.settle("recover-diamonds","summit",120,true,0)
+	renewable.purchase_location(2)
+	check(renewable.profile["locations"].has(2) and renewable.profile["diamonds"]==1,"playing an already open summit recovers enough diamonds for the blocked location")
+	renewable.profile["locations"] = [0,1]
+	renewable.profile["diamonds"] = 0
+	for run in range(15): renewable.settle("empty-wallet-%d" % run,"summit",120,true,0)
+	renewable.purchase_location(2)
+	check(renewable.profile["locations"].has(2) and renewable.profile["diamonds"]==0,"even a depleted wallet can earn the entire location price without purchases")
 	model.profile["gold"] = 10000
 	model.purchase_location(1)
 	check(model.profile["locations"].has(1) and int(model.profile["gold"])==2000,"second location is purchased using gold")

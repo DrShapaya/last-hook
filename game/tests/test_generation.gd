@@ -71,13 +71,16 @@ func run_tests() -> void:
 	for seed_number in range(100):
 		var world := make_world(seed_number,126)
 		var previous := make_world(seed_number,126,true,0,7)
-		new_grips += world.anchors.size()
+		var ordinary_count := 0
 		old_grips += previous.anchors.size()
 		previous.free()
 		var permanent_count := 0
 		for object in world.anchors:
+			if object.get("reserve",false): continue
+			ordinary_count += 1
 			if object["permanent"]: permanent_count += 1
-		rare_permanent = rare_permanent and float(permanent_count)/world.anchors.size()<.22
+		new_grips += ordinary_count
+		rare_permanent = rare_permanent and float(permanent_count)/ordinary_count<.22
 		rare_ledges = rare_ledges and world.ledges.size()<=7
 		var min_x := 99.0
 		var max_x := -99.0
@@ -107,7 +110,7 @@ func run_tests() -> void:
 			last = point
 		varied = varied and varying_gap
 		world.free()
-	print("GRIP_DENSITY v8=",new_grips," v7=",old_grips)
+	print("GRIP_DENSITY active_v",MountainWorld.GENERATION_VERSION,"=",new_grips," v7=",old_grips)
 	check(new_grips<old_grips*.9,"100 mountains have at least ten percent fewer total grips than v7 including connective bridges")
 	check(rare_permanent,"at least 78 percent of grips are disposable in every tested mountain")
 	check(rare_ledges,"rest ledges stay rare instead of forming a permanent safety ladder")

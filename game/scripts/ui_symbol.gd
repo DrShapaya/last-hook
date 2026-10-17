@@ -89,3 +89,21 @@ func _draw() -> void:
 			stroke([Vector2(-9,10),Vector2(-9,-1),Vector2(9,-1),Vector2(9,10),Vector2(-9,10)])
 			draw_arc(Vector2(0,-2),6,PI,TAU,20,tint,2,true)
 			draw_circle(Vector2(0,5),1.5,tint)
+		15: # Settings sliders.
+			for y in [-8,0,8]: stroke([Vector2(-12,y),Vector2(12,y)],1.6)
+			for point in [Vector2(-5,-8),Vector2(6,0),Vector2(-2,8)]:
+				draw_circle(point,3,Color("18382c"))
+				draw_arc(point,3,0,TAU,16,tint,1.8,true)
+		16: # Summit flag.
+			stroke([Vector2(-4,13),Vector2(-4,-13)],2.2)
+			draw_colored_polygon(PackedVector2Array([Vector2(-3,-12),Vector2(12,-8),Vector2(-3,-3)]),tint)
+			stroke([Vector2(-12,13),Vector2(5,13)],2)
+		17: # Sound.
+			stroke([Vector2(-12,-4),Vector2(-7,-4),Vector2(-1,-10),Vector2(-1,10),Vector2(-7,4),Vector2(-12,4),Vector2(-12,-4)],2)
+			draw_arc(Vector2(0,0),7,-PI*.36,PI*.36,16,tint,2,true)
+			draw_arc(Vector2(0,0),12,-PI*.34,PI*.34,20,tint,1.5,true)
+		18:
+			for x in [-6,6]: plate(Rect2(x-2,-10,4,20),tint,2)
+		19:
+			draw_arc(Vector2.ZERO,12,0,TAU,32,tint,1.8,true)
+			stroke([Vector2(0,-7),Vector2(0,0),Vector2(5,3)],2)

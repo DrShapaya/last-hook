@@ -2,6 +2,11 @@ class_name RopeSim
 extends RefCounted
 
 const MIN_LENGTH := 2.0
+const MAX_SPEED := 18.0
+const SWING_FORCE := 11.5
+const AIR_DRAG := .42
+const TANGENTIAL_DRAG := .16
+const MAX_REEL_SPEED := 4.5
 
 var pos := Vector2(0, 1.1)
 var vel := Vector2.ZERO
@@ -18,8 +23,34 @@ var launched := false
 var grounded := true
 var gravity := 14.0
 var pump_input := 0.0
+var rope_pivots: Array[Vector2] = [] # From the root anchor toward the player.
+
+func effective_anchor() -> Vector2:
+	return rope_pivots[-1] if not rope_pivots.is_empty() else anchor
+
+func fixed_length() -> float:
+	var total := 0.0
+	var previous := anchor
+	for point in rope_pivots:
+		total += previous.distance_to(point)
+		previous = point
+	return total
+
+func path_distance() -> float:
+	return fixed_length()+pos.distance_to(effective_anchor())
+
+func constrain_rope() -> void:
+	if not attached: return
+	var pivot := effective_anchor()
+	var offset := pos-pivot
+	var available := maxf(.35,length-fixed_length())
+	if offset.length()>available:
+		var radial := offset.normalized()
+		pos = pivot+radial*available
+		vel -= radial*maxf(0,vel.dot(radial))
 
 func attach(point: Vector2, maximum: float) -> void:
+	rope_pivots.clear()
 	anchor = point
 	maximum_length = maximum
 	length = clampf(pos.distance_to(anchor), MIN_LENGTH, maximum_length)
@@ -38,37 +69,50 @@ func release(factor: float) -> void:
 	if not attached:
 		return
 	attached = false
-	vel = (vel * factor).limit_length(18)
+	rope_pivots.clear()
+	# Keep the velocity vector intact at the hand-off. The smoother constraint
+	# and radial reel velocity already remove the old snap without hiding the
+	# timing skill in a release impulse.
+	vel = (vel * factor).limit_length(MAX_SPEED)
 	flight_peak = maxf(flight_peak,pos.y)
 
 func tick(dt: float, pump: float, reel: float) -> void:
 	var acceleration := Vector2(0, -gravity)
 	pump_input = move_toward(pump_input,pump,dt*10)
+	var previous_length := length
 	if attached:
-		var radial := (pos-anchor).normalized()
-		var force := Vector2(pump_input*10, 0)
+		var radial := (pos-effective_anchor()).normalized()
+		var tangent := Vector2(-radial.y,radial.x)
+		var force := Vector2(pump_input*SWING_FORCE, 0)
+		# Only the component along the orbit can change the swing. A small
+		# velocity drag keeps repeated corrections smooth instead of twitchy.
 		acceleration += force - radial * force.dot(radial)
+		acceleration -= tangent * vel.dot(tangent) * TANGENTIAL_DRAG
 		if absf(reel)>.001:
 			request_length(target_length-reel*adjust_speed*dt)
 		length = move_toward(length,target_length,adjust_speed*dt)
 	vel += acceleration * dt
-	vel *= exp(-.065*dt)
-	vel = vel.limit_length(18)
+	vel *= exp(-AIR_DRAG*dt)
+	# Changing the length follows the current radial direction. Without this
+	# term, shortening the rope leaves the body one frame behind the constraint
+	# and creates a visible pop at the end of every reel gesture.
+	if attached and absf(length-previous_length)>.00001:
+		var offset := pos-effective_anchor()
+		if offset.length_squared()>.0001:
+			var radial := offset.normalized()
+			var reel_speed := clampf((length-previous_length)/maxf(dt,.0001),-MAX_REEL_SPEED,MAX_REEL_SPEED)
+			var tangent_velocity := vel-radial*vel.dot(radial)
+			vel = tangent_velocity+radial*reel_speed
+	vel = vel.limit_length(MAX_SPEED)
 	if not attached:
 		vel.y = maxf(vel.y,-fall_speed_limit)
 	pos += vel * dt
-	if attached:
-		var offset := pos-anchor
-		var distance := offset.length()
-		if distance > length and distance > .001:
-			var radial := offset / distance
-			pos = anchor + radial*length
-			vel -= radial*maxf(0, vel.dot(radial))
+	constrain_rope()
 	flight_peak = maxf(flight_peak, pos.y)
 	highest = maxf(highest, pos.y)
 
 func request_length(value: float) -> void:
-	target_length = clampf(value,MIN_LENGTH,maximum_length)
+	target_length = clampf(value,minf(maximum_length,maxf(MIN_LENGTH,fixed_length()+.6)),maximum_length)
 
 func fallen() -> float:
 	return maxf(0, flight_peak-pos.y)

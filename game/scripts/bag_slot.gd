@@ -2,6 +2,7 @@ class_name BagSlot
 extends Control
 
 var item: Dictionary = {}
+var rare := false
 var on_discard := Callable()
 var held_touch := -1
 var hold_time := 0.0
@@ -13,16 +14,16 @@ func _ready() -> void:
 
 func _draw() -> void:
 	var frame := StyleBoxFlat.new()
-	frame.bg_color = Color(.055,.075,.095,.88)
-	frame.border_color = Color("6f7980") if item.is_empty() else Color("d6b775")
-	frame.set_border_width_all(2)
-	frame.set_corner_radius_all(5)
+	frame.bg_color = Color("122a29ee")
+	frame.border_color = Color("405a4c") if item.is_empty() else Color("a5915b")
+	frame.set_border_width_all(1)
+	frame.set_corner_radius_all(11)
 	frame.shadow_color = Color(0,0,0,.30)
 	frame.shadow_size = 4
 	draw_style_box(frame,Rect2(Vector2.ZERO,size))
-	draw_line(Vector2(5,5),Vector2(size.x-5,5),Color(1,1,1,.20),1)
+	draw_set_transform(size*.5,0,Vector2.ONE*minf(size.x,size.y)/54)
 	if not item.is_empty():
-		var center := size*.5
+		var center := Vector2.ZERO
 		var colors := [Color("dfa752"),Color("ed8f32"),Color("66a877"),Color("93d6ee"),Color("836c9d"),Color("d5dced")]
 		var color: Color = colors[clampi(int(item["tier"]),0,5)]
 		var corners := PackedVector2Array([center+Vector2(0,-16),center+Vector2(15,-5),center+Vector2(10,11),center+Vector2(-5,15),center+Vector2(-14,0)])
@@ -30,8 +31,11 @@ func _draw() -> void:
 		draw_colored_polygon(PackedVector2Array([corners[0],corners[1],center+Vector2(0,1),corners[4]]),color.lightened(.22))
 		draw_colored_polygon(PackedVector2Array([corners[1],corners[2],corners[3],center+Vector2(0,1)]),color.darkened(.20))
 		draw_polyline(PackedVector2Array([corners[4],center+Vector2(0,1),corners[1]]),color.lightened(.4),1.5,true)
+		if rare:
+			draw_circle(Vector2(17,-17),3,Color("fff0a8"))
+			draw_arc(center,20,-PI*.85,PI*.15,24,Color("fff0a8"),1.5,true)
 	if held_touch!=-1 and not item.is_empty():
-		draw_arc(size*.5,size.x*.46,-PI*.5,-PI*.5+TAU*clampf(hold_time/HOLD_SECONDS,0,1),48,Color("f19472"),3,true)
+		draw_arc(Vector2.ZERO,24,-PI*.5,-PI*.5+TAU*clampf(hold_time/HOLD_SECONDS,0,1),48,Color("f19472"),3,true)
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:

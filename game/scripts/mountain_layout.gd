@@ -24,6 +24,9 @@ var route_points: Array[Vector2] = []
 var loot_values: Array = []
 var gentle_intro := true
 var sparse_route := true
+var safe_routes := false
+var rescue_anchors: Dictionary = {}
+var branches: Array[Dictionary] = []
 
 func setup(world_seed: int, biome: int) -> void:
 	seed_value = world_seed
@@ -132,7 +135,7 @@ func _generate_row(index: int) -> void:
 		if not safe: continue
 		var supported := false
 		for other in anchors:
-			if other["kind"] in [0,2] and transition_clear(other["pos"],candidate):
+			if other["kind"] in [0,2] and not other.get("reserve",false) and transition_clear(other["pos"],candidate):
 				supported = true
 				break
 		if not supported: continue
@@ -142,7 +145,7 @@ func _generate_row(index: int) -> void:
 		for other_id in nearby_ids(new_pos.y-4.2,new_pos.y+4.2):
 			if other_id>=new_id:
 				continue
-			if anchors[other_id]["kind"] not in [0,2]: continue
+			if anchors[other_id]["kind"] not in [0,2] or anchors[other_id].get("reserve",false): continue
 			var other_pos: Vector2 = anchors[other_id]["pos"]
 			if new_pos.distance_to(other_pos)<=LINK_REACH and transition_clear(other_pos,new_pos):
 				var edge := Vector2i(other_id,new_id)
@@ -160,7 +163,7 @@ func _generate_row(index: int) -> void:
 			for other_id in range(new_id):
 				var other: Dictionary = anchors[other_id]
 				var distance: float = new_pos.distance_to(other["pos"])
-				if other["kind"] in [0,2] and distance<best_distance and transition_clear(other["pos"],new_pos):
+				if other["kind"] in [0,2] and not other.get("reserve",false) and distance<best_distance and transition_clear(other["pos"],new_pos):
 					closest = other_id
 					best_distance = distance
 			if closest>=0:
@@ -180,13 +183,30 @@ func _generate_row(index: int) -> void:
 		var side := -1 if random.randf()<.5 else 1
 		if absf(point.x+side*3.8)>16: side = -side
 		var bonus := point+Vector2(side*3.8,.55)
-		_add_anchor(bonus,1 if zone<3 else 3 if zone<5 else 4,Vector2(1.3,.6))
-		_add_find(bonus+Vector2(0,-2.05),zone,true)
+		if safe_routes:
+			var exit := main_point(index+1)
+			side = int(signf(exit.x-point.x)) if absf(exit.x-point.x)>.1 else side
+			bonus = point+Vector2(side*3.8,.55)
+			# Every loot detour rejoins ahead, after its entry has been consumed.
+			if (not finite or exit.y<summit-.8) and transition_clear(point,bonus) and transition_clear(bonus,exit) and bonus.distance_to(exit)<5.25:
+				var branch_id := _add_anchor(bonus,1 if zone<3 else 3,Vector2(1.3,.6))
+				branches.append({"entry":id,"anchor":branch_id,"exit_row":index+1,"exit_pos":exit})
+				_add_find(bonus+Vector2(0,-2.05),zone,true)
+		else:
+			_add_anchor(bonus,1 if zone<3 else 3 if zone<5 else 4,Vector2(1.3,.6))
+			_add_find(bonus+Vector2(0,-2.05),zone,true)
 	if index>2:
 		for attempt in range(3):
 			var candidate := {"pos":Vector2(random.randf_range(-15.5,15.5),point.y+random.randf_range(.6,1.5)),"dimensions":Vector2(random.randf_range(.7,1.5),random.randf_range(.8,1.8))}
 			if _try_obstacle(candidate,index):
 				break
+	if safe_routes and not anchors[id]["permanent"]:
+		# Separate, dormant hardware: normal grips are never restored by revival.
+		var reserve := _add_anchor(point+Vector2(0,-.2),0,anchors[id]["dimensions"])
+		anchors[reserve]["reserve"] = true
+		anchors[reserve]["permanent"] = false
+		anchors[reserve]["broken"] = true
+		rescue_anchors[id] = reserve
 
 func branch_allowed(point: Vector2, index: int) -> bool:
 	# Keep auxiliary grips out of the primary shot and swing corridor.
@@ -223,6 +243,9 @@ func _try_obstacle(candidate: Dictionary, index: int) -> bool:
 		var rect := Rect2(Vector2(minf(a.x,b.x)-2.5,minf(a.y,b.y)-4.5),Vector2(absf(a.x-b.x)+5,absf(a.y-b.y)+5.5))
 		if rect.intersects(Rect2(candidate["pos"]-candidate["dimensions"]*.5,candidate["dimensions"])):
 			return false
+	for branch in branches:
+		if not transition_clear(anchors[branch["entry"]]["pos"],anchors[branch["anchor"]]["pos"],candidate) or not transition_clear(anchors[branch["anchor"]]["pos"],branch["exit_pos"],candidate):
+			return false
 	for id in nearby_ids(candidate["pos"].y-5,candidate["pos"].y+5):
 		var p: Vector2 = anchors[id]["pos"]
 		if blocked(p+Vector2(0,-2),p,candidate,Vector2(.65,.65)):
@@ -253,11 +276,11 @@ func stable_network_connected(links: Array[Vector2i]) -> bool:
 		var id := queue[cursor]
 		cursor += 1
 		for neighbour in adjacency.get(id,[]):
-			if not reached.has(neighbour) and anchors[neighbour]["kind"] in [0,2]:
+			if not reached.has(neighbour) and anchors[neighbour]["kind"] in [0,2] and not anchors[neighbour].get("reserve",false):
 				reached[neighbour] = true
 				queue.append(neighbour)
 	for object in anchors:
-		if object["kind"] in [0,2] and not reached.has(object["id"]):
+		if object["kind"] in [0,2] and not object.get("reserve",false) and not reached.has(object["id"]):
 			return false
 	return true
 

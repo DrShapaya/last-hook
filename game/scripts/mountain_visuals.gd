@@ -162,8 +162,17 @@ func build_obstacle(object: Dictionary, parent: Node3D) -> void:
 	parent.add_child(holder)
 	holder.position = Vector3(p.x,p.y,2)
 	object["visual"] = holder
-	world.box("Твёрдый выступ",holder.position,Vector3(d.x,d.y,1.1),world.mat("solid_rock",rock_color().darkened(.25),false),holder)
-	world.box("Опасная грань",holder.position+Vector3(0,d.y*.5-.06,.57),Vector3(d.x,.12,.05),world.mat("hazard",Color("cc795d")),holder)
+	var polygon := SolidGeometry.polygon(object)
+	var local := PackedVector2Array()
+	for point in polygon: local.append(point-p)
+	_extruded_polygon(local,1.1,zone_color(p.y).darkened(.30),holder)
+	for i in range(local.size()):
+		var a := local[i]
+		var b := local[(i+1)%local.size()]
+		var color := Color("8fae83") if object.get("rest",false) and a.y>d.y*.3 and b.y>d.y*.3 else Color("d79a71")
+		beam(Vector3(a.x,a.y,.58),Vector3(b.x,b.y,.58),.025,color,holder)
+	if object.get("type","")=="pillar":
+		beam(Vector3(-d.x*.2,-d.y*.35,.57),Vector3(d.x*.15,d.y*.2,.57),.018,Color("52606a"),holder)
 
 func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	var center := Vector3((object["left"]+object["right"])*.5,object["top"]-.15,1.8)

@@ -14,13 +14,17 @@ var climb_bar: ClimbMeter
 var bag_panel: HBoxContainer
 var aim_overlay: AimOverlay
 var base_theme: Theme
+var heading_font: FontVariation
 var backdrop: LobbyView.Backdrop
 var layout_mode := "modal"
+var menu_tab := "expedition"
+var result_data: Dictionary = {}
+var revive_reason := "Падение"
 var wide := false
-const INK := Color("152b38")
-const GOLD := Color("f3c668")
-const WHITE := Color("eff5f3")
-const MUTED := Color("b7c9cd")
+const INK := Color("19352d")
+const GOLD := Color("efc779")
+const WHITE := Color("f3eddb")
+const MUTED := Color("a0b5ab")
 
 class ClimbMeter extends Control:
 	var value := 0.0
@@ -37,6 +41,9 @@ class AimOverlay extends Control:
 	var origin := Vector2.ZERO
 	var target := Vector2.ZERO
 	var active := false
+	var control_active := false
+	var control_origin := Vector2.ZERO
+	var control_target := Vector2.ZERO
 	var rope_active := false
 	var rope_pointer := Vector2.ZERO
 	var aim_color := Color("f3c668")
@@ -48,6 +55,12 @@ class AimOverlay extends Control:
 				var t := float(index)/maxi(1,count)
 				draw_circle(origin+direction*t,2.1,Color(aim_color,1-t*.6))
 			draw_circle(target,6,aim_color,false,1.5)
+		if control_active:
+			var delta := control_target-control_origin
+			if delta.length()>8:
+				draw_line(control_origin,control_target,Color(aim_color,.55),2,true)
+				draw_circle(control_origin,13,Color(aim_color,.65),false,1.5,true)
+				draw_circle(control_target,6,aim_color,false,2,true)
 		if rope_active:
 			var color := Color("f3c668")
 			draw_line(rope_pointer+Vector2(0,-28),rope_pointer+Vector2(0,28),color,2,true)
@@ -58,6 +71,9 @@ class AimOverlay extends Control:
 func setup(controller) -> void:
 	game = controller
 	base_theme = Theme.new()
+	heading_font = FontVariation.new()
+	heading_font.base_font = ThemeDB.fallback_font
+	heading_font.variation_embolden = .65
 	base_theme.default_font_size = 17
 	base_theme.set_color("font_color","Label",WHITE)
 	base_theme.set_color("font_color","Button",WHITE)
@@ -66,6 +82,7 @@ func setup(controller) -> void:
 	base_theme.set_stylebox("pressed","Button",style(Color("162e3b"),12,Color("8bc6d2")))
 	base_theme.set_stylebox("disabled","Button",style(Color("253743"),12,Color("3c505c")))
 	base_theme.set_color("font_disabled_color","Button",Color("879ca5"))
+	base_theme.set_font("font","Button",heading_font)
 	backdrop = LobbyView.Backdrop.new()
 	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(backdrop)
@@ -101,7 +118,7 @@ func fit_viewport() -> void:
 	content.size = root.size
 	content.position = (root.size-Vector2(540,960))*.5 if layout_mode=="modal" else Vector2.ZERO
 	backdrop.size = viewport_size
-	backdrop.visible = layout_mode=="menu"
+	backdrop.visible = layout_mode!="play"
 	backdrop.queue_redraw()
 	toast_label.position = Vector2((root.size.x-464)*.5,root.size.y-(154 if layout_mode=="play" else 59))
 
@@ -109,6 +126,9 @@ func _resize() -> void:
 	fit_viewport()
 	if layout_mode=="menu": show_menu()
 	elif layout_mode=="play": show_play()
+	elif layout_mode=="pause": show_pause()
+	elif layout_mode=="revive": show_revive(revive_reason)
+	elif layout_mode=="result": show_result(result_data)
 
 func style(color: Color, radius: int = 16, border: Color = Color.TRANSPARENT) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
@@ -148,14 +168,56 @@ func button(parent: Node, text: String, callback: Callable, gold: bool = false) 
 		node.add_theme_color_override("font_pressed_color",INK)
 	parent.add_child(node)
 	node.pressed.connect(callback)
+	skin_button(node,"primary" if gold else "secondary")
 	return node
+
+func skin_button(node: Button, tone: String = "secondary") -> void:
+	var primary := tone=="primary"
+	var selected := tone=="selected"
+	var ghost := tone=="ghost"
+	for state_name in ["normal","hover","pressed","disabled"]:
+		var fill := GOLD if primary else Color("314a3b") if selected else Color("1c3630")
+		var edge := Color("f8dea3") if primary else Color("88996a") if selected else Color("3e584a")
+		if ghost:
+			fill = Color.TRANSPARENT
+			edge = Color.TRANSPARENT
+		if state_name=="hover": fill = fill.lightened(.09) if not ghost else Color("263f33")
+		if state_name=="pressed": fill = fill.darkened(.12) if not ghost else Color("324e3d")
+		if state_name=="disabled":
+			fill = Color("1c302b")
+			edge = Color("30463a")
+		var box := style(fill,13,edge)
+		box.content_margin_left = 14
+		box.content_margin_right = 14
+		box.content_margin_top = 6
+		box.content_margin_bottom = 6
+		node.add_theme_stylebox_override(state_name,box)
+	var focus := style(Color.TRANSPARENT,13,Color("e9d9a5"))
+	focus.set_border_width_all(2)
+	node.add_theme_stylebox_override("focus",focus)
+	for color_name in ["font_color","font_hover_color","font_pressed_color"]:
+		node.add_theme_color_override(color_name,INK if primary else WHITE)
+	node.add_theme_color_override("font_disabled_color",Color("82998a"))
+	node.add_theme_font_size_override("font_size",16)
+	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	node.clip_text = true
+
+func select_menu(tab: String) -> void:
+	menu_tab = tab
+	show_menu()
+
+func toggle_sound() -> void:
+	game.model.profile["sound"] = not game.model.profile.get("sound",true)
+	game.model.save()
+	if not game.model.profile["sound"]: game.audio.stop()
+	show_menu()
 
 func panel(at: Vector2, dimensions: Vector2, parent: Node = null) -> VBoxContainer:
 	var card := PanelContainer.new()
 	card.position = at
 	card.size = dimensions
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
-	card.add_theme_stylebox_override("panel",style(Color(.065,.12,.17,.94),18,Color(.40,.55,.62,.6)))
+	card.add_theme_stylebox_override("panel",style(Color("102a29ed"),18,Color("55725b80")))
 	(parent if parent!=null else content).add_child(card)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation",12)
@@ -174,6 +236,7 @@ func clear() -> void:
 	aim_label = null
 	climb_bar = null
 	aim_overlay.active = false
+	aim_overlay.control_active = false
 	aim_overlay.rope_active = false
 	aim_overlay.queue_redraw()
 
@@ -244,6 +307,7 @@ func refresh_bag() -> void:
 		slot.custom_minimum_size = Vector2(54,54)
 		if index<game.model.bag.size():
 			slot.item = game.model.bag[index]
+			slot.rare = game.model.item_is_rare(slot.item)
 			slot.on_discard = _discard.bind(index)
 		bag_panel.add_child(slot)
 
@@ -253,7 +317,7 @@ func _discard(index: int) -> void:
 	game.save_snapshot()
 
 func update_play() -> void:
-	toast_label.visible = game.hint_timer>0
+	toast_label.visible = game.hint_timer>0 and game.state in ["play","menu"]
 	toast_label.position.y = root.size.y-(154 if game.state=="play" else 59)
 	if not is_instance_valid(height_label) or game.state!="play":
 		return
@@ -266,10 +330,13 @@ func update_play() -> void:
 	climb_bar.queue_redraw()
 	climb_bar.visible = game.run_mode=="summit"
 	var zone := clampi(int(maxf(0,game.sim.pos.y-game.START_Y)/20),0,5)
-	goal_label.text = GameModel.ZONE_NAMES[zone]+" · "+game.model.next_goal()
+	goal_label.text = "Тренировка · 16 зацепов" if game.run_mode=="practice" else GameModel.ZONE_NAMES[zone]+" · "+game.model.next_goal()
 	var lesson := tutorial_hint()
 	if not lesson.is_empty(): goal_label.text = lesson
 	aim_overlay.active = game.pressed and not game.sim.attached
+	aim_overlay.control_active = game.pressed and game.sim.attached and game.touch_gesture
+	aim_overlay.control_origin = game.press_start
+	aim_overlay.control_target = game.pointer
 	aim_overlay.rope_active = game.rope_touch>=0 and game.sim.attached
 	aim_overlay.rope_pointer = game.rope_pointer
 	aim_overlay.origin = game.camera.unproject_position(Vector3(game.sim.pos.x,game.sim.pos.y,0))
@@ -279,6 +346,7 @@ func update_play() -> void:
 		var current: Dictionary = game.world.anchor_by_id(game.anchor_id)
 		if not current.is_empty():
 			aim_label.text += " · постоянная" if current.get("permanent",true) else " · исчезнет при отпускании"
+		if not game.sim.rope_pivots.is_empty(): aim_label.text += " · канат огибает выступ"
 	aim_overlay.aim_color = GOLD
 	if aim_overlay.active:
 		aim_label.text = "Канат до %d м · крюк %d м/с" % [roundi(game.model.shot_range()*10),roundi(game.model.value("throw_speeds",GameModel.THROW)*10)]
@@ -286,12 +354,15 @@ func update_play() -> void:
 		if not collision.is_empty():
 			point = collision["contact"]
 			if collision.get("blocked",false):
-				aim_label.text = "Выстрел перекрыт выступом"
+				aim_label.text = "Карниз · можно приземлиться сверху" if collision.get("object",{}).get("rest",false) else "Твёрдый выступ · крюк не зацепится"
 				aim_overlay.aim_color = Color("ff987f")
 			else:
 				aim_label.text = game.world.object_description(collision["object"])
 				aim_overlay.aim_color = Color("8ae0ac")
 				aim_label.text += " · %.2f с" % (game.sim.pos.distance_to(point)/game.model.value("throw_speeds",GameModel.THROW))
+				if not game.shot_window_open(point):
+					aim_overlay.aim_color = Color("ff987f")
+					aim_label.text = "Удаляешься от цели — каната не хватит"
 	aim_overlay.target = game.camera.unproject_position(Vector3(point.x,point.y,0))
 	aim_overlay.queue_redraw()
 	if game.sim.attached and not danger:
@@ -309,11 +380,11 @@ func tutorial_hint() -> String:
 	if not game.sim.attached:
 		return "В полёте прицелься и поймай следующую опору" if game.catches<2 else ""
 	if "swing" not in learned:
-		return "Первый палец влево/вправо: раскачайся в такт" if mobile else "A / D: раскачайся в такт движению"
+		return "Удерживай палец и веди влево/вправо: раскачайся" if mobile else "A / D: раскачайся в такт движению"
 	if "rope" not in learned:
-		return "Веди второй палец вверх/вниз: измени канат" if mobile else "W / S или колесо: измени длину каната"
+		return "Тем же пальцем веди вверх/вниз: измени канат" if mobile else "W / S или колесо: измени длину каната"
 	if "release" not in learned:
-		return "Тап вторым пальцем: отпусти на взлёте" if mobile else "Пробел: отпусти канат на взлёте и целься снова"
+		return "Быстрый свайп вверх отпускает крюк; веди к цели и отпусти" if mobile else "Пробел: отпусти канат на взлёте и целься снова"
 	return ""
 
 func world_input_allowed(point: Vector2) -> bool:
@@ -334,53 +405,23 @@ func _buy_upgrade(kind: int) -> void:
 func show_locations() -> void:
 	show_menu()
 
-func show_pause() -> void:
+func menu_surface(mode: String) -> ExpeditionMenu:
 	clear()
-	var column := panel(Vector2(45,280),Vector2(450,380))
-	label(column,"Пауза",31)
-	label(column,"Текущая попытка сохранена",16,MUTED)
-	label(column,"Первый палец: прицел и раскачка.\nВторой: тап — отпустить, вверх/вниз — длина.\nУдерживай ячейку, чтобы выбросить предмет." if OS.has_feature("mobile") else "ЛКМ: прицел и бросок. A / D: раскачка.\nW / S или колесо: канат. Пробел: отпустить.\nУдерживай ячейку, чтобы выбросить предмет.",13,MUTED)
-	button(column,"Продолжить",game.unpause,true)
-	button(column,"Завершить и получить награду",func(): game.finish_run(false))
-	button(column,"В меню · сохранить попытку",game.show_menu)
+	layout_mode = mode
+	fit_viewport()
+	content.position = Vector2.ZERO
+	var screen := ExpeditionMenu.new()
+	content.add_child(screen)
+	screen.prepare(self)
+	return screen
+
+func show_pause() -> void:
+	menu_surface("pause").build_pause()
 
 func show_revive(reason: String = "Падение") -> void:
-	clear()
-	var column := panel(Vector2(35,303),Vector2(470,365))
-	label(column,"Ещё один зацеп?",30)
-	label(column,reason,16,MUTED)
-	var info := label(column,"Одно продолжение за попытку.\nВысота и рюкзак сохраняются.",16,MUTED)
-	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	if OS.is_debug_build():
-		button(column,"Возродиться · тест рекламы",func(): game.revive("test_ad"),true)
-	else:
-		var advertisement := button(column,"Реклама пока не подключена",func(): pass)
-		advertisement.disabled = true
-	var diamonds := button(column,"Возродиться · 3 алмаза",func(): game.revive("diamonds"))
-	diamonds.disabled = int(game.model.profile["diamonds"])<3
-	button(column,"Завершить попытку",func(): game.finish_run(false))
-	label(column,"Тест рекламы не показывает настоящий рекламный ролик",11,MUTED)
+	revive_reason = reason
+	menu_surface("revive").build_revive(reason)
 
 func show_result(result: Dictionary) -> void:
-	clear()
-	var column := panel(Vector2(30,204),Vector2(480,580))
-	label(column,"Вершина достигнута!" if result.get("success",false) else "Новая попытка — выше",29)
-	label(column,"Максимальная высота: %d м" % int(result.get("highest",0)),19,GOLD)
-	var duration := int(result.get("seconds",0))
-	label(column,"%d:%02d · зацепов %d из %d" % [duration/60,duration%60,int(result.get("catches",0)),int(result.get("shots",0))],13,MUTED)
-	label(column,"За высоту                  +%d" % int(result.get("height",0)),17)
-	label(column,"Из рюкзака                 +%d / %d" % [int(result.get("loot",0)),int(result.get("carried",0))],17)
-	if int(result.get("finish",0))>0:
-		label(column,"Награда за вершину          +%d" % int(result["finish"]),17)
-	if int(result.get("zone_bonus",0))>0:
-		label(column,"За новые зоны +%d · уже выдано" % int(result["zone_bonus"]),14,MUTED)
-	label(column,"ЗА ПОПЫТКУ: %d ЗОЛОТА" % (int(result.get("total",0))+int(result.get("zone_bonus",0))),24,GOLD)
-	var recommendation: int = game.model.recommended_upgrade()
-	if recommendation>=0:
-		label(column,"Доступно: %s · %d золота" % [GameModel.UPGRADE_NAMES[recommendation],game.model.cost(recommendation)],13,GOLD)
-	if result.get("first",false):
-		var text := label(column,"Открыты бесконечный режим и покупка локаций. +20 алмазов",14,Color("a8deee"))
-		text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	button(column,"ЕЩЁ ОДНА ПОПЫТКА",func(): game.start_run(game.run_mode=="endless"),true)
-	button(column,"Улучшить оснащение",game.show_workshop)
-	button(column,"В меню",game.show_menu)
+	result_data = result.duplicate(true)
+	menu_surface("result").build_result(result)

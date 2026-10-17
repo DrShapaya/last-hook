@@ -38,6 +38,10 @@ func run_tests() -> void:
 			if node is Control:
 				contained = contained and area.encloses(node.get_global_rect())
 		check(contained and game.hud.backdrop.size==viewport_size,"all lobby controls fit and its background reaches every edge: %s" % dimensions)
+		var training_button: Button
+		for node in lobby.find_children("*","Button",true,false):
+			if node.text.begins_with("Тренировка"): training_button = node
+		check(training_button!=null and training_button.get_parent().get_global_rect().encloses(training_button.get_global_rect()),"training button fits its lobby card without covering the footer: %s" % dimensions)
 		game.start_run(false)
 		game.sim.pos = Vector2(0,7)
 		game.camera_x = 0
@@ -66,6 +70,17 @@ func run_tests() -> void:
 		game.state = "pause"
 		game.hud.show_pause()
 		check(area.encloses(game.hud.content.get_child(0).get_global_rect()),"pause controls remain inside the resized viewport: %s" % dimensions)
+		game.model.profile["levels"][3] = 6
+		game.model.bag.clear()
+		for tier in range(6): game.model.bag.append({"id":tier,"tier":tier,"value":int(game.model.balance["loot_values"][tier])})
+		game.hud.show_pause()
+		await process_frame
+		check(area.encloses(game.hud.content.get_child(0).get_global_rect()),"six inspected loot values fit the pause panel: %s" % dimensions)
+		game.model.profile["active"] = {}
+		game.model.profile["gold"] = 4540
+		game.hud.show_result({"success":true,"first":true,"highest":1200,"height":540,"loot":900,"carried":900,"finish":1300,"diamonds":20,"total":2740,"zone_bonus":1800,"seconds":214,"shots":51,"catches":43})
+		await process_frame
+		check(area.encloses(game.hud.content.get_child(0).get_global_rect()),"summit reward and diamond labels fit without hiding action buttons: %s" % dimensions)
 	# Art regressions use the reference rig so intentional edits to player.tscn
 	# do not prevent the user from building their own character.
 	game.explorer.body.free()

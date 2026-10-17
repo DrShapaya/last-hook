@@ -11,6 +11,7 @@ artifacts/
 .vs/
 game/.godot/
 tools/godot/
+tools/android-sdk/
 UserData/
 game/*.tmp
 **/__pycache__/
@@ -22,3 +23,4 @@ game/*.tmp
 .env
 .env.*
 !.env.example
+/game.zip

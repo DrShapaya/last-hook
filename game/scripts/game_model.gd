@@ -4,6 +4,7 @@ extends RefCounted
 const UPGRADE_NAMES = ["Макс. длина каната", "Импульс", "Наконечники", "Рюкзак", "Магнит", "Сохранение добычи", "Сила броска"]
 const UPGRADE_COUNT := 7
 const THROW := 6
+const BUILD_VERSION := "0.11.0"
 const ZONE_NAMES = ["Лес", "Скалы", "Руины", "Лёд", "Вулкан", "Небеса"]
 const ZONE_HINTS = ["Освой раскачку", "Длинные перелёты", "Меняй направление", "Следи за скольжением", "Береги высоту", "Последний рывок"]
 const LOOT_NAMES = ["Медная находка", "Янтарь", "Древняя реликвия", "Ледяной кристалл", "Обсидиан", "Небесный осколок"]
@@ -72,7 +73,7 @@ func load_profile() -> void:
 		if not profile["active"] is Dictionary:
 			profile["active"] = {}
 		if not profile["active"].is_empty():
-			for key in ["picked", "broken"]:
+			for key in ["picked", "broken", "active_reserves"]:
 				profile["active"][key] = profile["active"].get(key,[]).map(func(id): return int(id))
 			for item in profile["active"].get("bag",[]):
 				for key in ["id", "tier", "value"]:
@@ -151,7 +152,7 @@ func upgrade_text(kind: int, at_level: int = -1) -> String:
 		0: return "%d м" % roundi(float(balance["rope_lengths"][i]) * float(balance["meters_per_unit"]))
 		1: return "+%d%% при отпускании" % roundi((float(balance["impulse_factors"][i])-1)*100)
 		2: return "%d наконечн. · допуск ±%.1f м" % [i+1,(.04+float(balance["hook_radii"][i])-.32)*10]
-		3: return "%d слотов · %d типов находок" % [i+1, i+1]
+		3: return "%d слотов · любые находки" % (i+1)
 		4: return "сбор при касании" if i == 0 else "%d м притяжения" % roundi(float(balance["magnet_radii"][i])*10)
 		5: return "%d%% стоимости при поражении" % int(balance["recovery_percents"][i])
 		_: return "%d м/с · скорость крюка" % roundi(float(balance["throw_speeds"][i])*10)
@@ -203,7 +204,7 @@ func height_gold(units: float) -> int:
 
 func try_pick(item: Dictionary) -> bool:
 	# Intentionally no auto-replacement; a more valuable find stays in the world.
-	if picked.has(item["id"]) or bag.size() >= level(3) or int(item["tier"]) >= level(3):
+	if picked.has(item["id"]) or bag.size() >= level(3):
 		return false
 	bag.append(item.duplicate(true))
 	picked.append(item["id"])
@@ -220,6 +221,10 @@ func bag_value() -> int:
 		total += int(item["value"])
 	return total
 
+func item_is_rare(item: Dictionary) -> bool:
+	var tier := clampi(int(item.get("tier",0)),0,balance["loot_values"].size()-1)
+	return int(item.get("value",0))>int(balance["loot_values"][tier])
+
 func retained(success: bool) -> int:
 	return bag_value() if success else floori(bag_value() * value("recovery_percents", 5) / 100)
 
@@ -231,9 +236,10 @@ func settle(run_id: String, mode: String, highest: float, success: bool, locatio
 	var loot := retained(summit_success)
 	var finish := int(balance["summit_repeat_bonus"]) if summit_success else 0
 	var first: bool = summit_success and not profile["cleared_locations"].has(location)
+	var diamonds := int(balance["first_summit_diamonds"]) if first else int(balance["summit_repeat_diamonds"]) if summit_success else 0
+	profile["diamonds"] += diamonds
 	if first:
 		finish += int(balance["first_summit_gold"])
-		profile["diamonds"] += int(balance["first_summit_diamonds"])
 		profile["cleared_locations"].append(location)
 	if summit_success:
 		profile["summit_cleared"] = true
@@ -246,7 +252,7 @@ func settle(run_id: String, mode: String, highest: float, success: bool, locatio
 	profile["active"] = {}
 	save()
 	return {"duplicate": false, "height": height, "loot": loot, "carried": bag_value(), "finish": finish,
-		"total": height+loot+finish, "first": first, "success": summit_success, "highest": roundi(highest*10)}
+		"total": height+loot+finish, "diamonds": diamonds, "first": first, "success": summit_success, "highest": roundi(highest*10)}
 
 func purchase_location(index: int) -> String:
 	if profile["locations"].has(index):

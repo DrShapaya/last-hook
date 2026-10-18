@@ -1,7 +1,7 @@
 class_name MountainWorld
 extends Node3D
 
-const GENERATION_VERSION := 10
+const GENERATION_VERSION := 11
 const COLORS := [Color("e3b95e"),Color("b97bed"),Color("61d6a5"),Color("88dafa"),Color("ed99da")]
 var layout := MountainLayout.new()
 var visuals: MountainVisuals
@@ -31,6 +31,7 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	location = world_location
 	generation_version = saved_version if saved_version>0 else generation_version_for(location)
 	if generation_version>=10 and location==0: layout = EncounterLayout.new()
+	if generation_version>=11 and location==0: layout = MassifLayout.new()
 	if practice: layout = PracticeLayout.new()
 	layout.gentle_intro = generation_version>=7
 	layout.sparse_route = generation_version>=8
@@ -43,6 +44,7 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	finds = layout.finds
 	ledges = layout.ledges
 	visuals = MountainVisuals.new(self,layout)
+	if layout is MassifLayout: visuals = MassifVisuals.new(self,layout)
 	if location!=0: visuals = LegacyMountainVisuals.new(self,layout)
 	if visuals_enabled and location==0: _build_sky()
 

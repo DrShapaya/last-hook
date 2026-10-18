@@ -63,7 +63,7 @@ func _generate_row(index: int) -> void:
 	var point := main_point(index)
 	var last_top: float = ledges[-1]["top"]
 	if index>3 and (kind==4 or index%9==8) and point.y-REST_DROP-last_top>=REST_GAP and (not finite or ledges.size()<6) and (not finite or point.y<summit-5):
-		ledges.append({"left":point.x-1.4,"right":point.x+1.4,"top":point.y-REST_DROP})
+		ledges.append({"left":point.x-1.4,"right":point.x+1.4,"top":point.y-REST_DROP,"style":int(rng(index,330).randi_range(0,2)),"anchor_row":index})
 		anchors[main_route[-1]]["permanent"] = true
 	if index>=2 and (index-2)%3==0:
 		var block := (index-2)/3

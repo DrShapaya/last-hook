@@ -1,0 +1,11 @@
+{
+  "date": "2026-10-19",
+  "generation_version": 11,
+  "obstacle_types": ["wedge", "pillar", "shelf"],
+  "visual_variants_per_type": 3,
+  "obstacle_total_across_100_seeds": 637,
+  "placement_rules": ["primary transfer corridor stays clear", "branch entry and exit stay clear", "loot and recovery grips stay clear", "solid network remains connected"],
+  "visual_rules": ["collision polygon is the silhouette", "faceted front plane", "beveled rim", "underside shadow", "shape-specific support details"],
+  "ledge_styles": ["cantilever", "saddle", "anchored wedge"],
+  "validation": {"generation_checks": 32, "terrain_checks": 32, "integration_checks": 106, "full_build": "blocked by pre-existing HUD nil error in current dirty workspace"}
+}

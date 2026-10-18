@@ -88,7 +88,7 @@ func run_tests() -> void:
 			min_x = minf(min_x,object["pos"].x)
 			max_x = maxf(max_x,object["pos"].x)
 			supported = supported and world.layout.rock_field(object["pos"])>0
-		wide = wide and min_x<-15 and max_x>15
+		wide = wide and max_x-min_x>14
 		var is_connected := world.layout.stable_network_connected(world.route_edges)
 		if not is_connected: print("DISCONNECTED seed=",seed_number)
 		connected = connected and is_connected
@@ -118,7 +118,7 @@ func run_tests() -> void:
 	check(stable,"100 mountains never force fragile or upgrade-gated grips on the primary path")
 	check(safe,"100 mountains keep barriers clear of the primary corridor including player size")
 	check(varied,"100 mountains vary vertical gaps rather than copy fixed rows")
-	check(wide,"the first location populates left, centre and right across a three-screen world")
+	check(wide,"every massif has connected grips across more than one screen of lateral terrain, without requiring grips in open sky")
 	check(connected,"all stable grips belong to the connected route network in 100 worlds")
 	check(supported,"every hookable object has generated rock support, including openings")
 	check(obstacle_count>100,"solid obstacles are actually generated across the test worlds")
@@ -135,7 +135,9 @@ func run_tests() -> void:
 				if not solid: void_count += 1
 		holes = holes and void_count>25
 		masks.append(mask)
-		check(world.outside_mountain(Vector2(22,50)) and not world.outside_mountain(Vector2(0,50)),"rock silhouette distinguishes exterior from internal holes without defining defeat, seed %d" % seed_number)
+		var left := world.layout.outer_edge(50,-1)
+		var right := world.layout.outer_edge(50,1)
+		check(world.outside_mountain(Vector2(right+3,50)) and not world.outside_mountain(Vector2((left+right)*.5,50)),"rock silhouette follows the actual moving massif, seed %d" % seed_number)
 		world.free()
 	check(holes,"the first location contains large internal voids across different seeds")
 	var distinct := true

@@ -12,12 +12,12 @@ func check(value: bool, description: String) -> void:
 		failures.append(description)
 		push_error("TERRAIN FAILED: "+description)
 
-func empty_world() -> MountainWorld:
+func empty_world(clear_platforms: bool = true) -> MountainWorld:
 	var world := MountainWorld.new()
 	world.visuals_enabled = false
 	root.add_child(world)
 	world.setup(44,0)
-	world.ledges.clear()
+	if clear_platforms: world.ledges.clear()
 	return world
 
 func run_tests() -> void:
@@ -34,11 +34,37 @@ func run_tests() -> void:
 	var branch_exits := true
 	var rare_rest := true
 	var no_adjacent_phrases := true
+	var forms := {}
+	var broad_and_narrow := true
+	var no_continuous_spire := true
+	var attached_shoulders := true
+	var smallest_width := INF
+	var largest_width := 0.0
+	var most_narrow_rows := 0
 	for seed_number in range(100):
-		var layout := EncounterLayout.new()
+		var layout := MassifLayout.new()
 		layout.safe_routes = true
 		layout.setup(seed_number,0)
 		layout.generate_to(126,true,120)
+		for region in range(7): forms[layout.landform(region)["kind"]] = true
+		var min_width := INF
+		var max_width := 0.0
+		var narrow_rows := 0
+		for y in range(6,110):
+			var bounds := layout.profile_at(y)
+			var width := bounds.y-bounds.x
+			min_width = minf(min_width,width)
+			max_width = maxf(max_width,width)
+			if width<11: narrow_rows += 1
+		broad_and_narrow = broad_and_narrow and max_width>25 and min_width<12 and max_width-min_width>15
+		smallest_width = minf(smallest_width,min_width)
+		largest_width = maxf(largest_width,max_width)
+		most_narrow_rows = maxi(most_narrow_rows,narrow_rows)
+		var rear_base := layout.rear_profile_at(6)
+		no_continuous_spire = no_continuous_spire and narrow_rows<16 and rear_base.y-rear_base.x>35
+		for grip in layout.anchors:
+			var support := layout.support_root(grip)
+			if support.is_finite(): attached_shoulders = attached_shoulders and layout.body_field(support)>.4
 		rare_rest = rare_rest and layout.ledges.size()<=7
 		for i in range(layout.encounters.size()):
 			var encounter: Dictionary = layout.encounters[i]
@@ -62,6 +88,47 @@ func run_tests() -> void:
 	check(safe and branch_exits,"primary hanging/shot lanes and forward loot exits remain clear across 100 seeds")
 	check(empty_loot and non_overlapping,"loot cannot spawn inside solid geometry and obstacles do not overlap")
 	check(rare_rest,"rest pockets stay limited rather than becoming an unlimited safety ladder")
+	check(forms.size()==6 and broad_and_narrow,"100 seeds alternate broad massifs, shoulders, overhangs, clefts, arches and short narrow ridges")
+	check(no_continuous_spire,"narrow ridges occupy less than 16 of 104 sampled rows and every mountain has a wide supporting base")
+	check(attached_shoulders,"grips cut out by clefts grow shoulders back into real solid rock, never an isolated oval")
+
+	var mesh_world := empty_world(false)
+	mesh_world.generate_to(126,true,120)
+	var renderer := MassifVisuals.new(mesh_world,mesh_world.layout)
+	var first_chunk := Node3D.new()
+	var next_chunk := Node3D.new()
+	mesh_world.add_child(first_chunk)
+	mesh_world.add_child(next_chunk)
+	renderer.build_chunk(0,first_chunk)
+	renderer.build_chunk(1,next_chunk)
+	var first_mesh: ArrayMesh = first_chunk.get_node("Скальный массив_0").mesh
+	var next_mesh: ArrayMesh = next_chunk.get_node("Скальный массив_1").mesh
+	var first_arrays := first_mesh.surface_get_arrays(0)
+	var next_arrays := next_mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = first_arrays[Mesh.ARRAY_VERTEX]
+	var next_vertices: PackedVector3Array = next_arrays[Mesh.ARRAY_VERTEX]
+	var shared := 0
+	var seam_matches := true
+	for column in range(MassifVisuals.COLUMNS+1):
+		var point := renderer.sample_point(column,MassifVisuals.ROWS)
+		if mesh_world.layout.rock_field(point)<.05: continue
+		var expected := renderer.vertex(point)
+		var a := vertices.find(expected)
+		var b := next_vertices.find(expected)
+		if a>=0 and b>=0:
+			shared += 1
+			seam_matches = seam_matches and first_arrays[Mesh.ARRAY_NORMAL][a].distance_to(next_arrays[Mesh.ARRAY_NORMAL][b])<.0001
+		else: seam_matches = false
+	check(shared>10 and seam_matches,"independently built chunks share the exact same detailed contour positions and seam normals")
+	var low := INF
+	var high := -INF
+	var valid_normals := true
+	for i in range(vertices.size()):
+		low = minf(low,vertices[i].z)
+		high = maxf(high,vertices[i].z)
+		valid_normals = valid_normals and first_arrays[Mesh.ARRAY_NORMAL][i].is_finite() and first_arrays[Mesh.ARRAY_NORMAL][i].z>0
+	check(high-low>1.5 and valid_normals and first_arrays[Mesh.ARRAY_INDEX].size()>3000,"dense rock mesh has real depth, finite outward normals and indexed topology")
+	mesh_world.free()
 
 	var world := empty_world()
 	world.add_obstacle(Vector2(0,10),Vector2(2,2))
@@ -148,7 +215,7 @@ func run_tests() -> void:
 	game.save_snapshot()
 	game.model.load_profile()
 	game.resume_run()
-	check(game.world.generation_version==10 and game.sim.rope_pivots==pivots,"rope contacts survive save and resume with their route version")
+	check(game.world.generation_version==11 and game.sim.rope_pivots==pivots,"rope contacts survive save and resume with their route version")
 	# Magnet reach is never permission to pull an item through a wall.
 	game.world.finds.clear()
 	game.world.obstacles.clear()
@@ -173,6 +240,6 @@ func run_tests() -> void:
 	game.queue_free()
 	await process_frame
 	var report := FileAccess.open(directory.path_join("terrain-test-report.json"),FileAccess.WRITE)
-	report.store_string(JSON.stringify({"checks":checks,"failures":failures,"passed":failures.is_empty(),"seeds":100,"obstacles":count},"\t"))
+	report.store_string(JSON.stringify({"checks":checks,"failures":failures,"passed":failures.is_empty(),"seeds":100,"obstacles":count,"generation_version":11,"landforms":forms.size(),"front_width_range":[smallest_width,largest_width],"max_narrow_fraction":float(most_narrow_rows)/104,"shared_seam_vertices":shared,"mesh_depth_range":[low,high]},"\t"))
 	print("TERRAIN_TESTS ",checks," checks, ",failures.size()," failures; obstacles=",count)
 	quit(0 if failures.is_empty() else 1)

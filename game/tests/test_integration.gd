@@ -154,7 +154,7 @@ func run_tests() -> void:
 		game.anchor_id = 0
 		game.anchor_contact = initial
 		var climbed := climb_route(game,route.size(),route)
-		check(route.size()>2 and climbed==route.size(),"movement bot traverses to the %s side of the wide mountain (%d/%d grips)" % ["left" if side<0 else "right",climbed,route.size()])
+		check(route.size()>2 and climbed==route.size(),"movement bot traverses to the massif's %s lateral branch (%d/%d grips)" % ["left" if side<0 else "right",climbed,route.size()])
 	for scenario in [[58273,1],[101,1],[410021,1],[58273,3],[101,6]]:
 		var seed_number: int = scenario[0]
 		var kit: int = scenario[1]
@@ -411,7 +411,7 @@ func run_tests() -> void:
 	game.anchor_id = 0
 	game.release_hook()
 	check(permanent["permanent"] and not permanent["broken"] and permanent["visual"].visible,"rare permanent grip survives detaching and can be reused")
-	for legacy_version in [6,7,8,9]:
+	for legacy_version in [6,7,8,9,10]:
 		game.model.profile = GameModel.fresh_profile()
 		game.start_run(false)
 		game.run_seed = 58273
@@ -432,7 +432,7 @@ func run_tests() -> void:
 		check(game.model.profile["active"]["generation_version"]==legacy_version,"resaving an old attempt preserves its generator version")
 		game.finish_run(false)
 	game.start_run(false)
-	check(game.world.generation_version==10,"new attempts use encounter generation while old attempts keep their geometry")
+	check(game.world.generation_version==11,"new attempts use massif generation while old attempts keep their geometry")
 	game.model.profile["learned_controls"] = ["aim"]
 	game.sim.pos = game.world.anchors[0]["pos"]+Vector2(0,-3)
 	game.sim.attach(game.world.anchors[0]["pos"],5.5)
@@ -542,13 +542,17 @@ func route_to_side(world: MountainWorld, side: int) -> Array[int]:
 	var queue: Array[int] = [start]
 	var cursor := 0
 	var goal := -1
+	var best_excursion := 3.0
 	while cursor<queue.size():
 		var id := queue[cursor]
 		cursor += 1
 		var point: Vector2 = world.anchors[id]["pos"]
-		if point.x*side>14 and point.y>15 and point.y<30:
-			goal = id
-			break
+		if point.y>15 and point.y<35:
+			var route_x := (world.layout as MassifLayout).route_x(point.y) if world.layout is MassifLayout else 0.0
+			var excursion := (point.x-route_x)*side
+			if excursion>best_excursion and not world.anchors[id].get("primary",false):
+				best_excursion = excursion
+				goal = id
 		for neighbour in adjacency.get(id,[]):
 			if not parents.has(neighbour):
 				parents[neighbour] = id

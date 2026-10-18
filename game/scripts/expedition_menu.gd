@@ -42,7 +42,7 @@ func build_pause() -> void:
 	action(self,"Завершить тренировку" if game.run_mode=="practice" else "Завершить и забрать награду",Vector2(28,actions_y+130),Vector2(summary_width,50),func(): game.finish_run(false),"ghost")
 	var help_y := bag_y+bag_height+20
 	if landscape:
-		paragraph(self,"A / D — раскачка    W / S — канат\nПробел — отпустить    ЛКМ — следующий бросок" if not OS.has_feature("mobile") else "Веди палец — раскачка и длина.\nСвайп вверх — отпускание; веди к цели и отпусти.",Vector2(bag_x,help_y),Vector2(bag_width,48),13)
+		paragraph(self,"A / D — раскачка    W / S — канат\nПробел — отпустить    ЛКМ — следующий бросок" if not hud.touch_controls_hint else "Стик — направление. Отпускание — бросок / отцепление.\nКанат: держи строго вверх / вниз 0,28 секунды.",Vector2(bag_x,help_y),Vector2(bag_width,48),13)
 	else:
 		text(self,"Основной кошелёк и оснащение сохраняются." if game.run_mode=="practice" else "Можно вернуться позже. Попытка останется сохранённой.",Vector2(28,892),Vector2(484,24),11,MUTED).horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
@@ -66,7 +66,12 @@ func build_revive(reason: String) -> void:
 	var diamonds := action(self,"Продолжить · %d алмаза" % price,Vector2(x,y+36),Vector2(width,58),func(): game.revive("diamonds"),"primary")
 	diamonds.disabled = not available or int(model.profile["diamonds"])<price
 	text(self,"В кошельке: %d алмазов" % int(model.profile["diamonds"]),Vector2(x,y+105),Vector2(width,22),12,TEAL)
-	if OS.is_debug_build():
+	if game.ads.supported:
+		var ad_ready: bool = game.ads.rewarded_ready
+		var ad := action(self,"Смотреть рекламу · возродиться" if ad_ready else "Реклама пока недоступна · повторить",Vector2(x,y+148),Vector2(width,50),game.request_ad_revive)
+		ad.disabled = not available or game.ads.fullscreen
+		text(self,"Возрождение после полного просмотра",Vector2(x,y+208),Vector2(width,22),11,MUTED)
+	elif OS.is_debug_build():
 		var test_ad := action(self,"Тестовое продолжение",Vector2(x,y+148),Vector2(width,50),func(): game.revive("test_ad"))
 		test_ad.disabled = not available
 		text(self,"Тестовый режим · без просмотра рекламы",Vector2(x,y+208),Vector2(width,22),11,MUTED)

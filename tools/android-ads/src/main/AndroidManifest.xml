@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <application>
+        <meta-data android:name="org.godotengine.plugin.v2.LastHookAds"
+            android:value="com.lasthook.ads.LastHookAds" />
+        <meta-data android:name="com.yandex.mobile.ads.AUTOMATIC_SDK_INITIALIZATION"
+            android:value="false" />
+    </application>
+</manifest>

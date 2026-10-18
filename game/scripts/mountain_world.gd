@@ -192,11 +192,11 @@ func hit_object(from: Vector2, to: Vector2, object: Dictionary, grip: float) -> 
 		return RopeSim.hit_polygon(from,to,polygon)
 	return rectangle_hit(from,to,object["pos"],object["dimensions"]*.5+Vector2.ONE*tolerance)
 
-func cast_hook(from: Vector2, to: Vector2, grip: float) -> Dictionary:
+func cast_hook(from: Vector2, to: Vector2, grip: float, ignore_anchor: int = -1) -> Dictionary:
 	var best := 2.0
 	var result: Dictionary = {}
 	for object in nearby_anchors(minf(from.y,to.y)-2,maxf(from.y,to.y)+2):
-		if object["broken"]:
+		if object["broken"] or int(object["id"])==ignore_anchor:
 			continue
 		var fraction := hit_object(from,to,object,grip)
 		if fraction>=0 and fraction<best:

@@ -1,0 +1,23 @@
+plugins { id 'com.android.library' version '8.6.1' }
+
+android {
+    namespace 'com.lasthook.ads'
+    compileSdk 36
+    defaultConfig { minSdk 24 }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    compileOnly files('../../game/android/build/libs/debug/godot-lib.template_debug.aar')
+    implementation 'com.yandex.android:mobileads:8.5.0'
+}
+
+tasks.register('installPlugin', Copy) {
+    dependsOn 'assembleRelease'
+    from('build/outputs/aar/LastHookAds-release.aar')
+    into('../../game/addons/last_hook_ads/bin')
+    rename { 'LastHookAds.aar' }
+}

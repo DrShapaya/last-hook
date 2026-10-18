@@ -24,3 +24,8 @@ game/*.tmp
 .env.*
 !.env.example
 /game.zip
+game/android/build/
+game/android/.build_version
+tools/android-ads/.gradle/
+tools/android-ads/build/
+tools/android-ads/local.properties

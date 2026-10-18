@@ -29,23 +29,31 @@ func traverse(game, route: Array[int]) -> int:
 	for target_id in route.slice(1):
 		var target: Vector2 = game.world.anchor_by_id(target_id)["pos"]
 		for frame in range(1200):
-			if game.state!="play": return reached
+			if game.state!="play":
+				print("FOUNDATION_STOP reached=",reached," target=",target_id," state=",game.state," pos=",game.sim.pos," reason=",game.failure_reason)
+				return reached
 			if game.sim.attached:
 				game.reel = 1
 				game.pump = signf(game.sim.vel.x) if absf(game.sim.vel.x)>.1 else signf(target.x-game.sim.anchor.x)
-				var sight: Dictionary = game.world.cast_hook(game.sim.pos,target,game.model.hook_radius())
+				var current: Dictionary = game.world.anchor_by_id(game.anchor_id)
+				var ignored: int = game.anchor_id if not current.get("permanent",true) else -1
+				var sight: Dictionary = game.world.cast_hook(game.sim.pos,target,game.model.hook_radius(),ignored)
 				var toward: Vector2 = (target-game.sim.pos).normalized()
-				if int(sight.get("object",{}).get("id",-1))==target_id and game.sim.pos.distance_to(target)<5.2 and game.sim.vel.dot(toward)>.5:
+				var window_open: bool = game.shot_window_open(target)
+				var timed_exit: bool = int(current.get("kind",0))==1
+				if int(sight.get("object",{}).get("id",-1))==target_id and game.sim.pos.distance_to(target)<5.2 and window_open and (game.sim.vel.dot(toward)>.5 or timed_exit):
 					game.release_hook()
-					game.fire_hook(target-game.sim.pos)
+					game.fire_hook(game.direction_to_target(target))
 			elif not game.bolt_active:
-				game.fire_hook(target-game.sim.pos)
+				game.fire_hook(game.direction_to_target(target))
 			game._physics_process(1.0/120)
 			game._move_camera(1.0/120)
 			if game.sim.attached and game.anchor_id==target_id:
 				reached += 1
 				break
-		if game.anchor_id!=target_id: return reached
+		if game.anchor_id!=target_id:
+			print("FOUNDATION_STOP reached=",reached," target=",target_id," state=",game.state," pos=",game.sim.pos," anchor=",game.anchor_id)
+			return reached
 	return reached
 
 func run_tests() -> void:
@@ -160,7 +168,7 @@ func run_tests() -> void:
 	check(game.world.layout is PracticeLayout and game.world.main_route.size()==16,"training provides a fixed short route of sixteen primary grips")
 	check(game.model!=real and game.model.profile["levels"]==[1,1,1,1,1,1,1],"training uses base equipment in a separate model")
 	var first: Vector2 = game.world.anchor_by_id(game.world.main_route[0])["pos"]
-	game.fire_hook(first-game.sim.pos)
+	game.fire_hook(game.direction_to_target(first))
 	for frame in range(120):
 		game._physics_process(1.0/120)
 		game._move_camera(1.0/120)

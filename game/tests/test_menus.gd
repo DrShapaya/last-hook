@@ -78,6 +78,16 @@ func run_tests() -> void:
 			game.hud.select_menu(tab)
 			await process_frame
 			validate_screen(game,area,"%s at %s" % [tab,dimensions])
+			if tab=="settings":
+				game.hud.touch_controls_hint = true
+				game.hud.show_menu()
+				await process_frame
+				validate_screen(game,area,"four touch instructions at %s" % dimensions)
+				var has_delay := false
+				for label in game.hud.content.find_children("*","Label",true,false):
+					if "0,28" in label.text: has_delay = true
+				check(has_delay,"touch settings expose the vertical hold delay at %s" % dimensions)
+				game.hud.touch_controls_hint = false
 		game.start_run(false)
 		game.model.profile["levels"][3] = 6
 		game.model.bag.clear()

@@ -8,14 +8,14 @@ $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $taskGodot = Join-Path $PSScriptRoot 'godot\Godot_v4.7.2-stable_win64_console.exe'
 $taskProject = Join-Path $taskRoot 'game'
 $taskLocalAndroidSdk = Join-Path $PSScriptRoot 'android-sdk'
-if (-not $PSBoundParameters.ContainsKey('AndroidSdkPath') -and (Test-Path -LiteralPath (Join-Path $taskLocalAndroidSdk 'platform-tools\adb.exe'))) {
+if (-not $PSBoundParameters.ContainsKey('AndroidSdkPath') -and (Test-Path -LiteralPath (Join-Path $taskLocalAndroidSdk 'platform-tools\adb.exe')) -and (Test-Path -LiteralPath (Join-Path $taskLocalAndroidSdk 'platforms\android-36\android.jar'))) {
     $AndroidSdkPath = $taskLocalAndroidSdk
 }
 $taskArtifacts = Join-Path $taskRoot 'artifacts'
 New-Item -ItemType Directory -Path $taskArtifacts -Force | Out-Null
 if (-not (Test-Path -LiteralPath $taskGodot)) { throw 'Portable Godot is missing from tools/godot.' }
-$env:LASTHOOK_SAVE_DIR = Join-Path $taskArtifacts 'build-test-profile'
-$env:APPDATA = Join-Path $taskArtifacts 'build-appdata'
+$env:LASTHOOK_SAVE_DIR = (Join-Path $taskArtifacts 'build-test-profile').Replace('\','/')
+$env:APPDATA = (Join-Path $taskArtifacts 'build-appdata').Replace('\','/')
 $env:TEMP = Join-Path $taskArtifacts 'build-temp'
 $env:TMP = $env:TEMP
 New-Item -ItemType Directory -Path $env:APPDATA,$env:TEMP -Force | Out-Null
@@ -29,11 +29,14 @@ function Invoke-TaskGodot([string[]]$TaskArguments, [string]$TaskLog) {
 Invoke-TaskGodot @('--headless','--editor','--import','--quit') (Join-Path $taskArtifacts 'build-import.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_rules.gd') (Join-Path $taskArtifacts 'build-rules.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_integration.gd') (Join-Path $taskArtifacts 'build-integration.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_hook.gd') (Join-Path $taskArtifacts 'build-hook.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_controls.gd') (Join-Path $taskArtifacts 'build-controls.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_generation.gd') (Join-Path $taskArtifacts 'build-generation.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_terrain.gd') (Join-Path $taskArtifacts 'build-terrain.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_gameplay_foundation.gd') (Join-Path $taskArtifacts 'build-foundation.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_responsive.gd') (Join-Path $taskArtifacts 'build-responsive.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_menus.gd') (Join-Path $taskArtifacts 'build-menus.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_ads.gd') (Join-Path $taskArtifacts 'build-ads.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_character_editing.gd') (Join-Path $taskArtifacts 'build-character-editing.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_sprite_animation.gd') (Join-Path $taskArtifacts 'build-sprite-animation.log')
 
@@ -46,6 +49,7 @@ if ($Target -in @('All','Windows')) {
 if ($Target -in @('All','Android')) {
     if (-not (Test-Path -LiteralPath (Join-Path $AndroidSdkPath 'platform-tools\adb.exe'))) { throw 'Android SDK path is invalid.' }
     if (-not (Test-Path -LiteralPath (Join-Path $JavaSdkPath 'bin\java.exe'))) { throw 'Java SDK path is invalid.' }
+    & (Join-Path $PSScriptRoot 'prepare_android_ads.ps1') -AndroidSdkPath $AndroidSdkPath -JavaSdkPath $JavaSdkPath
     $taskSettings = Join-Path $PSScriptRoot 'godot\editor_data\editor_settings-4.7.tres'
     $taskSettingsText = Get-Content -Raw -LiteralPath $taskSettings
     $taskSettingValues = @{

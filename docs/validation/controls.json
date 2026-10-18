@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-18",
+  "checks": 89,
+  "failures": [],
+  "passed": true,
+  "engine": "Godot 4.7.2.stable",
+  "scheme": "relative_direction_stick_release_to_detach",
+  "vertical_delay_seconds": 0.28,
+  "vertical_entry_degrees": 15,
+  "vertical_exit_degrees": 22,
+  "aim_dead_zone_logical_px": 12,
+  "vertical_minimum_logical_px": 24,
+  "tested_ui_scales": [
+    0.45,
+    1.0,
+    1.8
+  ],
+  "tested_poll_rates": [
+    10,
+    30,
+    60,
+    120
+  ],
+  "regression": {
+    "rules": 71,
+    "integration": 104,
+    "hook": 24,
+    "controls": 89,
+    "generation": 32,
+    "terrain": 26,
+    "foundation": 20,
+    "responsive": 75,
+    "menus": 113,
+    "ads": 37,
+    "character_editing": 8,
+    "sprite_animation": 15,
+    "total": 614,
+    "failures": 0
+  },
+  "physical_device_tested": false
+}

@@ -53,13 +53,14 @@ func run_tests() -> void:
 	check("aim" in game.model.profile["learned_controls"],"the aim lesson completes only after an actual catch")
 	game.pointer_down(Vector2(300,400))
 	var old_length: float = game.sim.target_length
+	var old_actual_length: float = game.sim.length
 	game.pointer_move(Vector2(210,370))
 	check(game.pump<0 and game.reel==0 and game.sim.target_length==old_length,"moving the first finger vertically never reels the rope")
 	game.pointer_up(Vector2(210,370))
-	check(game.sim.attached,"ending a swing drag does not detach the hook")
+	check(game.sim.attached,"ending a desktop mouse swing drag keeps the keyboard release workflow")
 	game.pointer_down(Vector2(300,400))
 	game.pointer_up(Vector2(300,400))
-	check(game.sim.attached,"a first-finger tap cannot release the hook")
+	check(game.sim.attached,"desktop mouse taps do not replace Space release")
 	var first_touch := InputEventScreenTouch.new()
 	first_touch.index = 3
 	first_touch.position = Vector2(300,400)
@@ -69,54 +70,49 @@ func run_tests() -> void:
 	touch.index = 3
 	touch.pressed = false
 	touch.position = Vector2(300,920)
+	var shots_before_touch: int = game.shots
 	game._input(touch)
-	check(not game.pressed and game.pump==0,"a gesture ending over inventory cannot remain stuck")
-	first_touch.pressed = true
+	check(not game.pressed and game.pump==0 and not game.sim.attached and game.shots==shots_before_touch,"primary lift over inventory detaches without throwing or leaving stuck input")
+	game.sim.pos = first+Vector2(0,-2.8)
+	game.sim.attach(first,game.model.shot_range())
+	game.anchor_id = 0
+	game.world.anchors[0]["broken"] = false
 	game._unhandled_input(first_touch)
 	var second_touch := InputEventScreenTouch.new()
 	second_touch.index = 8
 	second_touch.position = Vector2(410,450)
 	second_touch.pressed = true
 	game._unhandled_input(second_touch)
-	check(game.primary_touch==3 and game.rope_touch==8,"touch identities do not rely on index zero and assign an independent rope finger")
+	check(game.primary_touch==3 and game.pressed,"extra touches cannot replace the owned primary finger")
 	var second_drag := InputEventScreenDrag.new()
 	second_drag.index = 8
-	second_drag.position = Vector2(410,425)
+	second_drag.position = Vector2(410,320)
+	var touch_length: float = game.sim.target_length
 	game._input(second_drag)
-	check(game.sim.target_length<old_length and game.sim.length==old_length,"second finger upward requests shortening without an instant length jump")
-	var shortened_target: float = game.sim.target_length
-	second_drag.position = Vector2(410,475)
-	game._input(second_drag)
-	check(game.sim.target_length>shortened_target,"second finger downward requests rope extension")
 	second_touch.pressed = false
-	second_touch.position = Vector2(410,920)
 	game._input(second_touch)
-	check(game.rope_touch==-1 and game.sim.attached,"ending the rope finger over inventory does not release the hook")
+	check(game.sim.target_length==touch_length and game.sim.attached and game.reel==0,"secondary motion and lift neither reel nor detach")
+	var primary_drag := InputEventScreenDrag.new()
+	primary_drag.index = 3
+	primary_drag.position = Vector2(300,330)
+	game._input(primary_drag)
+	check(game.sim.attached and game.reel==0,"a primary upward swipe remains attached and waits for vertical intent")
+	game._update_touch_controls(game.gesture_last_msec+281)
+	game.sim.tick(1.0/120,game.pump,game.reel)
+	check(game.sim.target_length<touch_length and game.sim.attached,"holding the primary vertically reels after the delay")
 	first_touch.pressed = false
+	first_touch.position = primary_drag.position
 	game._input(first_touch)
-	check(game.sim.attached and not game.pressed,"lifting the stationary primary after a two-finger gesture does not count as a release tap")
+	check(not game.sim.attached and not game.pressed and game.shots==shots_before_touch,"lifting the primary only releases the existing hook")
 	first_touch.pressed = true
+	first_touch.position = Vector2(120,500)
 	game._unhandled_input(first_touch)
-	second_touch.pressed = true
-	second_touch.position = Vector2(410,450)
-	game._unhandled_input(second_touch)
-	var tap_length: float = game.sim.target_length
-	second_drag.position = Vector2(412,452)
-	game._input(second_drag)
-	check(game.sim.target_length==tap_length and game.sim.attached,"tap jitter neither reels nor releases before the second finger lifts")
-	game.rope_press_msec -= 500
-	second_touch.pressed = false
-	second_touch.position = Vector2(412,452)
-	game._input(second_touch)
-	check(game.sim.attached,"holding the second finger without dragging is not a release tap")
-	second_touch.pressed = true
-	game._unhandled_input(second_touch)
-	second_touch.pressed = false
-	game._input(second_touch)
-	check(not game.sim.attached and game.primary_touch==3 and game.pressed,"a short second-finger tap releases and keeps the first finger available for the next shot")
+	primary_drag.position = Vector2(160,420)
+	game._input(primary_drag)
 	first_touch.pressed = false
+	first_touch.position = primary_drag.position
 	game._input(first_touch)
-	check(game.bolt_active and not game.pressed,"the same primary finger can fire the next hook after second-finger release")
+	check(game.bolt_active and game.shots==shots_before_touch+1,"a new stick gesture throws the next hook exactly once")
 	# Restore a known initial grip before the movement bot.
 	game.bolt_active = false
 	game.sim.pos = first+Vector2(0,-2.8)
@@ -125,7 +121,7 @@ func run_tests() -> void:
 	game.anchor_id = 0
 	game.anchor_contact = first
 	var reached := climb_route(game,4)
-	check(reached>=3,"base kit can climb consecutive anchors through swing/release rather than purchased reach")
+	check(reached>=3,"base kit climbs consecutive anchors through primary lift and a new stick throw")
 	for seed_number in [101,58273,410021,999999]:
 		game.start_run(false)
 		game.run_seed = seed_number
@@ -167,7 +163,7 @@ func run_tests() -> void:
 		game.model.profile["levels"][2] = mini(kit,3)
 		game.start_run(false)
 		game._create_world(seed_number,0,126)
-		game.fire_hook(game.world.anchors[0]["pos"]-game.sim.pos)
+		game.fire_hook(game.direction_to_target(game.world.anchors[0]["pos"]))
 		for frame in range(120):
 			game._physics_process(1.0/120)
 			game._move_camera(1.0/120)
@@ -182,7 +178,7 @@ func run_tests() -> void:
 		check(game.state=="result" and game.settlement.get("success",false),"fresh base-kit run reaches and settles the actual summit from the starting platform, seed %d" % seed_number)
 		check(game.model.profile["run_history"].size()==1 and game.model.profile["run_history"][0]["seconds"]>0,"completed run records local pace and shot metrics once, seed %d" % seed_number)
 		print("FULL_SUMMIT seed=",seed_number," kit=",kit," seconds=",snappedf(game.run_seconds,.1)," shots=",game.shots," catches=",game.catches)
-		summit_sessions.append(game.model.profile["run_history"][0].duplicate(true))
+		if not game.model.profile["run_history"].is_empty(): summit_sessions.append(game.model.profile["run_history"][0].duplicate(true))
 	game.start_run(false)
 	game.world.anchors.clear()
 	game.world.layout.bins.clear()
@@ -193,6 +189,7 @@ func run_tests() -> void:
 		for force_level in [1,6]:
 			game.sim.attached = false
 			game.bolt_active = false
+			game.sim.vel = Vector2.ZERO
 			game.model.profile["levels"] = [rope_level,1,1,1,1,1,force_level]
 			game.fire_hook(Vector2(0,1))
 			game._update_bolt(.01)
@@ -473,6 +470,17 @@ func run_tests() -> void:
 	print("INTEGRATION_TESTS ",checks," checks, ",failures.size()," failures; bot anchors=",reached)
 	quit(0 if failures.is_empty() else 1)
 
+func touch_throw(game, target: Vector2) -> void:
+	var origin := Vector2(150,400)
+	if game.sim.attached:
+		game.pointer_down(origin,true)
+		game.pointer_up(origin)
+	var direction: Vector2 = game.direction_to_target(target)
+	var end: Vector2 = origin+Vector2(direction.x,-direction.y)*82*game._gesture_scale()
+	game.pointer_down(origin,true)
+	game.pointer_move(end)
+	game.pointer_up(end)
+
 func climb_route(game, count: int, override_route: Array[int] = []) -> int:
 	var reached := 1
 	for route_index in range(1,count):
@@ -494,12 +502,22 @@ func climb_route(game, count: int, override_route: Array[int] = []) -> int:
 					game.pump = signf(game.sim.vel.x)
 				elif absf(game.pump)<.1:
 					game.pump = signf(target.x-game.sim.anchor.x)
-				var toward: Vector2 = (target-game.sim.pos).normalized()
-				var sight: Dictionary = game.world.cast_hook(game.sim.pos,target,game.model.hook_radius())
-				var clear_shot: bool = not sight.is_empty() and not sight.get("blocked",false) and int(sight["object"]["id"])==target_id
-				if clear_shot and game.sim.pos.distance_to(target)<5.2 and game.sim.vel.dot(toward)>.5:
-					game.release_hook()
-					game.fire_hook(target-game.sim.pos)
+				var current: Dictionary = game.world.anchor_by_id(game.anchor_id)
+				var ignored: int = game.anchor_id if not current.get("permanent",true) else -1
+				var sight: Dictionary = game.world.cast_hook(game.sim.pos,target,game.model.hook_radius(),ignored)
+				var goal := target
+				var clear_shot := false
+				if not sight.is_empty() and not sight.get("blocked",false):
+					var hit: Dictionary = sight["object"]
+					clear_shot = int(hit["id"])==target_id
+					# Broad prongs can meet a side bridge before the next main grip.
+					# Traverse that real grip instead of waiting for a hidden boost.
+					if not clear_shot and int(hit["id"])!=game.anchor_id and hit["pos"].distance_to(target)<game.sim.anchor.distance_to(target)-.3:
+						goal = hit["pos"]
+						clear_shot = true
+				var toward: Vector2 = (goal-game.sim.pos).normalized()
+				if clear_shot and game.sim.pos.distance_to(goal)<5.2 and game.sim.vel.dot(toward)>.5:
+					touch_throw(game,goal)
 					fired = true
 			game._physics_process(1.0/120)
 			game._move_camera(1.0/120)
@@ -507,9 +525,9 @@ func climb_route(game, count: int, override_route: Array[int] = []) -> int:
 				reached += 1
 				break
 			if fired and not game.bolt_active and not game.sim.attached:
-				game.fire_hook(target-game.sim.pos)
+				touch_throw(game,target)
 		if reached!=route_index+1:
-			print("BOT_TIMEOUT route=",route_index," pos=",game.sim.pos," target=",target," attached=",game.sim.attached," anchor=",game.anchor_id," expected=",target_id)
+			print("BOT_TIMEOUT route=",route_index," pos=",game.sim.pos," target=",target," attached=",game.sim.attached," anchor=",game.anchor_id," expected=",target_id," velocity=",game.sim.vel," length=",game.sim.length," pivots=",game.sim.rope_pivots)
 			return reached
 	return reached
 

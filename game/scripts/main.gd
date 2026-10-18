@@ -28,20 +28,23 @@ var bolt_pos := Vector2.ZERO
 var bolt_origin := Vector2.ZERO
 var bolt_direction := Vector2.UP
 var bolt_travel := 0.0
+var hook_flight := HookFlight.new()
+var bolt_returning := false
+var return_velocity := Vector2.ZERO
+var shot_serial := 0
+var impact_serial := 0
+var hook_impact := Vector2.ZERO
+var hook_impact_kind := ""
 var pressed := false
 var press_start := Vector2.ZERO
 var pointer := Vector2.ZERO
-var dragging := false
 var primary_touch := -1
-var rope_touch := -1
-var rope_pointer := Vector2.ZERO
-var rope_press_start := Vector2.ZERO
-var rope_press_msec := 0
-var rope_dragging := false
-var used_second_finger := false
 var touch_gesture := false
 var gesture_last_msec := 0
-var gesture_released := false
+var climb_gesture := ClimbGesture.new()
+var touch_controls: Dictionary = {}
+var aim_stick_valid := false
+var aim_point := Vector2.ZERO
 var pump := 0.0
 var reel := 0.0
 var focus_remaining := .7
@@ -53,6 +56,7 @@ var camera_x := 0.0
 var snapshot_timer := 0.0
 var hint_timer := 0.0
 var hint := ""
+var hint_context := ""
 var settlement: Dictionary = {}
 var capture_path := ""
 var capture_screen := "play"
@@ -69,6 +73,10 @@ var catches := 0
 var failure_reason := ""
 var zone_gold := 0
 var practice_return_model: GameModel
+var ads := AdsService.new()
+var ad_revive_run_id := ""
+var ad_revive_authorized := false
+var ad_revive_pending := false
 
 func _ready() -> void:
 	Engine.max_fps = 60
@@ -234,6 +242,15 @@ func _ready() -> void:
 			camera_x = 0
 	else:
 		hud.show_menu()
+	add_child(ads)
+	ads.availability_changed.connect(_refresh_ad_actions)
+	ads.rewarded_finished.connect(_on_ad_revive_finished)
+	ads.reward_verified.connect(_on_ad_reward_verified)
+	ads.fullscreen_changed.connect(_on_ad_fullscreen)
+	ads.banner_layout_changed.connect(hud._resize)
+	if not preview:
+		ads.setup()
+		ads.set_main_menu(state=="menu")
 
 func _setup_lighting() -> void:
 	var environment_node := WorldEnvironment.new()
@@ -274,6 +291,8 @@ func _create_world(seed_number: int, location_number: int, height: float, saved_
 	explorer.setup(world)
 
 func start_run(endless: bool) -> void:
+	if ads.fullscreen: return
+	ads.preload_fullscreen()
 	if endless and not model.profile["summit_cleared"]:
 		toast("Бесконечный режим откроется после первой вершины")
 		return
@@ -295,7 +314,11 @@ func start_run(endless: bool) -> void:
 	anchor_time = 0
 	safe_position = sim.pos
 	revive_used = false
+	ad_revive_pending = false
+	ad_revive_run_id = ""
 	bolt_active = false
+	bolt_returning = false
+	hook_flight = HookFlight.new()
 	focus_remaining = .7
 	camera_y = 4.8
 	camera_x = 0
@@ -310,7 +333,7 @@ func start_run(endless: bool) -> void:
 	_reset_input()
 	hud.show_play()
 	if "aim" not in model.profile["learned_controls"]:
-		toast("Прицелься в выступ и отпусти первый палец" if OS.has_feature("mobile") else "Прицелься мышью и отпусти ЛКМ",4)
+		toast("Коснись где удобно, потяни как стик и отпусти" if hud.touch_controls_hint else "Прицелься мышью и отпусти ЛКМ",4,"controls")
 	save_snapshot()
 
 func start_practice() -> void:
@@ -350,6 +373,7 @@ func resume_run() -> void:
 	sim.length = float(snapshot["length"])
 	_configure_rope()
 	sim.target_length = clampf(float(snapshot.get("target_length",sim.length)),RopeSim.MIN_LENGTH,sim.maximum_length)
+	sim.reel_velocity = clampf(float(snapshot.get("reel_velocity",0)),-sim.adjust_speed,sim.adjust_speed)
 	sim.highest = float(snapshot["highest"])
 	sim.flight_peak = float(snapshot["flight_peak"])
 	run_seconds = float(snapshot.get("run_seconds",0))
@@ -365,6 +389,8 @@ func resume_run() -> void:
 	safe_anchor_id = int(snapshot["safe_anchor_id"])
 	safe_position = Vector2(snapshot["safe_x"],snapshot["safe_y"])
 	revive_used = bool(snapshot["revive_used"])
+	ad_revive_pending = bool(snapshot.get("ad_revive_earned",false))
+	ad_revive_run_id = ""
 	model.bag = snapshot["bag"].duplicate(true)
 	model.picked = snapshot["picked"].duplicate()
 	for point in world.anchors:
@@ -400,49 +426,63 @@ func resume_run() -> void:
 	bolt_origin = Vector2(snapshot.get("bolt_ox",0),snapshot.get("bolt_oy",0))
 	bolt_direction = Vector2(snapshot.get("bolt_dx",0),snapshot.get("bolt_dy",1))
 	bolt_travel = float(snapshot.get("bolt_travel",0))
+	hook_flight.position = bolt_pos
+	hook_flight.velocity = Vector2(snapshot.get("bolt_vx",bolt_direction.x*model.value("throw_speeds",GameModel.THROW)),snapshot.get("bolt_vy",bolt_direction.y*model.value("throw_speeds",GameModel.THROW)))
+	hook_flight.age = float(snapshot.get("bolt_age",0))
+	hook_flight.trail = PackedVector2Array([bolt_pos])
+	bolt_returning = bool(snapshot.get("bolt_returning",false)) and not sim.attached and not bolt_active
+	return_velocity = Vector2(snapshot.get("return_vx",0),snapshot.get("return_vy",0))
 	camera_y = float(snapshot.get("camera_y",maxf(4.8,sim.pos.y+2.5)))
-	camera_x = sim.pos.x
+	camera_x = float(snapshot.get("camera_x",sim.pos.x))
 	_position_camera()
 	state = "revive" if bool(snapshot.get("awaiting_revive",false)) else "play"
 	_reset_input()
 	if state=="revive":
 		hud.show_revive()
+		if bool(snapshot.get("ad_revive_earned",false)) and not revive_used:
+			ad_revive_authorized = true
+			revive("ad")
+			ad_revive_authorized = false
 	else:
 		hud.show_play()
 
 func _input(event: InputEvent) -> void:
-	# Owned touches finish here even if they cross GUI controls. Their identity
-	# is stable: lifting the first finger never promotes the rope finger.
+	if ads.fullscreen:
+		get_viewport().set_input_as_handled()
+		return
+	# Finish an owned touch even over GUI controls. Extra fingers never take
+	# over the stick or turn an ignored touch into a later shot.
 	if state!="play" or preview:
+		return
+	if primary_touch>=0 and (event is InputEventScreenTouch or event is InputEventScreenDrag) and event.index!=primary_touch:
+		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventScreenTouch and not event.pressed:
 		if event.index==primary_touch:
-			pointer_up(event.position)
+			if event.canceled: _cancel_primary()
+			else: pointer_up(event.position)
 			primary_touch = -1
-			get_viewport().set_input_as_handled()
-		elif event.index==rope_touch:
-			rope_pointer_up(event.position)
 			get_viewport().set_input_as_handled()
 	elif event is InputEventScreenDrag:
 		if event.index==primary_touch:
 			pointer_move(event.position)
 			get_viewport().set_input_as_handled()
-		elif event.index==rope_touch:
-			rope_pointer_move(event.position)
-			get_viewport().set_input_as_handled()
-	elif not OS.has_feature("mobile") and pressed:
+	elif not OS.has_feature("mobile") and primary_touch<0 and pressed:
 		if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and not event.pressed:
 			pointer_up(event.position)
+			get_viewport().set_input_as_handled()
 		elif event is InputEventMouseMotion:
 			pointer_move(event.position)
+			get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if ads.fullscreen: return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
 			pause_run() if state=="play" else unpause() if state=="pause" else show_menu()
 		elif event.keycode==KEY_SPACE and state=="play":
 			if sim.attached: model.learn_control("release")
-			release_hook()
+			release_hook(pressed)
 	if state != "play" or preview:
 		return
 	if event is InputEventScreenTouch:
@@ -451,14 +491,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				pointer_down(event.position,true)
 				if pressed:
 					primary_touch = event.index
-			elif rope_touch<0 and sim.attached and hud.world_input_allowed(event.position):
-				rope_touch = event.index
-				rope_pointer = event.position
-				rope_press_start = event.position
-				rope_press_msec = Time.get_ticks_msec()
-				rope_dragging = false
-				used_second_finger = true
-	elif event is InputEventMouseButton and not OS.has_feature("mobile"):
+	elif event is InputEventMouseButton and not OS.has_feature("mobile") and primary_touch<0:
 		if event.button_index==MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				pointer_down(event.position)
@@ -469,96 +502,90 @@ func _unhandled_input(event: InputEvent) -> void:
 				sim.request_length(sim.target_length-.4)
 			elif event.button_index==MOUSE_BUTTON_WHEEL_DOWN:
 				sim.request_length(sim.target_length+.4)
-	elif event is InputEventMouseMotion and not OS.has_feature("mobile"):
+	elif event is InputEventMouseMotion and not OS.has_feature("mobile") and primary_touch<0:
 		pointer_move(event.position)
 
 func pointer_down(point: Vector2, from_touch: bool = false) -> void:
-	if not hud.world_input_allowed(point):
+	if state!="play" or ads.fullscreen or pressed or not hud.world_input_allowed(point):
 		return
 	pressed = true
 	press_start = point
 	pointer = point
-	dragging = false
-	used_second_finger = false
 	touch_gesture = from_touch
+	hud.touch_controls_hint = from_touch or OS.has_feature("mobile")
+	if hint_context=="controls": hint_timer = 0
 	gesture_last_msec = Time.get_ticks_msec()
-	gesture_released = false
+	aim_stick_valid = false
+	climb_gesture.begin(point,gesture_last_msec*.001,_gesture_scale())
+	touch_controls = climb_gesture.sample(gesture_last_msec*.001)
 	if not sim.attached:
-		aim_direction = (_screen_world(point)-sim.pos).normalized()
+		_refresh_aim()
 
-func pointer_move(point: Vector2) -> void:
-	var now_msec := Time.get_ticks_msec()
-	var previous_pointer := pointer
-	var previous_msec := gesture_last_msec
+func pointer_move(point: Vector2, timestamp_msec: int = -1) -> void:
+	var now_msec := Time.get_ticks_msec() if timestamp_msec<0 else timestamp_msec
 	pointer = point
 	if not pressed:
 		return
 	var difference := point-press_start
-	if difference.length()>15*_gesture_scale():
-		dragging = true
-	if sim.attached:
-		# One finger is a virtual control stick. Horizontal travel pumps the
-		# swing, vertical travel reels the rope. A quick upward flick is the
-		# deliberate release gesture; the same finger then becomes the next aim.
-		pump = clampf(difference.x/(82*_gesture_scale()),-1,1)
-		if touch_gesture:
-			reel = clampf(-difference.y/(118*_gesture_scale()),-1,1)
-			var pointer_dt := maxf(.001,float(now_msec-previous_msec)/1000.0)
-			var upward_speed := (point.y-previous_pointer.y)/pointer_dt
-			var upward_flick := difference.y < -48*_gesture_scale() and absf(difference.y)>absf(difference.x)*.72 and upward_speed < -260*_gesture_scale()
-			if not gesture_released and upward_flick:
-				gesture_released = true
-				release_hook(true)
-				press_start = point
-				pointer = point
-				dragging = false
-				pump = 0
-				reel = 0
-				aim_direction = (_screen_world(point)-sim.pos).normalized()
-				toast("Проведи к следующей опоре и отпусти",1.2)
-	else:
-		var next_direction := Vector2(difference.x,-difference.y).normalized() if dragging else (_screen_world(point)-sim.pos).normalized()
-		if next_direction.length_squared()>.001:
-			# A small amount of smoothing makes the hook follow a thumb without
-			# making short aim corrections feel delayed.
-			aim_direction = aim_direction.slerp(next_direction,.42).normalized()
-	gesture_last_msec = now_msec
+	gesture_last_msec = maxi(gesture_last_msec,now_msec)
+	if touch_gesture:
+		touch_controls = climb_gesture.move(point,gesture_last_msec*.001,_gesture_scale())
+		_update_touch_controls(gesture_last_msec)
+	elif sim.attached:
+		pump = ClimbGesture.axis(difference.x/_gesture_scale(),ClimbGesture.STICK_RADIUS)
+	_refresh_aim()
+
+func _update_touch_controls(timestamp_msec: int = -1) -> void:
+	if not pressed or not touch_gesture: return
+	var now_msec := Time.get_ticks_msec() if timestamp_msec<0 else timestamp_msec
+	touch_controls = climb_gesture.sample(maxi(now_msec,gesture_last_msec)*.001)
+	pump = float(touch_controls["pump"]) if sim.attached else 0.0
+	reel = float(touch_controls["reel"]) if sim.attached else 0.0
 
 func pointer_up(point: Vector2) -> void:
 	if not pressed:
 		return
 	pointer_move(point)
 	if sim.attached:
-		pass # A held finger only controls the swing; release uses an upward flick.
-	else:
+		if touch_gesture:
+			model.learn_control("release")
+			release_hook()
+	elif not touch_gesture or aim_stick_valid:
 		fire_hook(aim_direction)
-	pressed = false
-	dragging = false
+	_cancel_primary()
+
+func _refresh_aim() -> void:
+	if not pressed or sim.attached: return
+	if touch_gesture:
+		# The stick selects a launch angle, not a world target. Camera motion,
+		# player velocity and touch location cannot rotate a held direction.
+		var offset := climb_gesture.offset
+		aim_stick_valid = offset.length()>=ClimbGesture.AIM_DEAD_ZONE
+		if aim_stick_valid:
+			aim_direction = Vector2(offset.x,-offset.y).normalized()
+		aim_point = sim.pos+aim_direction*model.shot_range()
+	else:
+		aim_point = _screen_world(pointer)
+	if not touch_gesture and aim_point.distance_squared_to(sim.pos)>.04:
+		aim_direction = direction_to_target(aim_point)
+
+func _recenter_climb_control() -> void:
+	press_start = pointer
+	climb_gesture.begin(pointer,Time.get_ticks_msec()*.001,_gesture_scale())
+	touch_controls = {}
+	aim_stick_valid = false
 	pump = 0
 	reel = 0
+
+func _cancel_primary() -> void:
+	pressed = false
+	primary_touch = -1
 	touch_gesture = false
-	gesture_released = false
-	used_second_finger = false
-
-func rope_pointer_move(point: Vector2) -> void:
-	if rope_touch<0 or not sim.attached:
-		return
-	if not rope_dragging:
-		if point.distance_to(rope_press_start)<=15*_gesture_scale():
-			return
-		rope_dragging = true
-	var delta := point.y-rope_pointer.y
-	rope_pointer = point
-	sim.request_length(sim.target_length+delta/_gesture_scale()*float(model.balance["rope_drag_units_per_pixel"]))
-
-func rope_pointer_up(point: Vector2) -> void:
-	# A tap is decided on release so holding/dragging cannot drop the player.
-	var tap := not rope_dragging and point.distance_to(rope_press_start)<=15*_gesture_scale() and Time.get_ticks_msec()-rope_press_msec<=300
-	rope_touch = -1
-	rope_dragging = false
-	if tap and sim.attached:
-		model.learn_control("release")
-		release_hook(true)
+	aim_stick_valid = false
+	pump = 0
+	reel = 0
+	touch_controls = {}
+	climb_gesture.reset()
 
 func _configure_rope() -> void:
 	sim.maximum_length = model.value("rope_lengths",0)
@@ -570,16 +597,7 @@ func _gesture_scale() -> float:
 	return maxf(.1,hud.root.scale.x)
 
 func _reset_input() -> void:
-	pressed = false
-	dragging = false
-	pump = 0
-	reel = 0
-	primary_touch = -1
-	rope_touch = -1
-	rope_dragging = false
-	used_second_finger = false
-	touch_gesture = false
-	gesture_released = false
+	_cancel_primary()
 
 func _screen_world(point: Vector2) -> Vector2:
 	var origin := camera.project_ray_origin(point)
@@ -591,32 +609,75 @@ func _screen_world(point: Vector2) -> Vector2:
 func fire_hook(direction: Vector2) -> void:
 	if bolt_active or sim.attached or direction.length()<.01:
 		return
+	if hint_context in ["release","hook"]: hint_timer = 0
 	bolt_active = true
 	shots += 1
 	bolt_origin = sim.pos
 	bolt_pos = sim.pos
 	bolt_direction = direction.normalized()
 	bolt_travel = 0
-	_sound(440,.065)
+	bolt_returning = false
+	hook_flight.launch(sim.pos,bolt_direction,model.value("throw_speeds",GameModel.THROW),sim.vel)
+	shot_serial += 1
+	_hook_sound("launch")
 
-func shot_window_open(contact: Vector2) -> bool:
-	# Predict the free flight with the same integrator, without mutating live state.
+func direction_to_target(target: Vector2) -> Vector2:
+	return HookFlight.aim_solution(sim.pos,target,model.value("throw_speeds",GameModel.THROW),sim.vel)["direction"]
+
+func _shot_forecast_hero() -> RopeSim:
 	var forecast := RopeSim.new()
 	forecast.pos = sim.pos
 	forecast.vel = sim.vel
 	forecast.gravity = sim.gravity
 	forecast.fall_speed_limit = sim.fall_speed_limit
-	var distance := sim.pos.distance_to(contact)
-	if distance<.001: return true
-	var direction := (contact-sim.pos)/distance
-	var speed := model.value("throw_speeds",GameModel.THROW)
-	var travel := 0.0
-	while travel<distance-.0001:
-		var step := minf(1.0/120,(distance-travel)/speed)
-		forecast.tick(step,0,0)
-		travel += speed*step
-		var projectile := sim.pos+direction*travel
-		if projectile.distance_to(forecast.pos)>model.shot_range()+.001: return false
+	forecast.grounded = sim.grounded
+	return forecast
+
+func _advance_forecast(forecast: RopeSim, dt: float) -> void:
+	var previous := forecast.pos
+	if forecast.grounded: forecast.vel.x = move_toward(forecast.vel.x,0,dt*7)
+	forecast.tick(dt,0,0)
+	var motion := world.move_player(previous,forecast.pos,forecast.vel)
+	forecast.pos = motion["position"]
+	forecast.vel = motion["velocity"]
+	forecast.grounded = motion["grounded"]
+
+func predict_shot(direction: Vector2) -> Dictionary:
+	var flight := HookFlight.new()
+	flight.launch(sim.pos,direction,model.value("throw_speeds",GameModel.THROW),sim.vel)
+	var forecast := _shot_forecast_hero()
+	var points := PackedVector2Array([sim.pos])
+	var result := {"points":points,"contact":sim.pos,"time":0.0,"collision":{},"reachable":true}
+	for index in range(240):
+		var previous := flight.position
+		_advance_forecast(forecast,HookFlight.STEP)
+		flight.advance(HookFlight.STEP)
+		var fraction := HookFlight.range_fraction(previous,flight.position,forecast.pos,model.shot_range())
+		var end := previous.lerp(flight.position,fraction)
+		var collision := world.cast_hook(previous,end,model.hook_radius())
+		if not collision.is_empty(): end = collision["contact"]
+		points.append(end)
+		result["contact"] = end
+		result["time"] = flight.age
+		if not collision.is_empty():
+			result["collision"] = collision
+			result["reachable"] = not world.rope_blocked(forecast.pos,end)
+			break
+		if fraction<1:
+			result["reachable"] = false
+			break
+	return result
+
+func shot_window_open(contact: Vector2) -> bool:
+	var solution := HookFlight.aim_solution(sim.pos,contact,model.value("throw_speeds",GameModel.THROW),sim.vel)
+	var flight := HookFlight.new()
+	flight.launch(sim.pos,solution["direction"],model.value("throw_speeds",GameModel.THROW),sim.vel)
+	var forecast := _shot_forecast_hero()
+	while flight.age<float(solution["time"])-.00001:
+		var dt := minf(HookFlight.STEP,float(solution["time"])-flight.age)
+		_advance_forecast(forecast,dt)
+		flight.advance(dt)
+		if flight.position.distance_to(forecast.pos)>model.shot_range()+.001: return false
 	return true
 
 func _position_camera() -> void:
@@ -646,11 +707,8 @@ func release_hook(keep_primary: bool = false) -> void:
 	focus_remaining = .7
 	_sound(310,.07)
 	if keep_primary:
-		pump = 0
-		reel = 0
-		press_start = pointer
-		dragging = false
-		aim_direction = (_screen_world(pointer)-sim.pos).normalized()
+		_recenter_climb_control()
+		_refresh_aim()
 	else:
 		_reset_input()
 
@@ -658,6 +716,8 @@ func _physics_process(delta: float) -> void:
 	if state!="play" or preview:
 		return
 	run_seconds += delta
+	_update_touch_controls()
+	_refresh_aim()
 	var step := delta
 	if pressed and not sim.attached and focus_remaining>0:
 		focus_remaining = maxf(0,focus_remaining-delta)
@@ -675,7 +735,7 @@ func _physics_process(delta: float) -> void:
 			if int(point["kind"])==1 and anchor_time>2.6:
 				point["broken"] = true
 				release_hook(true)
-				toast("Корень сломался — успей зацепиться!")
+				toast("Корень сломался — успей зацепиться!",2.5,"release")
 			elif int(point["kind"])==3:
 				sim.anchor = anchor_contact+Vector2(0,-minf(1.2,anchor_time*.18))
 	var was_grounded := sim.grounded
@@ -719,6 +779,8 @@ func _physics_process(delta: float) -> void:
 		return
 	if bolt_active:
 		_update_bolt(step)
+	elif bolt_returning:
+		_update_return(step)
 	sim.highest = maxf(previous_highest,sim.pos.y)
 	sim.flight_peak = maxf(previous_peak,sim.pos.y)
 	_collect_finds()
@@ -743,53 +805,88 @@ func _physics_process(delta: float) -> void:
 		world.generate_to(world.generated_height+40,false)
 
 func _update_bolt(step: float) -> void:
-	var previous := bolt_pos
-	var maximum := model.shot_range()
-	if previous.distance_to(sim.pos)>maximum+.001:
-		bolt_active = false
-		toast("Канат полностью размотан",1)
-		return
-	var advance := model.value("throw_speeds",GameModel.THROW)*step
-	var offset := previous-sim.pos
-	# The rope pays out from the moving hero, not from the original shot point.
-	var projection := offset.dot(bolt_direction)
-	var remaining := -projection+sqrt(maxf(0,projection*projection+maximum*maximum-offset.length_squared()))
-	var reached_end := advance>=remaining
-	advance = minf(advance,remaining)
-	bolt_pos += bolt_direction*advance
-	bolt_travel += advance
-	var collision := world.cast_hook(previous,bolt_pos,model.hook_radius())
-	if not collision.is_empty():
-		if bool(collision.get("blocked",false)):
+	# Substeps sweep every piece of the arc, including at low frame rates.
+	var remaining := step
+	while remaining>.00001 and bolt_active:
+		var dt := minf(remaining,HookFlight.STEP)
+		remaining -= dt
+		var previous := bolt_pos
+		hook_flight.advance(dt)
+		var fraction := HookFlight.range_fraction(previous,hook_flight.position,sim.pos,model.shot_range())
+		bolt_pos = previous.lerp(hook_flight.position,fraction)
+		bolt_travel += previous.distance_to(bolt_pos)
+		bolt_direction = hook_flight.velocity.normalized()
+		var collision := world.cast_hook(previous,bolt_pos,model.hook_radius())
+		if not collision.is_empty():
 			bolt_pos = collision["contact"]
+			hook_flight.position = bolt_pos
+			hook_flight.trail[-1] = bolt_pos
+			if bool(collision.get("blocked",false)):
+				var normal: Vector2 = collision.get("normal",Vector2.DOWN)
+				_begin_hook_return("Выстрел перекрыт выступом",hook_flight.velocity.bounce(normal)*.22,"rock")
+				return
+			var hit: Dictionary = collision["object"]
+			var contact: Vector2 = collision["contact"]
+			if sim.pos.distance_to(contact)>model.shot_range()+.001:
+				_begin_hook_return("Не хватает длины каната")
+				return
+			if world.rope_blocked(sim.pos,contact):
+				_begin_hook_return("Выступ перекрывает канат до опоры",Vector2.ZERO,"rock")
+				return
 			bolt_active = false
-			toast("Выстрел перекрыт выступом",1.3)
+			bolt_returning = false
+			anchor_contact = contact
+			sim.attach(contact,model.value("rope_lengths",0),true)
+			model.learn_control("aim")
+			catches += 1
+			anchor_id = hit["id"]
+			anchor_time = 0
+			focus_remaining = .7
+			if hint_context=="release": hint_timer = 0
+			if pressed:
+				_recenter_climb_control()
+			if int(hit["kind"]) in [0,2] and hit.get("permanent",true) and (world.generation_version<9 or hit.get("primary",false)):
+				safe_anchor_id = anchor_id
+				safe_position = sim.pos
+				safe_contact = contact
+			_register_hook_impact(contact,"catch")
+			_hook_sound("catch")
 			return
-		var hit: Dictionary = collision["object"]
-		bolt_active = false
-		var kind: int = hit["kind"]
-		var contact: Vector2 = collision["contact"]
-		if sim.pos.distance_to(contact)>model.value("rope_lengths",0)+.15:
-			toast("Не хватает длины каната")
-			return
-		if world.rope_blocked(sim.pos,contact):
-			toast("Выступ перекрывает канат до опоры",1.5)
-			return
-		anchor_contact = contact
-		sim.attach(contact,model.value("rope_lengths",0))
-		model.learn_control("aim")
-		catches += 1
-		anchor_id = hit["id"]
-		anchor_time = 0
-		focus_remaining = .7
-		if kind in [0,2] and hit.get("permanent",true) and (world.generation_version<9 or hit.get("primary",false)):
-			safe_anchor_id = anchor_id
-			safe_position = sim.pos
-			safe_contact = contact
-		_sound(760,.08)
-	elif reached_end:
-		bolt_active = false
-		toast("Канат полностью размотан — целься ближе",1.5)
+		if fraction<1 or hook_flight.age>2.0:
+			hook_flight.position = bolt_pos
+			hook_flight.trail[-1] = bolt_pos
+			_begin_hook_return("Канат размотан — крюк возвращается")
+
+func _register_hook_impact(point: Vector2, kind: String) -> void:
+	impact_serial += 1
+	hook_impact = point
+	hook_impact_kind = kind
+	if OS.has_feature("mobile") and kind=="catch": Input.vibrate_handheld(18,.25)
+
+func _begin_hook_return(message: String, rebound := Vector2.ZERO, kind := "limit") -> void:
+	bolt_active = false
+	bolt_returning = true
+	return_velocity = rebound
+	_register_hook_impact(bolt_pos,kind)
+	_hook_sound("rock" if kind=="rock" else "return")
+	toast(message,1.3,"hook")
+
+func _update_return(dt: float) -> void:
+	# Recovery is quick and can be interrupted by the next throw. It never
+	# catches anchors or pulls the player while winding back into the hand.
+	var previous := bolt_pos
+	var desired := (sim.pos-bolt_pos).normalized()*HookFlight.RETURN_SPEED
+	return_velocity = return_velocity.lerp(desired,1-exp(-dt*24))
+	var advance := return_velocity*dt
+	if bolt_pos.distance_to(sim.pos)<maxf(.3,advance.length()):
+		bolt_pos = sim.pos
+		bolt_returning = false
+	else:
+		bolt_pos += advance
+	bolt_direction = (bolt_pos-previous).normalized()
+	hook_flight.age += dt
+	hook_flight.trail.append(bolt_pos)
+	if hook_flight.trail.size()>15: hook_flight.trail.remove_at(0)
 
 func _collect_finds() -> void:
 	var radius := .54+model.value("magnet_radii",4)
@@ -812,6 +909,7 @@ func fail_run(reason: String) -> void:
 	failure_reason = reason
 	_reset_input()
 	bolt_active = false
+	bolt_returning = false
 	_sound(120,.2)
 	if offer_revive:
 		save_snapshot()
@@ -823,7 +921,7 @@ func revive_available() -> bool:
 	return bool(world.revive_plan(safe_anchor_id,safe_position,model.shot_range(),safe_contact).get("available",false))
 
 func revive(currency: String) -> void:
-	if state!="revive" or revive_used:
+	if state!="revive" or revive_used or ads.fullscreen:
 		return
 	var plan := world.revive_plan(safe_anchor_id,safe_position,model.shot_range(),safe_contact)
 	if not plan.get("available",false):
@@ -837,9 +935,13 @@ func revive(currency: String) -> void:
 		model.profile["diamonds"] -= cost
 	elif currency=="test_ad":
 		# No simulated ad impression/revenue: the UI labels this as a developer test.
-		if not OS.is_debug_build():
+		if not OS.is_debug_build() or ads.supported:
 			toast("Рекламный сервис ещё не подключён")
 			return
+	elif currency=="ad":
+		if not ad_revive_authorized: return
+		ad_revive_authorized = false
+		ad_revive_pending = false
 	else:
 		return
 	world.activate_rescue_anchors(plan["anchors"])
@@ -867,12 +969,49 @@ func revive(currency: String) -> void:
 	toast("Продолжение использовано · следующая ошибка завершит попытку")
 	save_snapshot()
 
+func request_ad_revive() -> void:
+	if state!="revive" or revive_used or not revive_available() or ads.fullscreen: return
+	ad_revive_run_id = run_id
+	save_snapshot()
+	if not ads.request_rewarded():
+		ad_revive_run_id = ""
+		toast("Реклама пока недоступна. Попробуй позже.")
+		_refresh_ad_actions()
+
+func _on_ad_revive_finished(earned: bool) -> void:
+	var same_run := not ad_revive_run_id.is_empty() and ad_revive_run_id==run_id
+	ad_revive_run_id = ""
+	if earned and same_run and state=="revive" and not revive_used:
+		ad_revive_authorized = true
+		revive("ad")
+		ad_revive_authorized = false
+	elif state=="revive":
+		ad_revive_pending = false
+		save_snapshot()
+		toast("Возрождение не получено. Рекламу нужно досмотреть.")
+		_refresh_ad_actions()
+
+func _on_ad_reward_verified() -> void:
+	if state=="revive" and ad_revive_run_id==run_id and not revive_used:
+		ad_revive_pending = true
+		save_snapshot()
+
+func _refresh_ad_actions() -> void:
+	if is_instance_valid(hud) and state=="revive" and not ads.fullscreen:
+		hud.show_revive(hud.revive_reason)
+
+func _on_ad_fullscreen(active: bool) -> void:
+	_reset_input()
+	if active: audio.stop()
+	hud.set_ad_blocked(active)
+
 func finish_run(success: bool) -> void:
-	if run_id.is_empty():
+	if run_id.is_empty() or ads.fullscreen:
 		return
 	state = "result"
 	_reset_input()
 	bolt_active = false
+	bolt_returning = false
 	if run_mode=="practice":
 		model.profile["active"] = {}
 		settlement = {"mode":"practice","success":success,"highest":maxi(0,roundi((sim.highest-START_Y)*10)),"seconds":run_seconds,"shots":shots,"catches":catches,"reason":failure_reason}
@@ -895,6 +1034,8 @@ func finish_run(success: bool) -> void:
 		model.profile["run_history"] = model.profile["run_history"].slice(-30)
 		model.save()
 	hud.show_result(settlement)
+	if success and run_mode=="summit" and not preview:
+		ads.show_level_complete()
 
 func pause_run() -> void:
 	if state=="play":
@@ -909,6 +1050,7 @@ func unpause() -> void:
 		hud.show_play()
 
 func show_menu() -> void:
+	if ads.fullscreen: return
 	hud.menu_tab = "expedition"
 	if state=="play" or state=="pause":
 		save_snapshot()
@@ -977,16 +1119,18 @@ func save_snapshot() -> void:
 		elif point.get("reserve",false):
 			active_reserves.append(point["id"])
 	model.profile["active"] = {"id":run_id,"seed":run_seed,"generation_version":world.generation_version,"mode":run_mode,"location":selected_location,
-		"camera_y":camera_y,
-		"x":sim.pos.x,"y":sim.pos.y,"vx":sim.vel.x,"vy":sim.vel.y,"length":sim.length,"target_length":sim.target_length,
+		"camera_y":camera_y,"camera_x":camera_x,
+		"x":sim.pos.x,"y":sim.pos.y,"vx":sim.vel.x,"vy":sim.vel.y,"length":sim.length,"target_length":sim.target_length,"reel_velocity":sim.reel_velocity,
 		"highest":sim.highest,"flight_peak":sim.flight_peak,"launched":sim.launched,"grounded":sim.grounded,
 		"run_seconds":run_seconds,"shots":shots,"catches":catches,"failure_reason":failure_reason,"zone_gold":zone_gold,
 		"anchor_id":anchor_id,"anchor_time":anchor_time,"contact_x":anchor_contact.x,"contact_y":anchor_contact.y,"rope_pivots":pivots,
 		"safe_contact_x":safe_contact.x,"safe_contact_y":safe_contact.y,"focus_remaining":focus_remaining,"safe_anchor_id":safe_anchor_id,
-		"safe_x":safe_position.x,"safe_y":safe_position.y,"revive_used":revive_used,"awaiting_revive":state=="revive",
+		"safe_x":safe_position.x,"safe_y":safe_position.y,"revive_used":revive_used,"awaiting_revive":state=="revive","ad_revive_earned":ad_revive_pending,
 		"bag":model.bag.duplicate(true),"picked":model.picked.duplicate(),"broken":broken,"active_reserves":active_reserves,
 		"bolt_active":bolt_active,"bolt_x":bolt_pos.x,"bolt_y":bolt_pos.y,"bolt_ox":bolt_origin.x,"bolt_oy":bolt_origin.y,
-		"bolt_dx":bolt_direction.x,"bolt_dy":bolt_direction.y,"bolt_travel":bolt_travel}
+		"bolt_dx":bolt_direction.x,"bolt_dy":bolt_direction.y,"bolt_travel":bolt_travel,
+		"bolt_vx":hook_flight.velocity.x,"bolt_vy":hook_flight.velocity.y,"bolt_age":hook_flight.age,
+		"bolt_returning":bolt_returning,"return_vx":return_velocity.x,"return_vy":return_velocity.y}
 	model.save()
 
 func _notification(what: int) -> void:
@@ -1002,39 +1146,60 @@ func _notification(what: int) -> void:
 		pause_run()
 
 func _move_camera(delta: float) -> void:
+	if state in ["pause","revive","result"]:
+		_position_camera()
+		return
 	if preview and capture_screen=="terrain":
 		_position_camera()
 		return
-	var desired := maxf(4.8,sim.pos.y+2.5+clampf(sim.vel.y*.13,-.8,1.6))
+	var viewport := get_viewport().get_visible_rect().size
+	var visible_height := absf(_screen_world(Vector2.ZERO).y-_screen_world(Vector2(0,viewport.y)).y)
+	var headroom := clampf(visible_height*.17,2.5,4.0)
+	var desired := maxf(4.8,sim.pos.y+headroom+clampf(sim.vel.y*.13,0,1.6))
 	if state!="menu": desired = maxf(camera_y,desired)
 	if state=="menu" and model.profile["active"].is_empty():
 		desired = 7
 		if not preview:
 			sim.pos = Vector2(-.7+sin(elapsed*.9)*.7,8.9+cos(elapsed*.9)*.15)
 	camera_y = lerpf(camera_y,desired,1-exp(-delta*7.5))
-	var horizontal := sim.pos.x+clampf(sim.vel.x*.15,-1.3,1.3)
+	var visible_width := absf(_screen_world(Vector2.ZERO).x-_screen_world(Vector2(viewport.x,0)).x)
+	var lead := clampf(sim.vel.x*.24,-1.8,1.8)
+	if sim.attached:
+		lead += clampf((sim.effective_anchor().x-sim.pos.x)*.16,-.65,.65)
+	elif pressed:
+		lead += clampf((aim_point.x-sim.pos.x)*.20,-1.1,1.1)
+	lead = clampf(lead,-visible_width*.16,visible_width*.16)
+	var horizontal := sim.pos.x+lead
 	if state=="menu": horizontal = 0
-	if world.location!=0: horizontal = 0
 	if capture_overview: horizontal = 0
+	# A small soft zone absorbs motion at the swing apex; larger movement and
+	# looking ahead still bring the next transfer into view.
+	var offset := horizontal-camera_x
+	horizontal = camera_x+signf(offset)*maxf(0,absf(offset)-.22)
 	camera_x = lerpf(camera_x,horizontal,1-exp(-delta*5))
 	_position_camera()
 
 func _process(delta: float) -> void:
 	elapsed += delta
-	if state not in ["pause","revive","result"]: animation_time += delta
-	hint_timer = maxf(0,hint_timer-delta)
+	if state not in ["pause","revive","result"]:
+		animation_time += delta
+		hint_timer = maxf(0,hint_timer-delta)
 	if state=="play" and not preview:
 		snapshot_timer += delta
 		if snapshot_timer>3:
 			snapshot_timer = 0
 			save_snapshot()
 	_move_camera(delta)
+	_refresh_aim()
 	world.update_visibility(camera_y,camera_x)
 	if world.show_loot_prices!=(state=="play"):
 		world.set_loot_prices_visible(state=="play")
 	var target := sim.anchor if sim.attached else bolt_pos
 	var warning := sim.attached and anchor_id>=0 and anchor_time>2.1 and int(world.anchor_by_id(anchor_id).get("kind",0))==1
-	explorer.draw(sim,target,sim.attached or bolt_active,bolt_active,animation_time,warning,model.level(2))
+	var shot_visual := {"velocity":return_velocity if bolt_returning else hook_flight.velocity,"age":hook_flight.age,
+		"trail":hook_flight.trail,"returning":bolt_returning,"shot":shot_serial,"impact":impact_serial,
+		"impact_position":hook_impact,"impact_kind":hook_impact_kind,"aiming":pressed and not sim.attached and not bolt_active,"aim":aim_direction}
+	explorer.draw(sim,target,sim.attached or bolt_active or bolt_returning,bolt_active or bolt_returning,animation_time,warning,model.level(2),shot_visual)
 	hud.update_play()
 	if not capture_path.is_empty() and elapsed>1.1 and not capture_queued:
 		capture_queued = true
@@ -1047,8 +1212,9 @@ func _capture_frame() -> void:
 	print("CAPTURE_RESULT ",error," ",capture_path)
 	get_tree().quit(error)
 
-func toast(text: String, duration: float = 2.5) -> void:
+func toast(text: String, duration: float = 2.5, context: String = "") -> void:
 	hint = text
+	hint_context = context
 	hint_timer = duration
 	if is_instance_valid(hud):
 		hud.set_toast(text)
@@ -1066,6 +1232,32 @@ func _sound(frequency: float, duration: float) -> void:
 		var envelope := pow(1-float(i)/count,2)
 		var sample := int(sin(TAU*frequency*i/stream.mix_rate)*envelope*15000)
 		data.encode_s16(i*2,sample)
+	stream.data = data
+	audio.stream = stream
+	audio.play()
+
+func _hook_sound(kind: String) -> void:
+	if not model.profile.get("sound",true) or preview or DisplayServer.get_name()=="headless": return
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = 22050
+	var duration := .16 if kind=="launch" else .20
+	var count := int(duration*stream.mix_rate)
+	var data := PackedByteArray()
+	data.resize(count*2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 731
+	for index in range(count):
+		var t := float(index)/stream.mix_rate
+		var phase := t/duration
+		var envelope := pow(1-phase,2)
+		var sample := 0.0
+		match kind:
+			"launch": sample = (rng.randf_range(-1,1)*.45+sin(TAU*(1150*t-2300*t*t))*.35)*envelope*sin(minf(1,phase*12)*PI*.5)
+			"catch": sample = (sin(TAU*840*t)+sin(TAU*1337*t)*.45+sin(TAU*2150*t)*.18)*exp(-t*26)*.55
+			"rock": sample = (rng.randf_range(-1,1)*.6+sin(TAU*170*t)*.4)*exp(-t*35)
+			_: sample = sin(TAU*(650*t-1100*t*t))*.4*envelope
+		data.encode_s16(index*2,int(clampf(sample,-1,1)*16000))
 	stream.data = data
 	audio.stream = stream
 	audio.play()

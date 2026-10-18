@@ -12,6 +12,7 @@ var goal_label: Label
 var aim_label: Label
 var climb_bar: ClimbMeter
 var bag_panel: HBoxContainer
+var pause_button: Button
 var aim_overlay: AimOverlay
 var base_theme: Theme
 var heading_font: FontVariation
@@ -21,6 +22,11 @@ var menu_tab := "expedition"
 var result_data: Dictionary = {}
 var revive_reason := "Падение"
 var wide := false
+var shot_preview: Dictionary = {}
+var shot_preview_time := -1.0
+var shot_preview_direction := Vector2.ZERO
+var ad_blocker: Control
+var touch_controls_hint := OS.has_feature("mobile")
 const INK := Color("19352d")
 const GOLD := Color("efc779")
 const WHITE := Color("f3eddb")
@@ -44,29 +50,46 @@ class AimOverlay extends Control:
 	var control_active := false
 	var control_origin := Vector2.ZERO
 	var control_target := Vector2.ZERO
-	var rope_active := false
-	var rope_pointer := Vector2.ZERO
+	var control_attached := false
+	var vertical_direction := 0
+	var vertical_progress := 0.0
 	var aim_color := Color("f3c668")
+	var trajectory := PackedVector2Array()
+	var animation := 0.0
+	var ui_scale := 1.0
 	func _draw() -> void:
 		if active:
-			var direction := target-origin
-			var count := int(direction.length()/13)
-			for index in range(count):
-				var t := float(index)/maxi(1,count)
-				draw_circle(origin+direction*t,2.1,Color(aim_color,1-t*.6))
-			draw_circle(target,6,aim_color,false,1.5)
+			var distance := 0.0
+			var spacing := 14*ui_scale
+			var next_dot := fposmod(animation*28*ui_scale,spacing)
+			for index in range(1,trajectory.size()):
+				var a := trajectory[index-1]
+				var b := trajectory[index]
+				var segment := a.distance_to(b)
+				while next_dot<=distance+segment:
+					var point := a.lerp(b,clampf((next_dot-distance)/maxf(.001,segment),0,1))
+					var fade := 1-float(index)/maxi(1,trajectory.size())*.55
+					draw_circle(point,2.0*ui_scale,Color(aim_color,fade))
+					next_dot += spacing
+				distance += segment
+			var pulse := (6+sin(animation*5)*.8)*ui_scale
+			draw_arc(target,pulse,animation,animation+TAU*.78,24,aim_color,1.5*ui_scale,true)
 		if control_active:
-			var delta := control_target-control_origin
-			if delta.length()>8:
-				draw_line(control_origin,control_target,Color(aim_color,.55),2,true)
-				draw_circle(control_origin,13,Color(aim_color,.65),false,1.5,true)
-				draw_circle(control_target,6,aim_color,false,2,true)
-		if rope_active:
-			var color := Color("f3c668")
-			draw_line(rope_pointer+Vector2(0,-28),rope_pointer+Vector2(0,28),color,2,true)
-			draw_polyline(PackedVector2Array([rope_pointer+Vector2(-5,-22),rope_pointer+Vector2(0,-28),rope_pointer+Vector2(5,-22)]),color,2,true)
-			draw_polyline(PackedVector2Array([rope_pointer+Vector2(-5,22),rope_pointer+Vector2(0,28),rope_pointer+Vector2(5,22)]),color,2,true)
-			draw_circle(rope_pointer,7,color,false,2,true)
+			var color := Color("96d9b4") if vertical_progress>=1 else Color("f3c668")
+			var radius := 48*ui_scale
+			var knob := control_origin+(control_target-control_origin).limit_length(ClimbGesture.STICK_RADIUS*ui_scale)*(48/ClimbGesture.STICK_RADIUS)
+			draw_circle(control_origin,radius,Color("122c29",.28))
+			draw_circle(control_origin,radius,Color(color,.38),false,ui_scale,true)
+			draw_circle(control_origin,ClimbGesture.DEAD_ZONE*ui_scale,Color(color,.28),false,ui_scale,true)
+			if control_attached:
+				for axis_angle in [-PI*.5,PI*.5]:
+					for side in [-1,1]:
+						var angle: float = axis_angle+side*deg_to_rad(15)
+						draw_line(control_origin,control_origin+Vector2.from_angle(angle)*radius,Color(color,.22),ui_scale,true)
+			if vertical_direction!=0 and control_attached:
+				draw_arc(control_origin,radius+4*ui_scale,-PI*.5,-PI*.5+TAU*maxf(.001,vertical_progress),48,color,3*ui_scale,true)
+			draw_line(control_origin,knob,Color(color,.6),2*ui_scale,true)
+			draw_circle(knob,8*ui_scale,color,false,2*ui_scale,true)
 
 func setup(controller) -> void:
 	game = controller
@@ -105,11 +128,19 @@ func setup(controller) -> void:
 	toast_label.add_theme_color_override("font_shadow_color",Color("12212d"))
 	toast_label.add_theme_constant_override("shadow_outline_size",4)
 	toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ad_blocker = Control.new()
+	ad_blocker.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ad_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
+	ad_blocker.visible = false
+	add_child(ad_blocker)
 	get_viewport().size_changed.connect(_resize)
 	fit_viewport()
 
 func fit_viewport() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
+	if layout_mode=="menu":
+		var banner_pixels: int = game.ads.menu_banner_height()
+		viewport_size.y -= banner_pixels*viewport_size.y/maxf(1,DisplayServer.window_get_size().y)
 	wide = viewport_size.x/viewport_size.y>=1.2
 	var design := Vector2(1080,660) if wide else Vector2(540,960)
 	var factor := minf(viewport_size.x/design.x,viewport_size.y/design.y)
@@ -123,6 +154,7 @@ func fit_viewport() -> void:
 	toast_label.position = Vector2((root.size.x-464)*.5,root.size.y-(154 if layout_mode=="play" else 59))
 
 func _resize() -> void:
+	if game.state=="play": game._reset_input()
 	fit_viewport()
 	if layout_mode=="menu": show_menu()
 	elif layout_mode=="play": show_play()
@@ -231,13 +263,13 @@ func clear() -> void:
 		content.remove_child(child)
 		child.queue_free()
 	height_label = null
+	pause_button = null
 	bag_panel = null
 	goal_label = null
 	aim_label = null
 	climb_bar = null
 	aim_overlay.active = false
 	aim_overlay.control_active = false
-	aim_overlay.rope_active = false
 	aim_overlay.queue_redraw()
 
 func wallet(column: VBoxContainer) -> void:
@@ -250,20 +282,24 @@ func wallet(column: VBoxContainer) -> void:
 func show_menu() -> void:
 	clear()
 	layout_mode = "menu"
+	game.ads.set_main_menu(true)
 	fit_viewport()
 	var lobby := LobbyView.new()
 	content.add_child(lobby)
 	lobby.setup(self)
 
 func show_play() -> void:
+	game.ads.set_main_menu(false)
 	clear()
 	layout_mode = "play"
 	fit_viewport()
 	var top := panel(Vector2(20,22),Vector2(228,84))
+	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top.get_parent().mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top.add_theme_constant_override("separation",2)
 	height_label = label(top,"0 м",30)
 	record_label = label(top,"Рекорд: 0 м",13,GOLD)
-	var pause_button := button(content,"Ⅱ",game.pause_run)
+	pause_button = button(content,"Ⅱ",game.pause_run)
 	pause_button.position = Vector2(root.size.x-78,22)
 	pause_button.size = Vector2(58,58)
 	pause_button.add_theme_font_size_override("font_size",27)
@@ -271,12 +307,14 @@ func show_play() -> void:
 	danger_label.position = Vector2(23,119)
 	danger_label.size = Vector2(275,28)
 	goal_label = label(content,"",13,MUTED)
+	goal_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	goal_label.position = Vector2(24,151)
 	goal_label.size = Vector2(root.size.x-48,24)
 	goal_label.add_theme_color_override("font_color",WHITE)
 	goal_label.add_theme_color_override("font_shadow_color",Color("13232b"))
 	goal_label.add_theme_constant_override("shadow_outline_size",4)
 	aim_label = label(content,"",14,GOLD)
+	aim_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	aim_label.position = Vector2(24,184)
 	aim_label.size = Vector2(root.size.x-48,25)
 	aim_label.add_theme_color_override("font_shadow_color",Color("13232b"))
@@ -317,7 +355,7 @@ func _discard(index: int) -> void:
 	game.save_snapshot()
 
 func update_play() -> void:
-	toast_label.visible = game.hint_timer>0 and game.state in ["play","menu"]
+	toast_label.visible = game.hint_timer>0 and game.state in ["play","menu","revive"]
 	toast_label.position.y = root.size.y-(154 if game.state=="play" else 59)
 	if not is_instance_valid(height_label) or game.state!="play":
 		return
@@ -333,12 +371,14 @@ func update_play() -> void:
 	goal_label.text = "Тренировка · 16 зацепов" if game.run_mode=="practice" else GameModel.ZONE_NAMES[zone]+" · "+game.model.next_goal()
 	var lesson := tutorial_hint()
 	if not lesson.is_empty(): goal_label.text = lesson
-	aim_overlay.active = game.pressed and not game.sim.attached
-	aim_overlay.control_active = game.pressed and game.sim.attached and game.touch_gesture
+	aim_overlay.active = game.pressed and not game.sim.attached and not game.bolt_active and (not game.touch_gesture or game.aim_stick_valid)
+	aim_overlay.ui_scale = root.scale.x
+	aim_overlay.control_active = game.pressed and game.touch_gesture
 	aim_overlay.control_origin = game.press_start
 	aim_overlay.control_target = game.pointer
-	aim_overlay.rope_active = game.rope_touch>=0 and game.sim.attached
-	aim_overlay.rope_pointer = game.rope_pointer
+	aim_overlay.control_attached = game.sim.attached
+	aim_overlay.vertical_direction = int(game.touch_controls.get("vertical_direction",0))
+	aim_overlay.vertical_progress = float(game.touch_controls.get("vertical_progress",0))
 	aim_overlay.origin = game.camera.unproject_position(Vector3(game.sim.pos.x,game.sim.pos.y,0))
 	var point: Vector2 = game.sim.pos+game.aim_direction*game.model.shot_range()
 	aim_label.text = "Канат: %d / %d м" % [roundi(game.sim.length*10),roundi(game.model.shot_range()*10)] if game.sim.attached else ""
@@ -347,10 +387,21 @@ func update_play() -> void:
 		if not current.is_empty():
 			aim_label.text += " · постоянная" if current.get("permanent",true) else " · исчезнет при отпускании"
 		if not game.sim.rope_pivots.is_empty(): aim_label.text += " · канат огибает выступ"
+		if game.pressed and game.touch_gesture and aim_overlay.vertical_direction!=0:
+			aim_label.text += (" · ↑ подтягивание" if aim_overlay.vertical_direction>0 else " · ↓ спуск") if aim_overlay.vertical_progress>=1 else " · держи вертикально…"
 	aim_overlay.aim_color = GOLD
 	if aim_overlay.active:
-		aim_label.text = "Канат до %d м · крюк %d м/с" % [roundi(game.model.shot_range()*10),roundi(game.model.value("throw_speeds",GameModel.THROW)*10)]
-		var collision: Dictionary = game.world.cast_hook(game.sim.pos,point,game.model.hook_radius())
+		if shot_preview.is_empty() or game.elapsed-shot_preview_time>.035 or game.elapsed<shot_preview_time or shot_preview_direction.dot(game.aim_direction)<.99999:
+			shot_preview = game.predict_shot(game.aim_direction)
+			shot_preview_time = game.elapsed
+			shot_preview_direction = game.aim_direction
+		point = shot_preview["contact"]
+		aim_overlay.trajectory = PackedVector2Array()
+		for sample in shot_preview["points"]:
+			aim_overlay.trajectory.append(game.camera.unproject_position(Vector3(sample.x,sample.y,0)))
+		aim_overlay.animation = game.animation_time
+		aim_label.text = "Дуга броска · отпусти для выстрела"
+		var collision: Dictionary = shot_preview["collision"]
 		if not collision.is_empty():
 			point = collision["contact"]
 			if collision.get("blocked",false):
@@ -359,10 +410,16 @@ func update_play() -> void:
 			else:
 				aim_label.text = game.world.object_description(collision["object"])
 				aim_overlay.aim_color = Color("8ae0ac")
-				aim_label.text += " · %.2f с" % (game.sim.pos.distance_to(point)/game.model.value("throw_speeds",GameModel.THROW))
-				if not game.shot_window_open(point):
+				aim_label.text += " · %.2f с" % float(shot_preview["time"])
+				if not shot_preview["reachable"]:
 					aim_overlay.aim_color = Color("ff987f")
 					aim_label.text = "Удаляешься от цели — каната не хватит"
+	else:
+		shot_preview.clear()
+		if game.pressed and game.touch_gesture and not game.sim.attached:
+			aim_label.text = "Потяни от места касания — выбери направление"
+	if game.bolt_active: aim_label.text = "Крюк в полёте · канат разматывается"
+	elif game.bolt_returning: aim_label.text = "Крюк возвращается · можно бросать снова"
 	aim_overlay.target = game.camera.unproject_position(Vector3(point.x,point.y,0))
 	aim_overlay.queue_redraw()
 	if game.sim.attached and not danger:
@@ -374,22 +431,24 @@ func update_play() -> void:
 
 func tutorial_hint() -> String:
 	var learned: Array = game.model.profile["learned_controls"]
-	var mobile := OS.has_feature("mobile")
+	var mobile := touch_controls_hint
 	if "aim" not in learned:
-		return "Прицелься в выступ и отпусти первый палец" if mobile else "Зажми ЛКМ, прицелься в выступ и отпусти"
+		return "Коснись где удобно, потяни как стик и отпусти" if mobile else "Зажми ЛКМ, прицелься в выступ и отпусти"
 	if not game.sim.attached:
-		return "В полёте прицелься и поймай следующую опору" if game.catches<2 else ""
+		return ("Новое касание → направление стиком → отпустить" if mobile else "В полёте прицелься и поймай следующую опору") if game.catches<2 else ""
 	if "swing" not in learned:
 		return "Удерживай палец и веди влево/вправо: раскачайся" if mobile else "A / D: раскачайся в такт движению"
 	if "rope" not in learned:
-		return "Тем же пальцем веди вверх/вниз: измени канат" if mobile else "W / S или колесо: измени длину каната"
+		return "Держи строго вверх / вниз: после паузы канат движется" if mobile else "W / S или колесо: измени длину каната"
 	if "release" not in learned:
-		return "Быстрый свайп вверх отпускает крюк; веди к цели и отпусти" if mobile else "Пробел: отпусти канат на взлёте и целься снова"
+		return "Отпусти палец — отцепись. Новый бросок — новое касание" if mobile else "Пробел: отпусти канат на взлёте и целься снова"
 	return ""
 
 func world_input_allowed(point: Vector2) -> bool:
-	var local_point := root.get_global_transform_with_canvas().affine_inverse()*point
-	return local_point.y>112 and local_point.y<root.size.y-86
+	if not get_viewport().get_visible_rect().has_point(point): return false
+	if is_instance_valid(pause_button) and pause_button.get_global_rect().has_point(point): return false
+	if is_instance_valid(bag_panel) and bag_panel.get_global_rect().has_point(point): return false
+	return true
 
 func set_toast(text: String) -> void:
 	toast_label.text = text
@@ -406,6 +465,7 @@ func show_locations() -> void:
 	show_menu()
 
 func menu_surface(mode: String) -> ExpeditionMenu:
+	game.ads.set_main_menu(false)
 	clear()
 	layout_mode = mode
 	fit_viewport()
@@ -425,3 +485,6 @@ func show_revive(reason: String = "Падение") -> void:
 func show_result(result: Dictionary) -> void:
 	result_data = result.duplicate(true)
 	menu_surface("result").build_result(result)
+
+func set_ad_blocked(blocked: bool) -> void:
+	ad_blocker.visible = blocked

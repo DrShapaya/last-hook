@@ -36,8 +36,15 @@ func setup(owner_hud: GameHud) -> void:
 	build_navigation()
 
 func build_header() -> void:
-	var mark := card(self,Vector2(28,25),Vector2(42,46),GOLD,Color.TRANSPARENT,14)
-	symbol(mark,2,Vector2(7,7),Vector2(28,32),Color("203c35"))
+	var mark := TextureRect.new()
+	mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	mark.texture = preload("res://assets/icon.svg")
+	mark.position = Vector2(28,25)
+	mark.size = Vector2(46,46)
+	mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	mark.material = rounded_material(mark.size,12)
+	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(mark)
 	text(self,"LAST HOOK",Vector2(82,22),Vector2(230,34),25,PAPER,true)
 	eyebrow(self,"ВЫШЕ С КАЖДЫМ БРОСКОМ",Vector2(83,57),235,MUTED)
 	wallet(Vector2(844,29) if landscape else Vector2(304,29))
@@ -179,12 +186,12 @@ func build_settings() -> void:
 	var help_at := Vector2(548,238) if landscape else Vector2(28,360)
 	var help := card(self,help_at,Vector2(504 if landscape else 484,302))
 	eyebrow(help,"УПРАВЛЕНИЕ",Vector2(24,21),440)
-	text(help,"Один палец. Вся высота." if OS.has_feature("mobile") else "Поймай свой ритм.",Vector2(24,51),Vector2(440,35),24,PAPER,true)
-	var instructions := [["01","Раскачайся","Веди палец влево и вправо."],["02","Выбери длину","Медленно веди вверх или вниз."],["03","Перелети","Резкий свайп вверх. Веди к опоре и отпусти."]]
-	if not OS.has_feature("mobile"):
+	text(help,"Один палец. Вся высота." if hud.touch_controls_hint else "Поймай свой ритм.",Vector2(24,51),Vector2(440,35),24,PAPER,true)
+	var instructions := [["01","Брось крюк","Коснись где удобно, потяни как стик и отпусти."],["02","Раскачайся","На канате веди палец влево или вправо."],["03","Выбери длину","Держи строго вверх / вниз 0,28 секунды."],["04","Отцепись","Отпусти палец. Новый бросок — новое касание."]]
+	if not hud.touch_controls_hint:
 		instructions = [["01","Раскачайся","A / D или стрелки влево / вправо."],["02","Выбери длину","W / S или колесо мыши."],["03","Перелети","Пробел — отпустить. ЛКМ — прицел и бросок."]]
 	for index in range(3):
-		var row_y := 104+index*62
+		var row_y := 104+index*(46 if instructions.size()==4 else 62)
 		text(help,instructions[index][0],Vector2(24,row_y),Vector2(35,27),14,TEAL,true)
 		text(help,instructions[index][1],Vector2(68,row_y-2),Vector2(400,25),16,PAPER,true)
 		text(help,instructions[index][2],Vector2(68,row_y+23),Vector2(410,23),12,MUTED)

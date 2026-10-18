@@ -98,7 +98,7 @@ func beam(a: Vector3, b: Vector3, radius: float, color: Color, parent: Node3D) -
 	instance.position = (a+b)*.5
 	instance.quaternion = Quaternion(Vector3.UP,(b-a).normalized())
 
-func _extruded_polygon(polygon: PackedVector2Array, depth: float, color: Color, parent: Node3D) -> void:
+func _extruded_polygon(polygon: PackedVector2Array, depth: float, color: Color, parent: Node3D, custom_material: Material = null) -> void:
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var indices := Geometry2D.triangulate_polygon(polygon)
@@ -115,10 +115,13 @@ func _extruded_polygon(polygon: PackedVector2Array, depth: float, color: Color, 
 	surface.generate_normals()
 	var mesh := MeshInstance3D.new()
 	mesh.mesh = surface.commit()
-	var material: StandardMaterial3D = world.mat("grip_vertex",Color.WHITE,false)
-	material.vertex_color_use_as_albedo = true
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mesh.material_override = material
+	if custom_material!=null:
+		mesh.material_override = custom_material
+	else:
+		var material: StandardMaterial3D = world.mat("grip_vertex",Color.WHITE,false)
+		material.vertex_color_use_as_albedo = true
+		material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mesh.material_override = material
 	parent.add_child(mesh)
 
 func anchor_polygon(dimensions: Vector2) -> PackedVector2Array:

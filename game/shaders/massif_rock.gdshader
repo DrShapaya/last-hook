@@ -2,6 +2,8 @@ shader_type spatial;
 render_mode cull_disabled;
 
 uniform float aerial_depth : hint_range(0.0,1.0) = 0.0;
+uniform float snow_override : hint_range(-1.0,1.0) = -1.0;
+uniform float material_tint : hint_range(0.0,1.5) = 1.0;
 
 varying vec3 rock_position;
 varying vec3 rock_normal;
@@ -31,12 +33,14 @@ void fragment() {
 	seam*=smoothstep(0.30,0.61,noise3(p*0.56+vec3(13.0)));
 	float fissure=1.0-smoothstep(0.0,0.021,abs(noise3(p*vec3(0.65,0.15,0.48))-0.49));
 	vec3 stone=COLOR.rgb*(0.87+weather*0.24+(grain-0.5)*0.11);
+	stone*=material_tint;
 	stone*=1.0-seam*0.08-fissure*0.055;
 	float upwards=smoothstep(0.12,0.65,rock_normal.y);
 	float damp=smoothstep(0.49,0.70,weather)*upwards;
 	float forest=1.0-smoothstep(30.0,55.0,p.y);
 	stone=mix(stone,vec3(0.12,0.19,0.10),damp*forest*0.48);
 	float snow=smoothstep(65.0,95.0,p.y)*upwards*smoothstep(0.40,0.65,weather);
+	if (snow_override>=0.0) { snow*=snow_override; }
 	stone=mix(stone,vec3(0.60,0.72,0.77),snow*0.60);
 	ALBEDO=mix(stone,vec3(0.19,0.28,0.33),aerial_depth);
 	// Surface-gradient bump follows the mesh in view space without UV textures.

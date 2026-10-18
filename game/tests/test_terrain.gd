@@ -180,7 +180,7 @@ func run_tests() -> void:
 	sim.request_length(2)
 	check(sim.target_length>=fixed+.59,"reeling respects length already used by wrapped rope")
 	sim.pos = Vector2(-3,8)
-	check(world.update_rope_path(sim) and sim.rope_pivots.is_empty(),"rope unwraps automatically when the previous anchor becomes visible")
+	check(world.update_rope_path(sim) and sim.rope_pivots.is_empty() and not world.rope_clearance_blocked(sim.anchor,sim.pos),"rope unwraps with a visible clearance when the previous anchor becomes visible")
 	sim.release(1)
 	check(sim.rope_pivots.is_empty(),"release clears all old wrap contacts")
 	sim.pos = Vector2(3,10)

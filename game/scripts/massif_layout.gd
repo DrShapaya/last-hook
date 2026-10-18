@@ -251,7 +251,7 @@ func _build_obstacles(index: int, encounter: Dictionary) -> void:
 		elif shape=="pillar":
 			candidate["polygon"] = PackedVector2Array([Vector2(-w*.65,-h),Vector2(w*.75,-h*.85),Vector2(w,h*.65),Vector2(w*.35,h),Vector2(-w*.7,h*.72),Vector2(-w,h*.05)])
 		else:
-			candidate["polygon"] = PackedVector2Array([Vector2(-w,-h),Vector2(w*.6,-h),Vector2(w,h*.15),Vector2(-w*.4,h)])
+			candidate["polygon"] = PackedVector2Array([Vector2(-w,-h),Vector2(-w*.18,-h*1.08),Vector2(w*.62,-h*.82),Vector2(w,h*.05),Vector2(w*.28,h),Vector2(-w*.52,h*.78)])
 		if _try_obstacle(candidate,index):
 			encounter["obstacles"].append(obstacles.size()-1)
 			return

@@ -145,9 +145,18 @@ func draw(sim: RopeSim, target: Vector2, tether: bool, flying_bolt: bool, time: 
 			for i in range(sim.rope_pivots.size()-1,-1,-1):
 				var pivot := sim.rope_pivots[i]
 				var corner := Vector3(pivot.x,pivot.y,3.5)
-				points.append_array(rope_points(previous,corner,slack))
+				var next_point := rope_end if i==0 else Vector3(sim.rope_pivots[i-1].x,sim.rope_pivots[i-1].y,3.5)
+				var incoming := (corner-previous).normalized()
+				var outgoing := (next_point-corner).normalized()
+				# Keep the round-over just outside the collision contour.  A large
+				# offset reads as a floating rope; this is only a few centimetres at
+				# game scale and lets the line visibly rest against the stone.
+				var approach := corner-incoming*.035
+				var depart := corner+outgoing*.035
+				points.append_array(rope_points(previous,approach,slack))
+				points.append_array(rope_corner_points(approach,corner,depart))
 				slack = 0
-				previous = corner
+				previous = depart
 		if flying_bolt:
 			points.append_array(flight_rope_points(previous,rope_end,float(flight.get("age",0)),bool(flight.get("returning",false))))
 		else:
@@ -265,6 +274,22 @@ static func rope_points(from: Vector3, to: Vector3, slack: float) -> PackedVecto
 	for index in range(17):
 		var t := index/16.0
 		points.append(from.lerp(to,t)+Vector3.DOWN*sag*4*t*(1-t))
+	return points
+
+static func rope_corner_points(from: Vector3, corner: Vector3, to: Vector3) -> PackedVector3Array:
+	var points := PackedVector3Array()
+	# A short quadratic round-over removes the hard hinge at a rock corner while
+	# keeping the rope outside the expanded collision contour.
+	var incoming := (from-corner).normalized()
+	var outgoing := (to-corner).normalized()
+	var outward := (incoming+outgoing).normalized()
+	if outward.length_squared()<.01: outward = Vector3.BACK
+	var control := corner+outward*.014
+	for index in range(7):
+		var t := index/6.0
+		var a := from.lerp(control,t)
+		var b := control.lerp(to,t)
+		points.append(a.lerp(b,t))
 	return points
 
 static func rope_strip(points: PackedVector3Array, radius: float) -> ArrayMesh:

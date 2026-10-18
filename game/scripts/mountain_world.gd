@@ -103,6 +103,11 @@ func nearby_obstacles(low: float, high: float) -> Array[Dictionary]:
 func rope_blocked(from: Vector2, to: Vector2) -> bool:
 	return not rope_contact(from,to).is_empty()
 
+func rope_clearance_blocked(from: Vector2, to: Vector2, clearance: float = .11) -> bool:
+	for obstacle in nearby_obstacles(minf(from.y,to.y)-.2,maxf(from.y,to.y)+.2):
+		if not SolidGeometry.contour_cast(from,to,obstacle,clearance).is_empty(): return true
+	return false
+
 func rope_contact(from: Vector2, to: Vector2) -> Dictionary:
 	var best: Dictionary = {}
 	for obstacle in nearby_obstacles(minf(from.y,to.y)-.1,maxf(from.y,to.y)+.1):
@@ -112,7 +117,10 @@ func rope_contact(from: Vector2, to: Vector2) -> Dictionary:
 
 func update_rope_path(sim: RopeSim) -> bool:
 	if not sim.attached: return true
-	const ROPE_CLEARANCE := .16
+	# The rope should route around the solid contour, but remain visually seated
+	# on the rock instead of hovering away from it.  The swept hit test still
+	# keeps a tiny radius so the tube cannot tunnel through a corner.
+	const ROPE_CLEARANCE := .10
 	var root := sim.anchor
 	for point in sim.rope_pivots:
 		if rope_blocked(root,point):
@@ -124,7 +132,7 @@ func update_rope_path(sim: RopeSim) -> bool:
 	while not sim.rope_pivots.is_empty():
 		var previous: Vector2 = sim.anchor if sim.rope_pivots.size()==1 else sim.rope_pivots[-2]
 		# Discard temporary corners when the direct route is clear again.
-		if rope_blocked(previous,sim.pos): break
+		if rope_clearance_blocked(previous,sim.pos,.045): break
 		sim.rope_pivots.pop_back()
 	for iteration in range(6):
 		var pivot := sim.effective_anchor()

@@ -6,6 +6,7 @@ const COLUMNS := 120
 const ROWS := 40
 var massif: MassifLayout
 var rock_material := ShaderMaterial.new()
+var obstacle_material := ShaderMaterial.new()
 var rear_material := ShaderMaterial.new()
 var building_rear := false
 var positions: Dictionary = {}
@@ -17,6 +18,10 @@ func _init(owner_world: Node3D, source: MountainLayout) -> void:
 	super._init(owner_world,source)
 	massif = source as MassifLayout
 	rock_material.shader = preload("res://shaders/massif_rock.gdshader")
+	obstacle_material.shader = rock_material.shader
+	obstacle_material.set_shader_parameter("snow_override",0.0)
+	obstacle_material.set_shader_parameter("aerial_depth",0.0)
+	obstacle_material.set_shader_parameter("material_tint",.68)
 	rear_material.shader = rock_material.shader
 	rear_material.set_shader_parameter("aerial_depth",.28)
 
@@ -162,7 +167,7 @@ func build_obstacle(object: Dictionary, parent: Node3D) -> void:
 		"wedge": [Color("746d64"),Color("8b7560"),Color("5d6b67")]
 	}
 	var tint: Color = palette.get(shape,[Color("74756b")])[variant%3]
-	var color := base_color.lerp(tint,.62).lightened(.16)
+	var color := base_color.lerp(tint,.72).darkened(.08)
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var indices := Geometry2D.triangulate_polygon(polygon)
@@ -184,15 +189,15 @@ func build_obstacle(object: Dictionary, parent: Node3D) -> void:
 	surface.generate_normals()
 	var instance := MeshInstance3D.new()
 	instance.mesh = surface.commit()
-	instance.material_override = rock_material
+	instance.material_override = obstacle_material
 	holder.add_child(instance)
 	# A bevel and a dark underside make the solid read as a protruding piece of
 	# rock. The decorative lines sit on the same polygon and never change hits.
 	for i in range(polygon.size()):
 		var a: Vector2 = polygon[i]
 		var b: Vector2 = polygon[(i+1)%polygon.size()]
-		var edge_color := Color("c7bd91") if a.y<-.25 and b.y<-.25 else Color("353d3c")
-		beam(Vector3(a.x*.92,a.y*.92,.79),Vector3(b.x*.92,b.y*.92,.79),.035 if shape=="shelf" else .025,edge_color,holder)
+		var edge_color := Color("97957c") if a.y<-.25 and b.y<-.25 else Color("303936")
+		beam(Vector3(a.x*.92,a.y*.92,.79),Vector3(b.x*.92,b.y*.92,.79),.028 if shape=="shelf" else .021,edge_color,holder)
 	if shape=="shelf":
 		# Two short cantilever ribs explain why a wide shelf stays attached.
 		var width: float = float(object["dimensions"].x)
@@ -206,6 +211,32 @@ func build_obstacle(object: Dictionary, parent: Node3D) -> void:
 			beam(Vector3(x,-height*.30,.82),Vector3(x+.10,height*.30,.82),.018,Color("a69b7e"),holder)
 	else:
 		beam(Vector3(-object["dimensions"].x*.25,-object["dimensions"].y*.14,.82),Vector3(0,object["dimensions"].y*.22,.82),.018,Color("b39b7c"),holder)
+
+func build_anchor(object: Dictionary, parent: Node3D) -> void:
+	# The massif uses carved stone grips instead of the generic white target
+	# blocks.  Their collision polygon is unchanged; only the shell, lip and
+	# natural braces are rebuilt here.
+	var holder := Node3D.new()
+	parent.add_child(holder)
+	var p: Vector2 = object["pos"]
+	holder.position = Vector3(p.x,p.y,2)
+	object["visual"] = holder
+	var kind := int(object.get("kind",0))
+	var palette := [Color("7f897d"),Color("9b795c"),Color("6f8c8b"),Color("87789a"),Color("8a866d"),Color("6f7f88")]
+	var color := zone_color(p.y).lerp(palette[posmod(kind,palette.size())],.62).lightened(.08)
+	# EncounterLayout stores grip polygons in holder-local coordinates (the
+	# world position is applied by holder.position below).
+	var local: PackedVector2Array = object["polygon"]
+	# Use a regular vertex-colour material here so the grip keeps a solid,
+	# readable body. The rock shader is reserved for the large massif and the
+	# heavy obstacle pieces; on small grips it made the shell too dark.
+	_extruded_polygon(local,.88,color,holder)
+	var d: Vector2 = object["dimensions"]
+	# A broken, low profile lip marks the usable top without outlining the
+	# whole object like a UI button.
+	var top_left := local[5] if local.size()>5 else Vector2(-d.x*.4,d.y*.5)
+	var top_right := local[4] if local.size()>4 else Vector2(d.x*.4,d.y*.5)
+	beam(Vector3(top_left.x,top_left.y,.48),Vector3(top_right.x,top_right.y,.48),.032,Color("a59b75"),holder)
 
 func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	var left: float = object["left"]
@@ -225,12 +256,12 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	parent.add_child(holder)
 	holder.position = Vector3(center.x,center.y,1.75)
 	var rock := zone_color(top).darkened(.04)
-	_extruded_polygon(polygon,.75,rock,holder)
+	_extruded_polygon(polygon,.75,rock,holder,obstacle_material)
 	for i in range(polygon.size()):
 		var a: Vector2 = polygon[i]
 		var b: Vector2 = polygon[(i+1)%polygon.size()]
 		if a.y>=-.08 and b.y>=-.08:
-			beam(Vector3(a.x,a.y,.42),Vector3(b.x,b.y,.42),.045,Color("dfc985"),holder)
+			beam(Vector3(a.x,a.y,.42),Vector3(b.x,b.y,.42),.034,Color("b3aa82"),holder)
 		elif a.y<-.2 and b.y<-.2:
 			beam(Vector3(a.x,a.y,.36),Vector3(b.x,b.y,.36),.028,Color("3d4945"),holder)
 	# Supports are decorative, angled into the rear cliff and remain behind the
@@ -240,3 +271,9 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	beam(Vector3(width*.27,-.24,-.1),Vector3(width*.10,-.84,-1.0),.085,support_color,holder)
 	if style==1:
 		beam(Vector3(-width*.05,-.18,.36),Vector3(width*.14,-.44,.36),.025,Color("9b8a63"),holder)
+	# Shallow strata are broken into short segments so the ledge reads as a
+	# chipped rock shelf rather than a manufactured board.  They are purely
+	# decorative and sit inside the existing collision polygon.
+	var strata_color := Color("4f554c")
+	beam(Vector3(-width*.34,-.27,.40),Vector3(-width*.08,-.34,.40),.018,strata_color,holder)
+	beam(Vector3(width*.02,-.34,.40),Vector3(width*.30,-.28,.40),.015,strata_color,holder)

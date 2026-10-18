@@ -123,8 +123,7 @@ func _generate_row(index: int) -> void:
 	main_route.append(id)
 	# Stratified jitter avoids empty sides; it is not a fixed ladder of platforms.
 	for column in range(4 if (index%4==2 if sparse_route else index%3==1) else 0):
-		var candidate := Vector2(-15.6+column*10.4+random.randf_range(-.35,.35),point.y+random.randf_range(-.6,.6))
-		candidate.x = clampf(candidate.x,outer_edge(candidate.y,-1)+1,outer_edge(candidate.y,1)-1)
+		var candidate := auxiliary_point(index,column,point,random)
 		if candidate.distance_to(point)<1.45:
 			continue
 		if not branch_allowed(candidate,index): continue
@@ -207,6 +206,11 @@ func _generate_row(index: int) -> void:
 		anchors[reserve]["permanent"] = false
 		anchors[reserve]["broken"] = true
 		rescue_anchors[id] = reserve
+
+func auxiliary_point(_index: int, column: int, point: Vector2, random: RandomNumberGenerator) -> Vector2:
+	var candidate := Vector2(-15.6+column*10.4+random.randf_range(-.35,.35),point.y+random.randf_range(-.6,.6))
+	candidate.x = clampf(candidate.x,outer_edge(candidate.y,-1)+1,outer_edge(candidate.y,1)-1)
+	return candidate
 
 func branch_allowed(point: Vector2, index: int) -> bool:
 	# Keep auxiliary grips out of the primary shot and swing corridor.

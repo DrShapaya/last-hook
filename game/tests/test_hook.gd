@@ -99,7 +99,28 @@ func run_tests() -> void:
 	check(game.bolt_active and not game.bolt_returning and game.hook_flight.age==0,"another throw immediately interrupts recovery")
 	game._update_bolt(.25)
 	check(game.sim.attached,"interrupting recovery does not prevent a new catch")
+	# Stage four launches two slightly fanned lines. The first valid contact
+	# wins; the other line must wind back without creating a second attachment.
+	game.model.profile = GameModel.fresh_profile()
+	game.model.profile["levels"][2] = 4
+	game.start_run(false)
 	clear_shot(game)
+	var dual_target := Vector2(4,22)
+	game.world.add_anchor(dual_target,0)
+	game.fire_hook(game.direction_to_target(dual_target))
+	for index in range(180):
+		game._physics_process(HookFlight.STEP)
+		if game.sim.attached: break
+	var dual_states: Array = []
+	if game.hook_volley!=null:
+		for shot in game.hook_volley.shots: dual_states.append(shot["state"])
+	check(game.sim.attached and dual_states.has("attached") and dual_states.has("returning"),"two-hook volley lets the first valid contact hold while the other returns")
+	for index in range(180):
+		if game.hook_volley==null: break
+		game._physics_process(HookFlight.STEP)
+	check(game.sim.attached and game.hook_volley==null,"losing hook finishes its return without disturbing the caught rope")
+	clear_shot(game)
+	game.model.profile["levels"][2] = 1
 	game.fire_hook(Vector2.RIGHT)
 	game._update_bolt(.8)
 	check(not game.bolt_active and game.bolt_returning and game.bolt_pos.distance_to(game.sim.pos)<=5.501,"a miss stops at the live rope limit and begins winding back")

@@ -111,15 +111,15 @@ func build_result(result: Dictionary) -> void:
 		text(reward,"Основной кошелёк и оснащение сохранены",Vector2(24,178),Vector2(right_width-48,25),12,TEAL)
 	else:
 		eyebrow(reward,"НАГРАДА ЗА ВОСХОЖДЕНИЕ",Vector2(24,18),right_width-48)
-		var rows := [["За высоту",int(result.get("height",0))],["Из рюкзака · %d / %d" % [int(result.get("loot",0)),int(result.get("carried",0))],int(result.get("loot",0))],["Бонус вершины",int(result.get("finish",0))]]
-		for index in range(3):
-			var row_y := 53+index*29
+		var rows := [["За высоту",int(result.get("height",0))],["Из рюкзака · %d / %d" % [int(result.get("loot",0)),int(result.get("carried",0))],int(result.get("loot",0))],["Бонус вершины",int(result.get("finish",0))],["Новые зоны · уже начислено",int(result.get("zone_bonus",0))]]
+		for index in range(rows.size()):
+			var row_y := 45+index*24
 			text(reward,rows[index][0],Vector2(24,row_y),Vector2(right_width-130,25),14,MUTED)
 			text(reward,"+%d" % rows[index][1],Vector2(right_width-112,row_y),Vector2(88,25),15,PAPER,true).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		rule(reward,Vector2(24,148),right_width-48)
 		text(reward,"+%d" % (int(result.get("total",0))+int(result.get("zone_bonus",0))),Vector2(24,163),Vector2(280,40),30,GOLD,true)
 		text(reward,"золота",Vector2(24,204),Vector2(280,16),10,MUTED)
-		var gems := int(result.get("diamonds",0))
+		var gems := int(result.get("diamonds",0))+int(result.get("zone_diamonds",0))
 		if gems>0:
 			symbol(reward,13,Vector2(right_width-114,170),Vector2(28,28),TEAL)
 			text(reward,"+%d" % gems,Vector2(right_width-78,172),Vector2(58,32),23,TEAL,true)

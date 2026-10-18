@@ -55,26 +55,36 @@ class AimOverlay extends Control:
 	var vertical_progress := 0.0
 	var aim_color := Color("f3c668")
 	var trajectory := PackedVector2Array()
+	var branches: Array[Dictionary] = []
 	var animation := 0.0
 	var ui_scale := 1.0
 	func _draw() -> void:
-		if active:
+		if active and branches.size()>1:
+			for branch in branches:
+				draw_trajectory(branch["points"],branch["target"],branch["color"])
+		elif active:
+			draw_trajectory(trajectory,target,aim_color)
+		if control_active:
+			draw_controls()
+
+	func draw_trajectory(points: PackedVector2Array, contact: Vector2, color: Color) -> void:
 			var distance := 0.0
 			var spacing := 14*ui_scale
 			var next_dot := fposmod(animation*28*ui_scale,spacing)
-			for index in range(1,trajectory.size()):
-				var a := trajectory[index-1]
-				var b := trajectory[index]
+			for index in range(1,points.size()):
+				var a := points[index-1]
+				var b := points[index]
 				var segment := a.distance_to(b)
 				while next_dot<=distance+segment:
 					var point := a.lerp(b,clampf((next_dot-distance)/maxf(.001,segment),0,1))
-					var fade := 1-float(index)/maxi(1,trajectory.size())*.55
-					draw_circle(point,2.0*ui_scale,Color(aim_color,fade))
+					var fade := 1-float(index)/maxi(1,points.size())*.55
+					draw_circle(point,2.0*ui_scale,Color(color,fade))
 					next_dot += spacing
 				distance += segment
 			var pulse := (6+sin(animation*5)*.8)*ui_scale
-			draw_arc(target,pulse,animation,animation+TAU*.78,24,aim_color,1.5*ui_scale,true)
-		if control_active:
+			draw_arc(contact,pulse,animation,animation+TAU*.78,24,color,1.5*ui_scale,true)
+
+	func draw_controls() -> void:
 			var color := Color("96d9b4") if vertical_progress>=1 else Color("f3c668")
 			var radius := 48*ui_scale
 			var knob := control_origin+(control_target-control_origin).limit_length(ClimbGesture.STICK_RADIUS*ui_scale)*(48/ClimbGesture.STICK_RADIUS)
@@ -381,7 +391,7 @@ func update_play() -> void:
 	aim_overlay.vertical_progress = float(game.touch_controls.get("vertical_progress",0))
 	aim_overlay.origin = game.camera.unproject_position(Vector3(game.sim.pos.x,game.sim.pos.y,0))
 	var point: Vector2 = game.sim.pos+game.aim_direction*game.model.shot_range()
-	aim_label.text = "Канат: %d / %d м" % [roundi(game.sim.length*10),roundi(game.model.shot_range()*10)] if game.sim.attached else ""
+	aim_label.text = "Канат: %d / %d м" % [roundi(game.sim.length*10),roundi(game.model.shot_range()*10)] if game.sim.attached else "Крюки · "+GameModel.HOOK_NAMES[game.model.level(2)-1]
 	if game.sim.attached:
 		var current: Dictionary = game.world.anchor_by_id(game.anchor_id)
 		if not current.is_empty():
@@ -399,6 +409,14 @@ func update_play() -> void:
 		aim_overlay.trajectory = PackedVector2Array()
 		for sample in shot_preview["points"]:
 			aim_overlay.trajectory.append(game.camera.unproject_position(Vector3(sample.x,sample.y,0)))
+		aim_overlay.branches.clear()
+		for branch in shot_preview.get("branches",[]):
+			var points := PackedVector2Array()
+			for sample in branch["points"]: points.append(game.camera.unproject_position(Vector3(sample.x,sample.y,0)))
+			var hit: Dictionary = branch["collision"]
+			var color := GOLD if hit.is_empty() else Color("ff987f") if hit.get("blocked",false) or not branch["reachable"] else Color("8ae0ac")
+			var contact: Vector2 = branch["contact"]
+			aim_overlay.branches.append({"points":points,"target":game.camera.unproject_position(Vector3(contact.x,contact.y,0)),"color":color})
 		aim_overlay.animation = game.animation_time
 		aim_label.text = "Дуга броска · отпусти для выстрела"
 		var collision: Dictionary = shot_preview["collision"]
@@ -416,9 +434,10 @@ func update_play() -> void:
 					aim_label.text = "Удаляешься от цели — каната не хватит"
 	else:
 		shot_preview.clear()
+		aim_overlay.branches.clear()
 		if game.pressed and game.touch_gesture and not game.sim.attached:
 			aim_label.text = "Потяни от места касания — выбери направление"
-	if game.bolt_active: aim_label.text = "Крюк в полёте · канат разматывается"
+	if game.bolt_active: aim_label.text = GameModel.HOOK_NAMES[game.model.level(2)-1]+" · в полёте"
 	elif game.bolt_returning: aim_label.text = "Крюк возвращается · можно бросать снова"
 	aim_overlay.target = game.camera.unproject_position(Vector3(point.x,point.y,0))
 	aim_overlay.queue_redraw()
@@ -458,6 +477,8 @@ func show_workshop() -> void:
 
 func _buy_upgrade(kind: int) -> void:
 	var message: String = game.model.purchase(kind)
+	if kind==2 and is_instance_valid(game.explorer):
+		game.explorer.set_hook_configuration(game.model.hook_tips(),game.model.hook_count())
 	show_menu()
 	game.toast(message)
 

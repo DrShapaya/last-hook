@@ -1,12 +1,13 @@
 param(
     [ValidateSet('All','Windows','Android')][string]$Target = 'All',
     [string]$AndroidSdkPath = 'C:\Users\isaev\AppData\Local\Android\Sdk',
-    [string]$JavaSdkPath = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.10.7-hotspot'
+    [string]$JavaSdkPath = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.10.7-hotspot',
+    [string]$ProjectPath = ''
 )
 $ErrorActionPreference = 'Stop'
 $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $taskGodot = Join-Path $PSScriptRoot 'godot\Godot_v4.7.2-stable_win64_console.exe'
-$taskProject = Join-Path $taskRoot 'game'
+$taskProject = if ($ProjectPath) { [IO.Path]::GetFullPath($ProjectPath) } else { Join-Path $taskRoot 'game' }
 $taskLocalAndroidSdk = Join-Path $PSScriptRoot 'android-sdk'
 if (-not $PSBoundParameters.ContainsKey('AndroidSdkPath') -and (Test-Path -LiteralPath (Join-Path $taskLocalAndroidSdk 'platform-tools\adb.exe')) -and (Test-Path -LiteralPath (Join-Path $taskLocalAndroidSdk 'platforms\android-36\android.jar'))) {
     $AndroidSdkPath = $taskLocalAndroidSdk
@@ -18,7 +19,9 @@ $env:LASTHOOK_SAVE_DIR = (Join-Path $taskArtifacts 'build-test-profile').Replace
 $env:APPDATA = (Join-Path $taskArtifacts 'build-appdata').Replace('\','/')
 $env:TEMP = Join-Path $taskArtifacts 'build-temp'
 $env:TMP = $env:TEMP
-New-Item -ItemType Directory -Path $env:APPDATA,$env:TEMP -Force | Out-Null
+$env:GRADLE_USER_HOME = Join-Path $taskArtifacts 'gradle-user-home'
+$env:ANDROID_USER_HOME = Join-Path $taskArtifacts 'android-user-home'
+New-Item -ItemType Directory -Path $env:APPDATA,$env:TEMP,$env:GRADLE_USER_HOME,$env:ANDROID_USER_HOME -Force | Out-Null
 
 function Invoke-TaskGodot([string[]]$TaskArguments, [string]$TaskLog) {
     & $taskGodot --path $taskProject --log-file $TaskLog @TaskArguments
@@ -28,6 +31,7 @@ function Invoke-TaskGodot([string[]]$TaskArguments, [string]$TaskLog) {
 
 Invoke-TaskGodot @('--headless','--editor','--import','--quit') (Join-Path $taskArtifacts 'build-import.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_rules.gd') (Join-Path $taskArtifacts 'build-rules.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_progression.gd') (Join-Path $taskArtifacts 'build-progression.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_integration.gd') (Join-Path $taskArtifacts 'build-integration.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_hook.gd') (Join-Path $taskArtifacts 'build-hook.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_controls.gd') (Join-Path $taskArtifacts 'build-controls.log')
@@ -58,7 +62,12 @@ if ($Target -in @('All','Android')) {
     }
     foreach ($taskSettingName in $taskSettingValues.Keys) {
         $taskReplacement = $taskSettingName + ' = "' + $taskSettingValues[$taskSettingName] + '"'
-        $taskSettingsText = [regex]::Replace($taskSettingsText, '(?m)^' + [regex]::Escape($taskSettingName) + ' = .*$', [System.Text.RegularExpressions.MatchEvaluator]{ param($taskMatch) $taskReplacement })
+        $taskSettingMatch = '(?m)^' + [regex]::Escape($taskSettingName) + ' = .*\r?$'
+        if ([regex]::IsMatch($taskSettingsText, $taskSettingMatch)) {
+            $taskSettingsText = [regex]::Replace($taskSettingsText, $taskSettingMatch, $taskReplacement.Replace('$', '$$'))
+        } else {
+            $taskSettingsText += "`n" + $taskReplacement + "`n"
+        }
     }
     [IO.File]::WriteAllText($taskSettings, $taskSettingsText, [Text.UTF8Encoding]::new($false))
     $taskAndroid = Join-Path $taskRoot 'Builds\Android'

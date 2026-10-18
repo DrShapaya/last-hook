@@ -1,0 +1,328 @@
+{
+  "current": {
+    "status": "assumption_based_sensitivity_probe_not_playtest",
+    "target_minutes": [
+      210,
+      420
+    ],
+    "trials_per_policy": 100,
+    "seed_start": 7319,
+    "shared_assumptions": {
+      "transfer_rise": 3,
+      "summit_transfers": 40,
+      "menu_seconds_per_run": 18,
+      "menu_seconds_per_purchase": 6,
+      "loot_chance_per_two_transfers": 0.72,
+      "rare_find_probability": 0.2,
+      "movement_skill_per_level": 0.0015,
+      "movement_pace_per_level": 0.017,
+      "revives": false,
+      "exclusions": "No geometry/input simulation or location purchases. Real human pace may differ."
+    },
+    "assumptions": {
+      "beginner": {
+        "initial_transfer_success": 0.88,
+        "learned_transfer_success": 0.975,
+        "seconds_per_transfer": 6.2,
+        "replacement_probability": 0.25
+      },
+      "regular": {
+        "initial_transfer_success": 0.94,
+        "learned_transfer_success": 0.988,
+        "seconds_per_transfer": 5.0,
+        "replacement_probability": 0.65
+      },
+      "experienced": {
+        "initial_transfer_success": 0.975,
+        "learned_transfer_success": 0.995,
+        "seconds_per_transfer": 4.2,
+        "replacement_probability": 0.9
+      }
+    },
+    "results": {
+      "beginner_movement": {
+        "first_buy_minutes": 2.0,
+        "first_summit_minutes": 32.8,
+        "purchases_25_minutes": 10.9,
+        "purchases_50_minutes": 40.0,
+        "purchases_75_minutes": 119.8,
+        "full_kit_minutes": 239.5,
+        "runs": 96.0,
+        "all_completed": true
+      },
+      "beginner_loot": {
+        "first_buy_minutes": 2.0,
+        "first_summit_minutes": 32.7,
+        "purchases_25_minutes": 10.7,
+        "purchases_50_minutes": 39.0,
+        "purchases_75_minutes": 119.1,
+        "full_kit_minutes": 235.3,
+        "runs": 95.5,
+        "all_completed": true
+      },
+      "regular_movement": {
+        "first_buy_minutes": 2.0,
+        "first_summit_minutes": 10.9,
+        "purchases_25_minutes": 6.2,
+        "purchases_50_minutes": 20.7,
+        "purchases_75_minutes": 63.0,
+        "full_kit_minutes": 128.4,
+        "runs": 51.0,
+        "all_completed": true
+      },
+      "regular_loot": {
+        "first_buy_minutes": 2.0,
+        "first_summit_minutes": 11.3,
+        "purchases_25_minutes": 5.7,
+        "purchases_50_minutes": 20.2,
+        "purchases_75_minutes": 62.9,
+        "full_kit_minutes": 125.1,
+        "runs": 50.0,
+        "all_completed": true
+      },
+      "experienced_movement": {
+        "first_buy_minutes": 2.8,
+        "first_summit_minutes": 4.6,
+        "purchases_25_minutes": 3.9,
+        "purchases_50_minutes": 12.5,
+        "purchases_75_minutes": 40.1,
+        "full_kit_minutes": 89.7,
+        "runs": 36.0,
+        "all_completed": true
+      },
+      "experienced_loot": {
+        "first_buy_minutes": 2.8,
+        "first_summit_minutes": 4.9,
+        "purchases_25_minutes": 3.9,
+        "purchases_50_minutes": 12.3,
+        "purchases_75_minutes": 39.6,
+        "full_kit_minutes": 87.3,
+        "runs": 35.0,
+        "all_completed": true
+      }
+    },
+    "repeat_height_gold": {
+      "200m": 40,
+      "1200m": 540
+    },
+    "prices_by_track": [
+      [
+        90,
+        450,
+        1800,
+        5400,
+        9000
+      ],
+      [
+        90,
+        450,
+        1800,
+        5400,
+        9000
+      ],
+      [
+        900,
+        4800
+      ],
+      [
+        99,
+        495,
+        1980,
+        5940,
+        9900
+      ],
+      [
+        68,
+        338,
+        1350,
+        4050,
+        6750
+      ],
+      [
+        81,
+        405,
+        1620,
+        4860,
+        8100
+      ],
+      [
+        90,
+        450,
+        1800,
+        5400,
+        9000
+      ]
+    ],
+    "total_upgrade_gold": 101956,
+    "last_level_share": 0.538,
+    "controlled_reset_gold_per_cycle_minute": {
+      "200": 60.6,
+      "400": 79.6,
+      "800": 125.6,
+      "1200": 315.8
+    }
+  },
+  "previous": {
+    "status": "assumption_based_sensitivity_probe_not_playtest",
+    "target_minutes": [
+      210,
+      420
+    ],
+    "trials_per_policy": 100,
+    "seed_start": 7319,
+    "shared_assumptions": {
+      "transfer_rise": 3,
+      "summit_transfers": 40,
+      "menu_seconds_per_run": 18,
+      "menu_seconds_per_purchase": 6,
+      "loot_chance_per_two_transfers": 0.72,
+      "rare_find_probability": 0.2,
+      "movement_skill_per_level": 0.0015,
+      "movement_pace_per_level": 0.017,
+      "revives": false,
+      "exclusions": "No geometry/input simulation or location purchases. Real human pace may differ."
+    },
+    "assumptions": {
+      "beginner": {
+        "initial_transfer_success": 0.88,
+        "learned_transfer_success": 0.975,
+        "seconds_per_transfer": 6.2,
+        "replacement_probability": 0.25
+      },
+      "regular": {
+        "initial_transfer_success": 0.94,
+        "learned_transfer_success": 0.988,
+        "seconds_per_transfer": 5.0,
+        "replacement_probability": 0.65
+      },
+      "experienced": {
+        "initial_transfer_success": 0.975,
+        "learned_transfer_success": 0.995,
+        "seconds_per_transfer": 4.2,
+        "replacement_probability": 0.9
+      }
+    },
+    "results": {
+      "beginner_movement": {
+        "first_buy_minutes": 2.0,
+        "first_summit_minutes": 31.6,
+        "purchases_25_minutes": 8.3,
+        "purchases_50_minutes": 32.3,
+        "purchases_75_minutes": 86.8,
+        "full_kit_minutes": 284.1,
+        "runs": 109.0,
+        "all_completed": true
+      },
+      "beginner_loot": {
+        "first_buy_minutes": 2.0,
+        "first_summit_minutes": 32.7,
+        "purchases_25_minutes": 8.2,
+        "purchases_50_minutes": 31.6,
+        "purchases_75_minutes": 85.0,
+        "full_kit_minutes": 279.5,
+        "runs": 107.0,
+        "all_completed": true
+      },
+      "regular_movement": {
+        "first_buy_minutes": 2.0,
+        "first_summit_minutes": 10.3,
+        "purchases_25_minutes": 4.9,
+        "purchases_50_minutes": 15.9,
+        "purchases_75_minutes": 43.6,
+        "full_kit_minutes": 152.7,
+        "runs": 59.0,
+        "all_completed": true
+      },
+      "regular_loot": {
+        "first_buy_minutes": 2.0,
+        "first_summit_minutes": 10.9,
+        "purchases_25_minutes": 4.9,
+        "purchases_50_minutes": 15.6,
+        "purchases_75_minutes": 43.6,
+        "full_kit_minutes": 149.0,
+        "runs": 59.0,
+        "all_completed": true
+      },
+      "experienced_movement": {
+        "first_buy_minutes": 2.8,
+        "first_summit_minutes": 4.6,
+        "purchases_25_minutes": 3.9,
+        "purchases_50_minutes": 10.2,
+        "purchases_75_minutes": 27.7,
+        "full_kit_minutes": 107.8,
+        "runs": 44.0,
+        "all_completed": true
+      },
+      "experienced_loot": {
+        "first_buy_minutes": 2.8,
+        "first_summit_minutes": 4.9,
+        "purchases_25_minutes": 3.9,
+        "purchases_50_minutes": 10.1,
+        "purchases_75_minutes": 27.0,
+        "full_kit_minutes": 105.7,
+        "runs": 43.0,
+        "all_completed": true
+      }
+    },
+    "repeat_height_gold": {
+      "200m": 40,
+      "1200m": 540
+    },
+    "prices_by_track": [
+      [
+        90,
+        300,
+        1000,
+        3200,
+        15500
+      ],
+      [
+        90,
+        300,
+        1000,
+        3200,
+        15500
+      ],
+      [
+        2400,
+        12000
+      ],
+      [
+        99,
+        330,
+        1100,
+        3520,
+        17050
+      ],
+      [
+        68,
+        225,
+        750,
+        2400,
+        11625
+      ],
+      [
+        81,
+        270,
+        900,
+        2880,
+        13950
+      ],
+      [
+        90,
+        300,
+        1000,
+        3200,
+        15500
+      ]
+    ],
+    "total_upgrade_gold": 129918,
+    "last_level_share": 0.772,
+    "controlled_reset_gold_per_cycle_minute": {
+      "200": 60.6,
+      "400": 79.6,
+      "800": 125.6,
+      "1200": 315.8
+    }
+  }
+}

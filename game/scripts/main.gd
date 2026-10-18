@@ -29,6 +29,8 @@ var bolt_origin := Vector2.ZERO
 var bolt_direction := Vector2.UP
 var bolt_travel := 0.0
 var hook_flight := HookFlight.new()
+var hook_volley: HookVolley
+var volley_primary := 0
 var bolt_returning := false
 var return_velocity := Vector2.ZERO
 var shot_serial := 0
@@ -72,6 +74,7 @@ var shots := 0
 var catches := 0
 var failure_reason := ""
 var zone_gold := 0
+var zone_diamonds := 0
 var practice_return_model: GameModel
 var ads := AdsService.new()
 var ad_revive_run_id := ""
@@ -117,7 +120,7 @@ func _ready() -> void:
 			if dimensions.size()==2:
 				get_window().size = Vector2i(maxi(320,int(dimensions[0])),maxi(320,int(dimensions[1])))
 		if argument.begins_with("--tips="):
-			capture_tips = clampi(int(argument.trim_prefix("--tips=")),1,3)
+			capture_tips = clampi(int(argument.trim_prefix("--tips=")),1,4)
 		if argument=="--overview": capture_overview = true
 		if argument=="--left": capture_left = true
 	if not capture_path.is_empty():
@@ -297,7 +300,8 @@ func _create_world(seed_number: int, location_number: int, height: float, saved_
 	world.generate_to(height,run_mode in ["summit","practice"],summit_height)
 	explorer = ExplorerView.new()
 	add_child(explorer)
-	explorer.setup(world)
+	explorer.setup(world,model.hook_tips())
+	explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
 
 func start_run(endless: bool) -> void:
 	if ads.fullscreen: return
@@ -328,6 +332,8 @@ func start_run(endless: bool) -> void:
 	bolt_active = false
 	bolt_returning = false
 	hook_flight = HookFlight.new()
+	hook_volley = null
+	volley_primary = 0
 	focus_remaining = .7
 	camera_y = 4.8
 	camera_x = 0
@@ -339,6 +345,7 @@ func start_run(endless: bool) -> void:
 	catches = 0
 	failure_reason = ""
 	zone_gold = 0
+	zone_diamonds = 0
 	_reset_input()
 	hud.show_play()
 	if "aim" not in model.profile["learned_controls"]:
@@ -361,7 +368,7 @@ func resume_run() -> void:
 	if snapshot.is_empty():
 		return
 	var saved_version := int(snapshot.get("generation_version",0))
-	var compatible_old := saved_version in [6,7,8,9] and int(snapshot.get("location",0))==0
+	var compatible_old := saved_version in [6,7,8,9,10] and int(snapshot.get("location",0))==0
 	if not compatible_old and saved_version!=MountainWorld.generation_version_for(int(snapshot.get("location",0))):
 		# Old contact IDs describe another route: settle its earned rewards once.
 		model.bag = snapshot.get("bag",[]).duplicate(true)
@@ -390,6 +397,7 @@ func resume_run() -> void:
 	catches = int(snapshot.get("catches",0))
 	failure_reason = snapshot.get("failure_reason","")
 	zone_gold = int(snapshot.get("zone_gold",0))
+	zone_diamonds = int(snapshot.get("zone_diamonds",0))
 	sim.launched = bool(snapshot["launched"])
 	sim.grounded = bool(snapshot.get("grounded",false))
 	anchor_id = int(snapshot["anchor_id"])
@@ -441,6 +449,12 @@ func resume_run() -> void:
 	hook_flight.trail = PackedVector2Array([bolt_pos])
 	bolt_returning = bool(snapshot.get("bolt_returning",false)) and not sim.attached and not bolt_active
 	return_velocity = Vector2(snapshot.get("return_vx",0),snapshot.get("return_vy",0))
+	hook_volley = null
+	if snapshot.get("hook_volley",[]).size()==2:
+		hook_volley = HookVolley.new()
+		hook_volley.restore(snapshot["hook_volley"])
+		volley_primary = clampi(int(snapshot.get("volley_primary",0)),0,1)
+		_sync_volley()
 	camera_y = float(snapshot.get("camera_y",maxf(4.8,sim.pos.y+2.5)))
 	camera_x = float(snapshot.get("camera_x",sim.pos.x))
 	_position_camera()
@@ -627,6 +641,12 @@ func fire_hook(direction: Vector2) -> void:
 	bolt_travel = 0
 	bolt_returning = false
 	hook_flight.launch(sim.pos,bolt_direction,model.value("throw_speeds",GameModel.THROW),sim.vel)
+	hook_volley = null
+	volley_primary = 0
+	if model.hook_count()==2:
+		hook_volley = HookVolley.new()
+		hook_volley.launch(sim.pos,model.hook_directions(direction),model.value("throw_speeds",GameModel.THROW),sim.vel)
+		_sync_volley()
 	shot_serial += 1
 	_hook_sound("launch")
 
@@ -652,6 +672,20 @@ func _advance_forecast(forecast: RopeSim, dt: float) -> void:
 	forecast.grounded = motion["grounded"]
 
 func predict_shot(direction: Vector2) -> Dictionary:
+	var branches: Array[Dictionary] = []
+	var selected := 0
+	var first_contact := INF
+	for shot_direction in model.hook_directions(direction):
+		var branch := _predict_single_shot(shot_direction)
+		branches.append(branch)
+		if branch["reachable"] and not branch["collision"].is_empty() and not branch["collision"].get("blocked",false) and float(branch["time"])<first_contact:
+			selected = branches.size()-1
+			first_contact = float(branch["time"])
+	var result := branches[selected].duplicate()
+	result["branches"] = branches
+	return result
+
+func _predict_single_shot(direction: Vector2) -> Dictionary:
 	var flight := HookFlight.new()
 	flight.launch(sim.pos,direction,model.value("throw_speeds",GameModel.THROW),sim.vel)
 	var forecast := _shot_forecast_hero()
@@ -712,6 +746,9 @@ func release_hook(keep_primary: bool = false) -> void:
 		safe_anchor_id = -1
 		safe_position = Vector2(0,START_Y)
 	sim.release(factor)
+	if hook_volley!=null:
+		for shot in hook_volley.shots:
+			if shot["state"]=="attached": shot["state"] = "idle"
 	anchor_id = -1
 	focus_remaining = .7
 	_sound(310,.07)
@@ -786,7 +823,9 @@ func _physics_process(delta: float) -> void:
 	if below_screen():
 		fail_run("Упал ниже экрана")
 		return
-	if bolt_active:
+	if hook_volley!=null:
+		_update_volley(step)
+	elif bolt_active:
 		_update_bolt(step)
 	elif bolt_returning:
 		_update_return(step)
@@ -799,8 +838,10 @@ func _physics_process(delta: float) -> void:
 		model.profile["best"] = maxf(float(model.profile["best"]),maxf(0,sim.highest-START_Y)*10)
 	else:
 		var bank_before := int(model.profile["gold"])
+		var diamonds_before := int(model.profile["diamonds"])
 		var opened := model.reach(maxf(0,sim.highest-START_Y))
 		zone_gold += int(model.profile["gold"])-bank_before
+		zone_diamonds += int(model.profile["diamonds"])-diamonds_before
 		if not opened.is_empty():
 			var zone_reward := int(model.profile["gold"])-bank_before
 			var unlock := "Ступень %d · +%d золота" % [opened[-1]+1,zone_reward] if opened[-1]>=2 else "+%d золота за новую зону" % zone_reward
@@ -814,6 +855,9 @@ func _physics_process(delta: float) -> void:
 		world.generate_to(world.generated_height+40,false)
 
 func _update_bolt(step: float) -> void:
+	if hook_volley!=null:
+		_update_volley(step)
+		return
 	# Substeps sweep every piece of the arc, including at low frame rates.
 	var remaining := step
 	while remaining>.00001 and bolt_active:
@@ -842,29 +886,80 @@ func _update_bolt(step: float) -> void:
 			if world.rope_blocked(sim.pos,contact):
 				_begin_hook_return("Выступ перекрывает канат до опоры",Vector2.ZERO,"rock")
 				return
-			bolt_active = false
-			bolt_returning = false
-			anchor_contact = contact
-			sim.attach(contact,model.value("rope_lengths",0),true)
-			model.learn_control("aim")
-			catches += 1
-			anchor_id = hit["id"]
-			anchor_time = 0
-			focus_remaining = .7
-			if hint_context=="release": hint_timer = 0
-			if pressed:
-				_recenter_climb_control()
-			if int(hit["kind"]) in [0,2] and hit.get("permanent",true) and (world.generation_version<9 or hit.get("primary",false)):
-				safe_anchor_id = anchor_id
-				safe_position = sim.pos
-				safe_contact = contact
-			_register_hook_impact(contact,"catch")
-			_hook_sound("catch")
+			_catch_contact(hit,contact)
 			return
 		if fraction<1 or hook_flight.age>2.0:
 			hook_flight.position = bolt_pos
 			hook_flight.trail[-1] = bolt_pos
 			_begin_hook_return("Канат размотан — крюк возвращается")
+
+func _catch_contact(hit: Dictionary, contact: Vector2) -> void:
+	bolt_active = false
+	bolt_returning = false
+	anchor_contact = contact
+	sim.attach(contact,model.value("rope_lengths",0),true)
+	model.learn_control("aim")
+	catches += 1
+	anchor_id = hit["id"]
+	anchor_time = 0
+	focus_remaining = .7
+	if hint_context=="release": hint_timer = 0
+	if pressed: _recenter_climb_control()
+	if int(hit["kind"]) in [0,2] and hit.get("permanent",true) and (world.generation_version<9 or hit.get("primary",false)):
+		safe_anchor_id = anchor_id
+		safe_position = sim.pos
+		safe_contact = contact
+	_register_hook_impact(contact,"catch")
+	_hook_sound("catch")
+
+func _sync_volley() -> void:
+	if hook_volley==null: return
+	bolt_active = hook_volley.has_state("flying")
+	bolt_returning = hook_volley.has_state("returning")
+	if not sim.attached and hook_volley.shots[volley_primary]["state"] not in ["flying","returning"]:
+		for index in range(hook_volley.shots.size()):
+			if hook_volley.shots[index]["state"] in ["flying","returning"]:
+				volley_primary = index
+				break
+	var shot: Dictionary = hook_volley.shots[volley_primary]
+	hook_flight = shot["flight"]
+	bolt_pos = hook_flight.position
+	bolt_direction = hook_flight.velocity.normalized()
+	return_velocity = shot["return_velocity"]
+
+func _update_volley(step: float) -> void:
+	var remaining := step
+	while remaining>.00001:
+		var dt := minf(remaining,HookFlight.STEP)
+		remaining -= dt
+		var events := hook_volley.advance(dt,sim.pos,world,model.shot_range(),model.hook_radius())
+		for event in events:
+			var index: int = event["index"]
+			if hook_volley.shots[index]["state"]!="contact": continue
+			var collision: Dictionary = event["collision"]
+			var contact: Vector2 = collision["contact"]
+			var flight: HookFlight = hook_volley.shots[index]["flight"]
+			if collision.get("blocked",false):
+				hook_volley.return_shot(index,flight.velocity.bounce(collision.get("normal",Vector2.DOWN))*.22)
+				_register_hook_impact(contact,"rock")
+				_hook_sound("rock")
+				continue
+			if sim.attached or sim.pos.distance_to(contact)>model.shot_range()+.001 or world.rope_blocked(sim.pos,contact):
+				hook_volley.return_shot(index)
+				continue
+			volley_primary = index
+			hook_volley.catch_shot(index,int(collision["object"]["id"]),contact)
+			_catch_contact(collision["object"],contact)
+			# First valid contact wins. The other line winds back without ever
+			# catching, pulling, consuming an anchor, or awarding another catch.
+			for other in range(hook_volley.shots.size()):
+				if other!=index and hook_volley.shots[other]["state"] in ["flying","contact"]:
+					hook_volley.return_shot(other)
+		_sync_volley()
+	if not bolt_active and not bolt_returning:
+		# Once the losing line reaches the hand, keep the ordinary single rope
+		# renderer for an attached catch and discard the volley state.
+		hook_volley = null
 
 func _register_hook_impact(point: Vector2, kind: String) -> void:
 	impact_serial += 1
@@ -881,6 +976,9 @@ func _begin_hook_return(message: String, rebound := Vector2.ZERO, kind := "limit
 	toast(message,1.3,"hook")
 
 func _update_return(dt: float) -> void:
+	if hook_volley!=null:
+		_update_volley(dt)
+		return
 	# Recovery is quick and can be interrupted by the next throw. It never
 	# catches anchors or pulls the player while winding back into the hand.
 	var previous := bolt_pos
@@ -899,10 +997,25 @@ func _update_return(dt: float) -> void:
 
 func _collect_finds() -> void:
 	var radius := .54+model.value("magnet_radii",4)
+	var candidates: Array[Dictionary] = []
 	for find in world.finds:
 		if bool(find.get("picked",false)) or sim.pos.distance_to(find["pos"])>radius:
 			continue
 		if world.rope_blocked(sim.pos,find["pos"]): continue
+		candidates.append(find)
+	# Direct contact is deliberate. Among magnetic finds, prefer value over
+	# generator order so an upgraded magnet does not waste the last free slot.
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var a_touch := sim.pos.distance_squared_to(a["pos"])<=.54*.54
+		var b_touch := sim.pos.distance_squared_to(b["pos"])<=.54*.54
+		if a_touch!=b_touch: return a_touch
+		if int(a["item"]["value"])!=int(b["item"]["value"]):
+			return int(a["item"]["value"])>int(b["item"]["value"])
+		var da := sim.pos.distance_squared_to(a["pos"])
+		var db := sim.pos.distance_squared_to(b["pos"])
+		return int(a["item"]["id"])<int(b["item"]["id"]) if is_equal_approx(da,db) else da<db)
+	for find in candidates:
+		if model.bag.size()>=model.level(3): break
 		if model.try_pick(find["item"]):
 			find["picked"] = true
 			if is_instance_valid(find.get("visual")): find["visual"].visible = false
@@ -1037,9 +1150,10 @@ func finish_run(success: bool) -> void:
 	settlement["shots"] = shots
 	settlement["catches"] = catches
 	settlement["zone_bonus"] = zone_gold
+	settlement["zone_diamonds"] = zone_diamonds
 	if not preview:
 		model.profile["run_history"].append({"id":run_id,"seed":run_seed,"seconds":snappedf(run_seconds,.1),"height":settlement["highest"],"gold":int(settlement["total"])+zone_gold,"zone_bonus":zone_gold,"success":success,"shots":shots,"catches":catches,"reason":failure_reason,"levels":model.profile["levels"].duplicate()})
-		model.profile["run_history"][-1].merge({"build":GameModel.BUILD_VERSION,"mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"diamond_reward":settlement["diamonds"],"first_summit":settlement["first"]})
+		model.profile["run_history"][-1].merge({"build":GameModel.BUILD_VERSION,"mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"diamond_reward":settlement["diamonds"],"zone_diamonds":zone_diamonds,"first_summit":settlement["first"]})
 		model.profile["run_history"] = model.profile["run_history"].slice(-30)
 		model.save()
 	hud.show_result(settlement)
@@ -1131,7 +1245,7 @@ func save_snapshot() -> void:
 		"camera_y":camera_y,"camera_x":camera_x,
 		"x":sim.pos.x,"y":sim.pos.y,"vx":sim.vel.x,"vy":sim.vel.y,"length":sim.length,"target_length":sim.target_length,"reel_velocity":sim.reel_velocity,
 		"highest":sim.highest,"flight_peak":sim.flight_peak,"launched":sim.launched,"grounded":sim.grounded,
-		"run_seconds":run_seconds,"shots":shots,"catches":catches,"failure_reason":failure_reason,"zone_gold":zone_gold,
+		"run_seconds":run_seconds,"shots":shots,"catches":catches,"failure_reason":failure_reason,"zone_gold":zone_gold,"zone_diamonds":zone_diamonds,
 		"anchor_id":anchor_id,"anchor_time":anchor_time,"contact_x":anchor_contact.x,"contact_y":anchor_contact.y,"rope_pivots":pivots,
 		"safe_contact_x":safe_contact.x,"safe_contact_y":safe_contact.y,"focus_remaining":focus_remaining,"safe_anchor_id":safe_anchor_id,
 		"safe_x":safe_position.x,"safe_y":safe_position.y,"revive_used":revive_used,"awaiting_revive":state=="revive","ad_revive_earned":ad_revive_pending,
@@ -1140,6 +1254,8 @@ func save_snapshot() -> void:
 		"bolt_dx":bolt_direction.x,"bolt_dy":bolt_direction.y,"bolt_travel":bolt_travel,
 		"bolt_vx":hook_flight.velocity.x,"bolt_vy":hook_flight.velocity.y,"bolt_age":hook_flight.age,
 		"bolt_returning":bolt_returning,"return_vx":return_velocity.x,"return_vy":return_velocity.y}
+	model.profile["active"]["hook_volley"] = hook_volley.snapshot() if hook_volley!=null else []
+	model.profile["active"]["volley_primary"] = volley_primary
 	model.save()
 
 func _notification(what: int) -> void:
@@ -1209,7 +1325,15 @@ func _process(delta: float) -> void:
 	var shot_visual := {"velocity":return_velocity if bolt_returning else hook_flight.velocity,"age":hook_flight.age,
 		"trail":hook_flight.trail,"returning":bolt_returning,"shot":shot_serial,"impact":impact_serial,
 		"impact_position":hook_impact,"impact_kind":hook_impact_kind,"aiming":pressed and not sim.attached and not bolt_active,"aim":aim_direction}
-	explorer.draw(sim,target,sim.attached or bolt_active or bolt_returning,bolt_active or bolt_returning,animation_time,warning,model.level(2),shot_visual)
+	shot_visual["hook_count"] = model.hook_count()
+	if hook_volley!=null:
+		var volley_visual: Array = []
+		for shot in hook_volley.shots:
+			var volley_flight: HookFlight = shot["flight"]
+			volley_visual.append({"state":shot["state"],"position":volley_flight.position,"velocity":volley_flight.velocity,
+				"age":volley_flight.age,"trail":volley_flight.trail,"returning":shot["state"]=="returning"})
+		shot_visual["volley"] = volley_visual
+	explorer.draw(sim,target,sim.attached or bolt_active or bolt_returning,bolt_active or bolt_returning,animation_time,warning,model.hook_tips(),shot_visual)
 	hud.update_play()
 	if not capture_path.is_empty() and elapsed>1.1 and not capture_queued:
 		capture_queued = true

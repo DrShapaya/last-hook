@@ -150,24 +150,25 @@ func build_upgrade(kind: int, at: Vector2, dimensions: Vector2, active: bool) ->
 	var locked := not maximum and not model.upgrade_available(kind)
 	var can_buy := not active and not locked and not maximum and int(model.profile["gold"])>=model.cost(kind)
 	var accent: Color = [GOLD,Color("dfa97a"),TEAL,Color("bfcd96"),Color("a4c5cf"),Color("c2afd3"),GOLD][kind]
-	var short_names := ["Длина каната","Импульс","Наконечники","Рюкзак","Магнит","Защита добычи","Сила броска"]
+	var short_names := ["Длина каната","Импульс","Крюки","Рюкзак","Магнит","Защита добычи","Сила броска"]
 	symbol(frame,kind,Vector2(14,15),Vector2(28,28),accent)
 	text(frame,short_names[kind],Vector2(52,13),Vector2(dimensions.x-64,24),15,PAPER,true)
-	text(frame,"УРОВЕНЬ %d / %d" % [level,model.max_level(kind)],Vector2(53,39),Vector2(dimensions.x-65,18),10,MUTED)
-	var effects := ["%d м" % int(model.value("rope_lengths",0)*10),"+%d%%" % roundi((model.value("impulse_factors",1)-1)*100),"%d наконечн." % model.level(2),"%d слотов" % model.level(3),"При касании" if model.level(4)==1 else "%d м" % int(model.value("magnet_radii",4)*10),"%d%%" % int(model.value("recovery_percents",5)),"%d м/с" % int(model.value("throw_speeds",GameModel.THROW)*10)]
-	text(frame,effects[kind],Vector2(15,61),Vector2(138,29),20,accent,true)
+	text(frame,"ШИРИНА ЗАЦЕПА / ДВОЙНОЙ БРОСОК" if kind==2 else "УРОВЕНЬ %d / %d" % [level,model.max_level(kind)],Vector2(53,39),Vector2(dimensions.x-65,18),10,MUTED)
+	var hook_effect: String = GameModel.HOOK_NAMES[level-1] if kind==2 else ""
+	var effects := ["%d м" % int(model.value("rope_lengths",0)*10),"+%d%%" % roundi((model.value("impulse_factors",1)-1)*100),hook_effect,"%d слотов" % model.level(3),"При касании" if model.level(4)==1 else "%d м" % int(model.value("magnet_radii",4)*10),"%d%%" % int(model.value("recovery_percents",5)),"%d м/с" % int(model.value("throw_speeds",GameModel.THROW)*10)]
+	text(frame,GameModel.HOOK_NAMES[level-1] if kind==2 else effects[kind],Vector2(15,61),Vector2(138,29),16 if kind==2 else 20,accent,true)
 	if not maximum:
-		var next_values := ["%d м" % int(model.balance["rope_lengths"][mini(level,5)]*10),"+%d%%" % roundi((float(model.balance["impulse_factors"][mini(level,5)])-1)*100),str(mini(level+1,3)),str(level+1),"%d м" % int(model.balance["magnet_radii"][mini(level,5)]*10),"%d%%" % int(model.balance["recovery_percents"][mini(level,5)]),str(int(model.balance["throw_speeds"][mini(level,5)]*10))]
-		text(frame,"→ "+next_values[kind],Vector2(148,69),Vector2(dimensions.x-164,23),12,MUTED).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		var next_values := ["%d м" % int(model.balance["rope_lengths"][mini(level,5)]*10),"+%d%%" % roundi((float(model.balance["impulse_factors"][mini(level,5)])-1)*100),GameModel.HOOK_NAMES[mini(level,3)],str(level+1),"%d м" % int(model.balance["magnet_radii"][mini(level,5)]*10),"%d%%" % int(model.balance["recovery_percents"][mini(level,5)]),str(int(model.balance["throw_speeds"][mini(level,5)]*10))]
+		text(frame,"→ "+(str(level+1) if kind==2 else next_values[kind]),Vector2(148,69),Vector2(dimensions.x-164,23),12,MUTED).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	var meter := UpgradeMeter.new()
 	meter.filled = level
 	meter.total = model.max_level(kind)
-	meter.unlocked = 3 if kind==2 else model.unlocked_upgrade_level()
+	meter.unlocked = model.max_level(kind) if kind==2 else model.unlocked_upgrade_level()
 	meter.position = Vector2(16,dimensions.y-58)
 	meter.size = Vector2(dimensions.x-32,5)
 	meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	frame.add_child(meter)
-	var value := "Максимум" if maximum else "После попытки" if active else "Новая зона · %d" % (level+1) if locked else "Улучшить · %d" % model.cost(kind)
+	var value := "Максимум" if maximum else "После попытки" if active else "Достигни %d м" % roundi(level*float(model.balance["zone_units"])*float(model.balance["meters_per_unit"])) if locked else "Улучшить · %d" % model.cost(kind)
 	var purchase := action(frame,value,Vector2(10,dimensions.y-48),Vector2(dimensions.x-20,44),hud._buy_upgrade.bind(kind),"primary" if can_buy else "secondary")
 	purchase.add_theme_font_size_override("font_size",13)
 	purchase.disabled = not can_buy
@@ -190,7 +191,7 @@ func build_settings() -> void:
 	var instructions := [["01","Брось крюк","Коснись где удобно, потяни как стик и отпусти."],["02","Раскачайся","На канате веди палец влево или вправо."],["03","Выбери длину","Держи строго вверх / вниз 0,28 секунды."],["04","Отцепись","Отпусти палец. Новый бросок — новое касание."]]
 	if not hud.touch_controls_hint:
 		instructions = [["01","Раскачайся","A / D или стрелки влево / вправо."],["02","Выбери длину","W / S или колесо мыши."],["03","Перелети","Пробел — отпустить. ЛКМ — прицел и бросок."]]
-	for index in range(3):
+	for index in range(instructions.size()):
 		var row_y := 104+index*(46 if instructions.size()==4 else 62)
 		text(help,instructions[index][0],Vector2(24,row_y),Vector2(35,27),14,TEAL,true)
 		text(help,instructions[index][1],Vector2(68,row_y-2),Vector2(400,25),16,PAPER,true)

@@ -56,9 +56,9 @@ func run_tests() -> void:
 		check(game.bolt_active,"a real pointer gesture fires after the resize: %s" % dimensions)
 		game.sim.attached = true
 		game.sim.anchor = game.sim.pos+Vector2(1,3)
-		game.model.profile["levels"][2] = 3
+		game.model.profile["levels"][2] = 4
 		game._process(.016)
-		check(game.explorer.bolt.visible and game.explorer.tip_count==3,"attached rope keeps the three-prong hook visible: %s" % dimensions)
+		check(game.explorer.bolt.visible and game.explorer.tip_count==3 and game.explorer.hook_count==2,"attached rope keeps the two triple hooks visible: %s" % dimensions)
 		var ends := mesh_ends(game.explorer.rope)
 		check(ends[0].distance_to(game.explorer.body.grip_position())<.001 and ends[1].distance_to(game.explorer.bolt.to_global(ExplorerView.HOOK_EYE))<.001,"rendered braided rope joins the actual hand and hook eyelet: %s" % dimensions)
 		game.bolt_active = true

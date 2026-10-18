@@ -4,6 +4,16 @@ extends Control
 var kind := 0
 var tint := Color("f3c668")
 var tip_count := 3
+var hook_count := 1
+
+func hook_icon(offset: Vector2) -> void:
+	draw_set_transform(size*.5+offset*minf(size.x,size.y)/32,0,Vector2.ONE*minf(size.x,size.y)/32*(.58 if hook_count==2 else 1.0))
+	draw_arc(Vector2(0,10),2.5,0,TAU,20,tint,2,true)
+	stroke([Vector2(0,7),Vector2(0,-8)],2.2)
+	stroke([Vector2(-3,-5),Vector2(0,-12),Vector2(3,-5)],2.2)
+	if tip_count==3:
+		for side in [-1,1]:
+			stroke([Vector2(0,0),Vector2(side*5,-6),Vector2(side*8,-6),Vector2(side*12,-1),Vector2(side*11,4),Vector2(side*8,0)],2.2)
 
 func stroke(points: Array, width: float = 2.0, color: Color = Color.TRANSPARENT) -> void:
 	draw_polyline(PackedVector2Array(points),tint if color==Color.TRANSPARENT else color,width,true)
@@ -28,13 +38,10 @@ func _draw() -> void:
 			stroke([Vector2(-12,6),Vector2(-8,6)],1.5,Color(tint,.55))
 			stroke([Vector2(7,-9),Vector2(12,-9)],1.5,Color(tint,.55))
 		2:
-			draw_arc(Vector2(0,-9),3,0,TAU,24,tint,2,true)
-			stroke([Vector2(0,-6),Vector2(0,6)],2.4)
-			stroke([Vector2(0,5),Vector2(5,9),Vector2(10,6),Vector2(11,0),Vector2(7,3)],2.2)
-			if tip_count>=2:
-				stroke([Vector2(0,5),Vector2(-5,9),Vector2(-10,6),Vector2(-11,0),Vector2(-7,3)],2.2)
-			if tip_count>=3:
-				stroke([Vector2(0,6),Vector2(0,12),Vector2(4,9)],2.2)
+			if hook_count==2:
+				hook_icon(Vector2(-8,0))
+				hook_icon(Vector2(8,0))
+			else: hook_icon(Vector2.ZERO)
 		3:
 			plate(Rect2(-10,-8,20,21),soft,5)
 			stroke([Vector2(-9,11),Vector2(-10,-3),Vector2(-7,-8),Vector2(7,-8),Vector2(10,-3),Vector2(9,11),Vector2(-9,11)])

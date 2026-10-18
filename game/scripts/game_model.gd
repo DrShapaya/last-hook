@@ -1,10 +1,13 @@
 class_name GameModel
 extends RefCounted
 
-const UPGRADE_NAMES = ["Макс. длина каната", "Импульс", "Наконечники", "Рюкзак", "Магнит", "Сохранение добычи", "Сила броска"]
+const UPGRADE_NAMES = ["Макс. длина каната", "Импульс", "Крюки", "Рюкзак", "Магнит", "Сохранение добычи", "Сила броска"]
 const UPGRADE_COUNT := 7
 const THROW := 6
-const BUILD_VERSION := "0.11.0"
+const BUILD_VERSION := "0.13.0"
+const HOOK_NAMES = ["Одинарный", "Тройной", "2 одинарных", "2 тройных"]
+const PREVIOUS_UPGRADE_PRICES = [90, 300, 1000, 3200, 15500]
+const PREVIOUS_TIP_PRICES = [2400, 12000]
 const ZONE_NAMES = ["Лес", "Скалы", "Руины", "Лёд", "Вулкан", "Небеса"]
 const ZONE_HINTS = ["Освой раскачку", "Длинные перелёты", "Меняй направление", "Следи за скольжением", "Береги высоту", "Последний рывок"]
 const LOOT_NAMES = ["Медная находка", "Янтарь", "Древняя реликвия", "Ледяной кристалл", "Обсидиан", "Небесный осколок"]
@@ -25,7 +28,7 @@ func _init(path: String = "") -> void:
 	load_profile()
 
 static func fresh_profile() -> Dictionary:
-	return {"version": 3, "gold": 0, "diamonds": 0, "levels": [1, 1, 1, 1, 1, 1, 1], "best": 0.0,
+	return {"version": 5, "gold": 0, "diamonds": 0, "levels": [1, 1, 1, 1, 1, 1, 1], "best": 0.0,
 		"endless_best": 0.0, "reached_zones": 1, "summit_cleared": false, "locations": [0],
 		"cleared_locations": [], "runs": 0, "wins": 0, "last_settled": "", "active": {}, "sound": true,"selected_location":0,"run_history":[],"learned_controls":[]}
 
@@ -37,7 +40,7 @@ func load_profile() -> void:
 		if parser.parse(FileAccess.get_file_as_string(path)) != OK:
 			continue
 		var parsed = parser.data
-		if not parsed is Dictionary or int(parsed.get("version", 0)) not in [1,2,3]:
+		if not parsed is Dictionary or int(parsed.get("version", 0)) not in [1,2,3,4,5]:
 			continue
 		var defaults := fresh_profile()
 		for key in defaults:
@@ -51,17 +54,39 @@ func load_profile() -> void:
 			profile["levels"].append(profile["levels"][0])
 		if not profile["levels"] is Array or profile["levels"].size()!=UPGRADE_COUNT:
 			profile["levels"] = [1,1,1,1,1,1,1]
-		if int(parsed["version"])<3:
-			# Keep the old material milestones as the new two/three-prong hooks.
-			var old_grip := clampi(int(profile["levels"][2]),1,6)
-			profile["levels"][2] = 1 if old_grip==1 else 2 if old_grip<5 else 3
-		profile["version"] = 3
+		var source_version := int(parsed["version"])
+		var old_hook_level := clampi(int(profile["levels"][2]),1,6)
+		if source_version<3:
+			# The old material milestones become the four explicit hook stages.
+			profile["levels"][2] = 1 if old_hook_level==1 else 2 if old_hook_level<5 else 4
+		elif source_version<5:
+			# v3/v4 already exposed one, two and three tips. Three tips now
+			# means the final two-triple stage.
+			profile["levels"][2] = 4 if old_hook_level>=3 else old_hook_level
 		if not profile["learned_controls"] is Array: profile["learned_controls"] = []
 		profile["learned_controls"] = profile["learned_controls"].filter(func(action): return action in ["aim","swing","rope","release"])
 		if not profile["run_history"] is Array: profile["run_history"] = []
 		profile["run_history"] = profile["run_history"].slice(-30)
 		for i in range(UPGRADE_COUNT):
 			profile["levels"][i] = clampi(int(profile["levels"][i]), 1, max_level(i))
+		if source_version<5:
+			# Refund only the difference between the old track and its new
+			# equivalent. This is deterministic, so a backup cannot pay twice.
+			for kind in range(UPGRADE_COUNT):
+				var old_level := clampi(int(parsed.get("levels",[])[kind]) if parsed.get("levels",[]).size()>kind else 1,1,6)
+				var old_paid := 0
+				if kind==2:
+					var old_prices: Array = PREVIOUS_TIP_PRICES
+					if source_version==4: old_prices = [900,4800]
+					for step in range(mini(old_level-1,old_prices.size())): old_paid += int(old_prices[step])
+				else:
+					for step in range(old_level-1):
+						var base_price: float = float(PREVIOUS_UPGRADE_PRICES[step] if source_version<4 else balance["upgrade_prices"][step])
+						old_paid += roundi(float(base_price)*float(balance["upgrade_weights"][kind]))
+				var new_paid := 0
+				for step in range(level(kind)-1): new_paid += price_at_level(kind,step+1)
+				profile["gold"] += maxi(0,old_paid-new_paid)
+		profile["version"] = 5
 		for key in ["locations", "cleared_locations"]:
 			if not profile[key] is Array:
 				profile[key] = [0] if key=="locations" else []
@@ -109,7 +134,18 @@ func level(kind: int) -> int:
 	return int(profile["levels"][kind])
 
 func max_level(kind: int) -> int:
-	return 3 if kind==2 else 6
+	return 4 if kind==2 else 6
+
+func hook_count() -> int:
+	return int(balance["hook_counts"][level(2)-1])
+
+func hook_tips() -> int:
+	return int(balance["hook_tips"][level(2)-1])
+
+func hook_directions(direction: Vector2) -> Array[Vector2]:
+	if hook_count()==1: return [direction.normalized()]
+	var half_spread := deg_to_rad(float(balance["hook_spread_degrees"])*.5)
+	return [direction.normalized().rotated(-half_spread),direction.normalized().rotated(half_spread)]
 
 func hook_radius() -> float:
 	return value("hook_radii",2)
@@ -121,11 +157,14 @@ func value(key: String, kind: int) -> float:
 	return float(balance[key][level(kind) - 1])
 
 func cost(kind: int) -> int:
-	if level(kind) >= max_level(kind):
+	return price_at_level(kind,level(kind))
+
+func price_at_level(kind: int, current_level: int) -> int:
+	if current_level >= max_level(kind):
 		return 0
 	if kind==2:
-		return int(balance["tip_prices"][level(kind)-1])
-	return roundi(float(balance["upgrade_prices"][level(kind)-1]) * float(balance["upgrade_weights"][kind]))
+		return int(balance["tip_prices"][current_level-1])
+	return roundi(float(balance["upgrade_prices"][current_level-1]) * float(balance["upgrade_weights"][kind]))
 
 func unlocked_upgrade_level() -> int:
 	# Early failures earn usable progress before the first 200 m zone gate.
@@ -144,14 +183,14 @@ func purchase(kind: int) -> String:
 	profile["gold"] -= price
 	profile["levels"][kind] += 1
 	save()
-	return "Улучшено: " + UPGRADE_NAMES[kind]
+	return "Крюки · "+HOOK_NAMES[level(2)-1] if kind==2 else "Улучшено: " + UPGRADE_NAMES[kind]
 
 func upgrade_text(kind: int, at_level: int = -1) -> String:
 	var i := (level(kind) if at_level == -1 else at_level) - 1
 	match kind:
 		0: return "%d м" % roundi(float(balance["rope_lengths"][i]) * float(balance["meters_per_unit"]))
 		1: return "+%d%% при отпускании" % roundi((float(balance["impulse_factors"][i])-1)*100)
-		2: return "%d наконечн. · допуск ±%.1f м" % [i+1,(.04+float(balance["hook_radii"][i])-.32)*10]
+		2: return HOOK_NAMES[i]+(" · разброс %.0f°" % float(balance["hook_spread_degrees"]) if int(balance["hook_counts"][i])==2 else " · один канат")
 		3: return "%d слотов · любые находки" % (i+1)
 		4: return "сбор при касании" if i == 0 else "%d м притяжения" % roundi(float(balance["magnet_radii"][i])*10)
 		5: return "%d%% стоимости при поражении" % int(balance["recovery_percents"][i])
@@ -255,6 +294,10 @@ func settle(run_id: String, mode: String, highest: float, success: bool, locatio
 		"total": height+loot+finish, "diamonds": diamonds, "first": first, "success": summit_success, "highest": roundi(highest*10)}
 
 func purchase_location(index: int) -> String:
+	if index<0 or index>=balance["locations"].size():
+		return "Локация недоступна"
+	if not profile["active"].is_empty():
+		return "Сначала заверши текущую попытку"
 	if profile["locations"].has(index):
 		return "Локация уже открыта"
 	if not profile["summit_cleared"]:

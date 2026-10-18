@@ -123,7 +123,7 @@ func update_rope_path(sim: RopeSim) -> bool:
 	const ROPE_CLEARANCE := .10
 	var root := sim.anchor
 	for point in sim.rope_pivots:
-		if rope_blocked(root,point):
+		if rope_clearance_blocked(root,point,.045):
 			sim.rope_pivots.clear()
 			break
 		root = point
@@ -143,7 +143,7 @@ func update_rope_path(sim: RopeSim) -> bool:
 		var best_score := INF
 		for corner in SolidGeometry.corners(collision["object"],ROPE_CLEARANCE):
 			if corner.distance_to(pivot)<.05 or sim.rope_pivots.has(corner): continue
-			if rope_blocked(pivot,corner): continue
+			if rope_clearance_blocked(pivot,corner,.045): continue
 			if sim.fixed_length()+pivot.distance_to(corner)>sim.length-.4: continue
 			var score := pivot.distance_to(corner)+corner.distance_to(sim.pos)
 			if score<best_score:
@@ -152,7 +152,7 @@ func update_rope_path(sim: RopeSim) -> bool:
 		if not best.is_finite(): return false
 		sim.rope_pivots.append(best)
 		sim.request_length(sim.target_length)
-	return not rope_blocked(sim.effective_anchor(),sim.pos)
+	return not rope_clearance_blocked(sim.effective_anchor(),sim.pos,.045)
 
 func mat(key: String, color: Color, unlit: bool = true) -> StandardMaterial3D:
 	if materials.has(key):

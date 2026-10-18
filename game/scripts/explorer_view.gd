@@ -141,6 +141,8 @@ func draw(sim: RopeSim, target: Vector2, tether: bool, flying_bolt: bool, time: 
 		var slack := maxf(0,sim.length-sim.path_distance()) if sim.attached else 0.0
 		var points := PackedVector3Array()
 		var previous := rope_start
+		# Routed pivots already follow the collision-safe path; keep the line taut around rock.
+		if sim.attached and not sim.rope_pivots.is_empty(): slack = 0.0
 		if sim.attached:
 			for i in range(sim.rope_pivots.size()-1,-1,-1):
 				var pivot := sim.rope_pivots[i]

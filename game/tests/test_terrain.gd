@@ -173,9 +173,9 @@ func run_tests() -> void:
 	var path_clear := true
 	var previous := sim.anchor
 	for point in sim.rope_pivots:
-		path_clear = path_clear and not world.rope_blocked(previous,point)
+		path_clear = path_clear and not world.rope_clearance_blocked(previous,point,.045)
 		previous = point
-	check(path_clear and not world.rope_blocked(previous,sim.pos),"every visible rope segment stays outside the obstacle")
+	check(path_clear and not world.rope_clearance_blocked(previous,sim.pos,.045),"every visible rope segment stays outside the obstacle with tube clearance")
 	var fixed := sim.fixed_length()
 	sim.request_length(2)
 	check(sim.target_length>=fixed+.59,"reeling respects length already used by wrapped rope")

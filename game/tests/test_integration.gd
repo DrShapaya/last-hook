@@ -252,14 +252,13 @@ func run_tests() -> void:
 	check(not grip["visual"].visible,"broken grip state survives visual chunk unloading")
 	grip["broken"] = false
 	game.world.update_visibility(7,0)
-	var far_layer: Node3D = game.world.parallax_layers[0]
-	var near_layer: Node3D = game.world.parallax_layers[1]
-	var far_before: float = far_layer.get_child(0).position.x
-	var near_before: float = near_layer.get_child(0).position.x
+	var backdrop: ProceduralSkyBackdrop = game.world.sky_backdrop
+	var far_before: float = backdrop.ridge_offset.x
+	var near_before: float = backdrop.cloud_offset.x
 	game.world.update_visibility(7,4)
-	var far_shift: float = absf(fposmod(far_layer.get_child(0).position.x-far_before+40,80)-40)
-	var near_shift: float = absf(fposmod(near_layer.get_child(0).position.x-near_before+40,80)-40)
-	check(near_shift>far_shift+.5,"clouds move faster than distant mountains under orthographic parallax")
+	var far_shift: float = absf(backdrop.ridge_offset.x-far_before)
+	var near_shift: float = absf(backdrop.cloud_offset.x-near_before)
+	check(near_shift>far_shift+.4 and backdrop.position==Vector3(4,7,-22),"procedural clouds move faster than distant ridges while the sky follows the camera")
 	game.start_run(false)
 	game.sim.pos = Vector2(21,40)
 	game._physics_process(1.0/120)

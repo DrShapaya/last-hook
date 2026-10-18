@@ -19,7 +19,7 @@ var location := 0
 var generation_version := GENERATION_VERSION
 var generated_height := 0.0
 var ghost_texture: ImageTexture
-var parallax_layers: Array[Node3D] = []
+var sky_backdrop: ProceduralSkyBackdrop
 var camera_center := Vector2(0,7)
 var show_loot_prices := true
 
@@ -104,12 +104,13 @@ func rope_blocked(from: Vector2, to: Vector2) -> bool:
 func rope_contact(from: Vector2, to: Vector2) -> Dictionary:
 	var best: Dictionary = {}
 	for obstacle in nearby_obstacles(minf(from.y,to.y)-.1,maxf(from.y,to.y)+.1):
-		var hit := SolidGeometry.cast(from,to,obstacle)
+		var hit := SolidGeometry.contour_cast(from,to,obstacle,0)
 		if not hit.is_empty() and (best.is_empty() or hit["fraction"]<best["fraction"]): best = hit
 	return best
 
 func update_rope_path(sim: RopeSim) -> bool:
 	if not sim.attached: return true
+	const ROPE_CLEARANCE := .16
 	var root := sim.anchor
 	for point in sim.rope_pivots:
 		if rope_blocked(root,point):
@@ -120,6 +121,7 @@ func update_rope_path(sim: RopeSim) -> bool:
 	# Keeping the intervening corners until then prevents side-to-side jumps.
 	while not sim.rope_pivots.is_empty():
 		var previous: Vector2 = sim.anchor if sim.rope_pivots.size()==1 else sim.rope_pivots[-2]
+		# Discard temporary corners when the direct route is clear again.
 		if rope_blocked(previous,sim.pos): break
 		sim.rope_pivots.pop_back()
 	for iteration in range(6):
@@ -129,7 +131,7 @@ func update_rope_path(sim: RopeSim) -> bool:
 		if sim.rope_pivots.size()>=4: return false
 		var best := Vector2.INF
 		var best_score := INF
-		for corner in SolidGeometry.corners(collision["object"]):
+		for corner in SolidGeometry.corners(collision["object"],ROPE_CLEARANCE):
 			if corner.distance_to(pivot)<.05 or sim.rope_pivots.has(corner): continue
 			if rope_blocked(pivot,corner): continue
 			if sim.fixed_length()+pivot.distance_to(corner)>sim.length-.4: continue
@@ -203,7 +205,7 @@ func cast_hook(from: Vector2, to: Vector2, grip: float, ignore_anchor: int = -1)
 			best = fraction
 			result = {"object":object,"fraction":fraction,"contact":from.lerp(to,fraction)}
 	for obstacle in nearby_obstacles(minf(from.y,to.y),maxf(from.y,to.y)):
-		var contact := SolidGeometry.cast(from,to,obstacle)
+		var contact := SolidGeometry.contour_cast(from,to,obstacle,grip)
 		var fraction: float = contact.get("fraction",-1.0)
 		if fraction>=0 and fraction<=best:
 			best = fraction
@@ -280,31 +282,10 @@ func set_loot_prices_visible(show_prices: bool) -> void:
 			find["price_visual"].visible = show_prices
 
 func _build_sky() -> void:
-	for layer_index in range(2):
-		var layer := Node3D.new()
-		layer.name = "Дальний фон" if layer_index==0 else "Облака"
-		add_child(layer)
-		parallax_layers.append(layer)
-		var random := seeded_rng(layer_index,80)
-		if layer_index==0:
-			for n in range(20):
-				var height := random.randf_range(4,14)
-				var mesh := CylinderMesh.new()
-				mesh.top_radius = random.randf_range(.2,.6)
-				mesh.bottom_radius = random.randf_range(1.5,3)
-				mesh.height = height
-				mesh.radial_segments = 5
-				var instance := MeshInstance3D.new()
-				instance.mesh = mesh
-				instance.material_override = mat("haze",Color("9bbdc7"))
-				layer.add_child(instance)
-				instance.position = Vector3(random.randf_range(-38,38),random.randf_range(-25,27),-18)
-		else:
-			for n in range(17):
-				var center := Vector3(random.randf_range(-36,36),random.randf_range(-26,26),-12)
-				for puff in range(3):
-					sphere("Облако",center+Vector3(puff*1.3,random.randf_range(-.25,.25),0),Vector3(random.randf_range(2.5,4),random.randf_range(1,1.7),.7),mat("cloud",Color("eaf3ee")),layer)
-		for child in layer.get_children(): child.set_meta("origin",child.position)
+	sky_backdrop = ProceduralSkyBackdrop.new()
+	add_child(sky_backdrop)
+	sky_backdrop.setup(seed_value)
+	sky_backdrop.set_view(camera_center)
 
 func _release_chunk(key: int) -> void:
 	for object in nearby_anchors(key*24,(key+1)*24-.001):
@@ -320,6 +301,7 @@ func _release_chunk(key: int) -> void:
 
 func update_visibility(center_y: float, center_x: float = 0) -> void:
 	camera_center = Vector2(center_x,center_y)
+	if is_instance_valid(sky_backdrop): sky_backdrop.set_view(camera_center)
 	if not visuals_enabled: return
 	var first := maxi(0,int(floor((center_y-32)/24)))
 	var ready_chunk := int(floor((layout.main_point(layout.row).y-2)/24))-1
@@ -352,13 +334,6 @@ func update_visibility(center_y: float, center_x: float = 0) -> void:
 		if is_instance_valid(object.get("visual")): object["visual"].visible = not object["broken"]
 	for find in finds:
 		if is_instance_valid(find.get("visual")): find["visual"].visible = not find.get("picked",false)
-	for i in range(parallax_layers.size()):
-		var factor := .88 if i==0 else .65
-		var layer := parallax_layers[i]
-		layer.position = Vector3(center_x,center_y,0)
-		for child in layer.get_children():
-			var origin: Vector3 = child.get_meta("origin")
-			child.position = Vector3(fposmod(origin.x-center_x*(1-factor)+40,80)-40,fposmod(origin.y-center_y*(1-factor)+30,60)-30,origin.z)
 func anchor_by_id(id: int) -> Dictionary:
 	return anchors[id] if id>=0 and id<anchors.size() else {}
 

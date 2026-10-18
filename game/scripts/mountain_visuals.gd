@@ -26,7 +26,7 @@ func vertex(point: Vector2) -> Vector3:
 func sample_point(x: int, y: int) -> Vector2:
 	var random := layout.rng(x*9781+y*6271,66)
 	var jitter := Vector2(random.randf_range(-.42,.42),random.randf_range(-.42,.42))
-	return Vector2(-19.5+x*1.5,y*1.5)+jitter
+	return Vector2(-20.0+x*1.25,y*1.2)+jitter*.72
 
 func _triangle(surface: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, color: Color) -> void:
 	for p in [a,b,c]:
@@ -45,13 +45,8 @@ func _clip_triangle(surface: SurfaceTool, points: Array[Vector2], fields: Array[
 			cuts.append(p)
 	for i in range(1,polygon.size()-1):
 		_triangle(surface,vertex(polygon[0]),vertex(polygon[i]),vertex(polygon[i+1]),color)
-	if cuts.size()==2:
-		var a := vertex(cuts[0])
-		var b := vertex(cuts[1])
-		var back_a := Vector3(a.x,a.y,-3.8)
-		var back_b := Vector3(b.x,b.y,-3.8)
-		_triangle(surface,a,back_a,b,color.darkened(.22))
-		_triangle(surface,b,back_a,back_b,color.darkened(.22))
+	# Do not close rock-field holes with dark triangles. They are deliberate
+	# mountain voids and must reveal the continuous sky backdrop behind them.
 
 func build_chunk(index: int, parent: Node3D) -> void:
 	var surface := SurfaceTool.new()
@@ -59,13 +54,13 @@ func build_chunk(index: int, parent: Node3D) -> void:
 	var samples: Dictionary = {}
 	var sample_positions: Dictionary = {}
 	var bottom := index*24.0
-	for x in range(27):
-		for y in range(17):
-			var point := sample_point(x,index*16+y)
+	for x in range(33):
+		for y in range(21):
+			var point := sample_point(x,index*20+y)
 			samples[Vector2i(x,y)] = layout.rock_field(point)
 			sample_positions[Vector2i(x,y)] = point
-	for x in range(26):
-		for y in range(16):
+	for x in range(32):
+		for y in range(20):
 			var a: Vector2 = sample_positions[Vector2i(x,y)]
 			var b: Vector2 = sample_positions[Vector2i(x+1,y)]
 			var c: Vector2 = sample_positions[Vector2i(x+1,y+1)]
@@ -144,6 +139,15 @@ func build_anchor(object: Dictionary, parent: Node3D) -> void:
 	if kind==4: color = Color("9e85aa")
 	var polygon: PackedVector2Array = object["polygon"]
 	_extruded_polygon(polygon,.8,color,holder)
+	# A thin bevel follows the real top edge instead of drawing a generic
+	# rectangle over every grip. The rim is decorative only; physics keeps the
+	# source polygon above.
+	var top_left := polygon[5] if polygon.size()>5 else Vector2(-d.x*.4,d.y*.5)
+	var top_right := polygon[4] if polygon.size()>4 else Vector2(d.x*.4,d.y*.5)
+	beam(Vector3(top_left.x,top_left.y,.47),Vector3(top_right.x,top_right.y,.47),.035,Color("fff0b0"),holder)
+	var lower_left := polygon[1] if polygon.size()>2 else Vector2(-d.x*.4,-d.y*.5)
+	var lower_right := polygon[2] if polygon.size()>2 else Vector2(d.x*.4,-d.y*.5)
+	beam(Vector3(lower_left.x,lower_left.y,.43),Vector3(lower_right.x,lower_right.y,.43),.025,color.darkened(.25),holder)
 	# The support extends backward only, never inventing a collision in XY.
 	world.box("Опора в скале",Vector3(p.x,p.y,1.3),Vector3(d.x*.75,d.y*.7,1.4),world.mat("support_%d" % biome,color.darkened(.12),false),holder)
 	# A narrow material strip communicates mechanics without rectangular targets.

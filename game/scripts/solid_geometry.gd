@@ -21,7 +21,8 @@ static func planes(object: Dictionary, padding: Vector2 = Vector2.ZERO) -> Array
 	for i in range(points.size()):
 		var a := points[i]
 		var edge := points[(i+1)%points.size()]-a
-		var normal := Vector2(edge.y,-edge.x).normalized()*signf(area)
+		var winding := 1.0 if absf(area)<EPSILON else signf(area)
+		var normal := Vector2(edge.y,-edge.x).normalized()*winding
 		result.append({"normal":normal,"offset":normal.dot(a)+absf(normal.x)*padding.x+absf(normal.y)*padding.y})
 	if padding!=Vector2.ZERO:
 		# A box Minkowski sum also contributes its axis-aligned faces. Without
@@ -83,3 +84,7 @@ static func corners(object: Dictionary, margin: float = .085) -> PackedVector2Ar
 		if absf(determinant)<EPSILON: continue
 		points.append(Vector2(a["offset"]*m.y-n.y*b["offset"],n.x*b["offset"]-a["offset"]*m.x)/determinant)
 	return points
+
+static func contour_cast(from: Vector2, to: Vector2, object: Dictionary, radius: float = 0.0) -> Dictionary:
+	# Rope and hook obstacle probes share a contour, with separate clearances.
+	return cast(from,to,object,Vector2.ONE*maxf(0,radius),false)

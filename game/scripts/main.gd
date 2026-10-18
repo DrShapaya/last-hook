@@ -256,8 +256,17 @@ func _setup_lighting() -> void:
 	var environment_node := WorldEnvironment.new()
 	var environment := Environment.new()
 	scene_environment = environment
-	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = Color("88bfd9")
+	environment.background_mode = Environment.BG_SKY
+	var sky := Sky.new()
+	var sky_material := ProceduralSkyMaterial.new()
+	sky_material.sky_top_color = Color("2e739f")
+	sky_material.sky_horizon_color = Color("a8d8e4")
+	sky_material.ground_bottom_color = Color("244355")
+	sky_material.ground_horizon_color = Color("8daeb3")
+	sky_material.sun_angle_max = 14.0
+	sky_material.sun_curve = .08
+	sky.sky_material = sky_material
+	environment.sky = sky
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment.ambient_light_color = Color("b7d1df")
 	environment.ambient_light_energy = .65
@@ -1192,6 +1201,7 @@ func _process(delta: float) -> void:
 	_move_camera(delta)
 	_refresh_aim()
 	world.update_visibility(camera_y,camera_x)
+	if is_instance_valid(world.sky_backdrop): world.sky_backdrop.advance(animation_time,delta)
 	if world.show_loot_prices!=(state=="play"):
 		world.set_loot_prices_visible(state=="play")
 	var target := sim.anchor if sim.attached else bolt_pos

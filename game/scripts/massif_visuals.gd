@@ -195,17 +195,32 @@ func build_anchor(object: Dictionary, parent: Node3D) -> void:
 	# world position is applied by holder.position below).
 	var local: PackedVector2Array = object["polygon"]
 	var d: Vector2 = object["dimensions"]
-	# Keep the gameplay polygon intact, but give the shell a silhouette that
-	# matches the grip's role in the route. This is why nearby grips no longer
-	# look like copies of one rectangular placeholder.
-	var w := d.x*.58
-	var h := d.y*.72
-	match posmod(int(object.get("id",0)),4):
-		0: local = PackedVector2Array([Vector2(-w,-h*.25),Vector2(-w*.70,-h*.58),Vector2(w*.55,-h*.58),Vector2(w,-h*.18),Vector2(w*.84,h*.30),Vector2(w*.32,h*.66),Vector2(-w*.56,h*.66),Vector2(-w,h*.30)])
-		1: local = PackedVector2Array([Vector2(-w*.96,-h*.12),Vector2(-w*.48,-h*.66),Vector2(w*.12,-h*.94),Vector2(w*.78,-h*.52),Vector2(w,.08),Vector2(w*.38,h*.76),Vector2(-w*.22,h*.56),Vector2(-w*.90,h*.34)])
-		2: local = PackedVector2Array([Vector2(-w*.70,h*.12),Vector2(-w*.56,-h*.50),Vector2(-w*.12,-h),Vector2(w*.26,-h*.70),Vector2(w*.72,-h*.24),Vector2(w*.90,h*.42),Vector2(w*.20,h*.76),Vector2(-w*.48,h*.64)])
-		_: local = PackedVector2Array([Vector2(-w,-h*.16),Vector2(-w*.58,-h*.62),Vector2(w*.30,-h*.56),Vector2(w*.86,-h*.20),Vector2(w,.38),Vector2(w*.30,h*.32),Vector2(.04*w,h),Vector2(-w*.42,h*.54),Vector2(-w*.86,h*.32)])
-	_faceted_shell(_refine_polygon(local),.98,color,holder,posmod(int(object.get("id",0)),4),0.0,platform_material)
+	# The collision polygon stays authored by the generator. The visual shell
+	# uses a rounded profile so the platform reads as a finished game object,
+	# while the four profiles keep the route varied.
+	var style := posmod(int(object.get("id",0)),4)
+	local = _organic_platform_profile(d.x*.54,d.y*.64,style)
+	_faceted_shell(local,.98,color,holder,style,0.0,platform_material)
+
+func _organic_platform_profile(width: float, height: float, style: int) -> PackedVector2Array:
+	var w := width
+	var h := height
+	if style==2: w*=.68; h*=1.32
+	var result := PackedVector2Array()
+	var phase := float(style)*1.37
+	for sample in range(24):
+		var angle: float = -PI*.5+TAU*float(sample)/24.0
+		var ripple := 1.0+.13*sin(angle*3.0+phase)+.07*sin(angle*5.0-phase)
+		var point := Vector2(cos(angle)*w*ripple,sin(angle)*h*ripple)
+		if style==0:
+			point.y = lerpf(point.y,-h*.22,.58 if point.y<-.18*h else 0.0)
+		elif style==1:
+			point.x += point.y*.25
+			point.y *= 1.04
+		elif style==3:
+			point.y += maxf(0,point.x/w)*h*.16
+		result.append(point)
+	return result
 
 func _faceted_shell(polygon: PackedVector2Array, depth: float, base_color: Color, parent: Node3D, variant: int, contrast: float = .14, custom_material: Material = null) -> void:
 	var surface := SurfaceTool.new()

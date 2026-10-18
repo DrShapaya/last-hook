@@ -7,6 +7,7 @@ const ROWS := 40
 var massif: MassifLayout
 var rock_material := ShaderMaterial.new()
 var obstacle_material := ShaderMaterial.new()
+var platform_material := ShaderMaterial.new()
 var rear_material := ShaderMaterial.new()
 var building_rear := false
 var positions: Dictionary = {}
@@ -21,7 +22,11 @@ func _init(owner_world: Node3D, source: MountainLayout) -> void:
 	obstacle_material.shader = rock_material.shader
 	obstacle_material.set_shader_parameter("snow_override",0.0)
 	obstacle_material.set_shader_parameter("aerial_depth",0.0)
-	obstacle_material.set_shader_parameter("material_tint",.68)
+	obstacle_material.set_shader_parameter("material_tint",.84)
+	platform_material.shader = rock_material.shader
+	platform_material.set_shader_parameter("snow_override",0.0)
+	platform_material.set_shader_parameter("aerial_depth",0.0)
+	platform_material.set_shader_parameter("material_tint",.92)
 	rear_material.shader = rock_material.shader
 	rear_material.set_shader_parameter("aerial_depth",.28)
 
@@ -171,7 +176,7 @@ func build_obstacle(object: Dictionary, parent: Node3D) -> void:
 	# a red contour that is immediately readable as danger.
 	var color := base_color.lerp(tint,.82).darkened(.28)
 	var refined := _refine_polygon(polygon)
-	_faceted_shell(refined,1.22,color,holder,variant,.28)
+	_faceted_shell(refined,1.22,color,holder,variant,.28,obstacle_material)
 	_outline_polygon(refined,.082,Color("401d2c"),holder,.64)
 	_outline_polygon(refined,.040,Color("e05b58"),holder,.68)
 
@@ -196,15 +201,16 @@ func build_anchor(object: Dictionary, parent: Node3D) -> void:
 	var w := d.x*.58
 	var h := d.y*.72
 	match posmod(int(object.get("id",0)),4):
-		0: local = PackedVector2Array([Vector2(-w,-h*.18),Vector2(-w*.82,-h*.72),Vector2(-w*.28,-h),Vector2(w*.48,-h*.88),Vector2(w,-h*.18),Vector2(w*.82,h*.38),Vector2(w*.16,h),Vector2(-w*.76,h*.68)])
-		1: local = PackedVector2Array([Vector2(-w*.72,-h*.20),Vector2(-w*.42,-h*.86),Vector2(-w*.05,-h),Vector2(w*.42,-h*.45),Vector2(w*.72,h*.02),Vector2(w*.20,h),Vector2(-w*.35,h*.72),Vector2(-w,h*.18)])
-		2: local = PackedVector2Array([Vector2(-w*.86,-h*.14),Vector2(-w*.48,-h*.86),Vector2(w*.20,-h),Vector2(w*.82,-h*.56),Vector2(w,h*.10),Vector2(w*.52,h*.72),Vector2(-w*.12,h),Vector2(-w*.92,h*.48)])
-		_: local = PackedVector2Array([Vector2(-w,-h*.10),Vector2(-w*.74,-h*.78),Vector2(-w*.14,-h),Vector2(w*.52,-h*.72),Vector2(w*.90,h*.02),Vector2(w*.42,h),Vector2(-w*.30,h*.74),Vector2(-w*.88,h*.38)])
-	_faceted_shell(local,.92,color,holder,posmod(int(object.get("id",0)),4),.13)
+		0: local = PackedVector2Array([Vector2(-w,-h*.25),Vector2(-w*.70,-h*.58),Vector2(w*.55,-h*.58),Vector2(w,-h*.18),Vector2(w*.84,h*.30),Vector2(w*.32,h*.66),Vector2(-w*.56,h*.66),Vector2(-w,h*.30)])
+		1: local = PackedVector2Array([Vector2(-w*.96,-h*.12),Vector2(-w*.48,-h*.66),Vector2(w*.12,-h*.94),Vector2(w*.78,-h*.52),Vector2(w,.08),Vector2(w*.38,h*.76),Vector2(-w*.22,h*.56),Vector2(-w*.90,h*.34)])
+		2: local = PackedVector2Array([Vector2(-w*.70,h*.12),Vector2(-w*.56,-h*.50),Vector2(-w*.12,-h),Vector2(w*.26,-h*.70),Vector2(w*.72,-h*.24),Vector2(w*.90,h*.42),Vector2(w*.20,h*.76),Vector2(-w*.48,h*.64)])
+		_: local = PackedVector2Array([Vector2(-w,-h*.16),Vector2(-w*.58,-h*.62),Vector2(w*.30,-h*.56),Vector2(w*.86,-h*.20),Vector2(w,.38),Vector2(w*.30,h*.32),Vector2(.04*w,h),Vector2(-w*.42,h*.54),Vector2(-w*.86,h*.32)])
+	_faceted_shell(_refine_polygon(local),.98,color,holder,posmod(int(object.get("id",0)),4),0.0,platform_material)
 
-func _faceted_shell(polygon: PackedVector2Array, depth: float, base_color: Color, parent: Node3D, variant: int, contrast: float = .14) -> void:
+func _faceted_shell(polygon: PackedVector2Array, depth: float, base_color: Color, parent: Node3D, variant: int, contrast: float = .14, custom_material: Material = null) -> void:
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	surface.set_smooth_group(1)
 	var facet_colors := [base_color.lightened(contrast),base_color.darkened(contrast*.45),base_color.lightened(contrast*.28),base_color.darkened(contrast)]
 	var indices := Geometry2D.triangulate_polygon(polygon)
 	for i in range(0,indices.size(),3):
@@ -216,13 +222,17 @@ func _faceted_shell(polygon: PackedVector2Array, depth: float, base_color: Color
 		var side_color: Color = facet_colors[posmod(i+variant,facet_colors.size())].darkened(.24)
 		_triangle(surface,Vector3(a.x,a.y,-depth*.5),Vector3(b.x,b.y,-depth*.5),Vector3(b.x,b.y,depth*.5),side_color)
 		_triangle(surface,Vector3(a.x,a.y,-depth*.5),Vector3(b.x,b.y,depth*.5),Vector3(a.x,a.y,depth*.5),side_color.darkened(.18))
+	surface.index()
 	surface.generate_normals()
 	var mesh := MeshInstance3D.new()
 	mesh.mesh = surface.commit()
-	var material: StandardMaterial3D = world.mat("prototype_grip_vertex",Color.WHITE,false)
-	material.vertex_color_use_as_albedo = true
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mesh.material_override = material
+	if custom_material!=null:
+		mesh.material_override = custom_material
+	else:
+		var material: StandardMaterial3D = world.mat("prototype_grip_vertex",Color.WHITE,false)
+		material.vertex_color_use_as_albedo = true
+		material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mesh.material_override = material
 	parent.add_child(mesh)
 
 func _refine_polygon(polygon: PackedVector2Array) -> PackedVector2Array:
@@ -274,4 +284,4 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	# Rest ledges stay broad and readable: a lighter, quieter top mass separates
 	# them from the darker hazard rocks without introducing wooden UI-like trims.
 	var rock := zone_color(top).darkened(.08).lightened(.10)
-	_faceted_shell(polygon,.86,rock,holder,style,.09)
+	_faceted_shell(polygon,.86,rock,holder,style,.09,platform_material)

@@ -38,7 +38,10 @@ if ($adsGradleText -notmatch '(?m)^org\.gradle\.daemon=') {
 }
 
 $adsBinary = Join-Path $adsRoot 'game\addons\last_hook_ads\bin\LastHookAds.aar'
-if ($RebuildPlugin -or -not (Test-Path -LiteralPath $adsBinary)) {
+$adsJavaSource = Join-Path $PSScriptRoot 'android-ads\src\main\java\com\lasthook\ads\LastHookAds.java'
+$adsPluginNeedsBuild = $RebuildPlugin -or -not (Test-Path -LiteralPath $adsBinary) -or
+    ((Test-Path -LiteralPath $adsJavaSource) -and (Get-Item -LiteralPath $adsJavaSource).LastWriteTimeUtc -gt (Get-Item -LiteralPath $adsBinary).LastWriteTimeUtc)
+if ($adsPluginNeedsBuild) {
     $env:JAVA_HOME = $JavaSdkPath
     $env:ANDROID_HOME = $AndroidSdkPath
     & (Join-Path $adsBuild 'gradlew.bat') --no-daemon --console=plain -p (Join-Path $PSScriptRoot 'android-ads') installPlugin

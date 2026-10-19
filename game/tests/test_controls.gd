@@ -179,6 +179,12 @@ func run_tests() -> void:
 	game.sim.vel = velocity
 	game.pointer_up(Vector2(300,320))
 	check(not game.sim.attached and not game.bolt_active and game.shots==shots_before and game.sim.vel==velocity,"primary lift only detaches and preserves actual velocity")
+	check(is_equal_approx(game.focus_remaining,game.RELEASE_SLOWMO_SECONDS) and game.hud.slowmo_indicator.visible==false,"manual release starts the short focus window without keeping the stick pressed")
+	game.hud.update_play()
+	check(game.hud.slowmo_indicator.visible and game.hud.slowmo_indicator.remaining>0,"focus window is visible in the HUD while it is active")
+	var focus_before: float = game.focus_remaining
+	game._physics_process(.1)
+	check(game.focus_remaining<focus_before,"focus window continues to expire after the finger is released")
 	game.pointer_up(Vector2(300,320))
 	check(game.shots==shots_before,"duplicate lift cannot fire a hook")
 	game.pointer_down(Vector2(150,600),true)

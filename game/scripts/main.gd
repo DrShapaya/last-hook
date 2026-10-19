@@ -49,7 +49,9 @@ var aim_stick_valid := false
 var aim_point := Vector2.ZERO
 var pump := 0.0
 var reel := 0.0
-var focus_remaining := .7
+const RELEASE_SLOWMO_SECONDS := .7
+var focus_remaining := 0.0
+var last_release_reason := ""
 var aim_direction := Vector2.UP
 var elapsed := 0.0
 var animation_time := 0.0
@@ -252,8 +254,14 @@ func _ready() -> void:
 	ads.fullscreen_changed.connect(_on_ad_fullscreen)
 	ads.banner_layout_changed.connect(hud._resize)
 	if not preview:
-		ads.setup()
 		ads.set_main_menu(state=="menu")
+		# Let the first game frame appear before the optional ad SDK touches the
+		# Android UI.  A few devices are slow or unstable during SDK startup.
+		call_deferred("_setup_ads_deferred")
+
+func _setup_ads_deferred() -> void:
+	if not preview and is_instance_valid(ads):
+		ads.setup()
 
 func _setup_lighting() -> void:
 	var environment_node := WorldEnvironment.new()
@@ -334,7 +342,7 @@ func start_run(endless: bool) -> void:
 	hook_flight = HookFlight.new()
 	hook_volley = null
 	volley_primary = 0
-	focus_remaining = .7
+	focus_remaining = 0.0
 	camera_y = 4.8
 	camera_x = 0
 	_position_camera()
@@ -402,7 +410,7 @@ func resume_run() -> void:
 	sim.grounded = bool(snapshot.get("grounded",false))
 	anchor_id = int(snapshot["anchor_id"])
 	anchor_time = float(snapshot["anchor_time"])
-	focus_remaining = float(snapshot.get("focus_remaining",.7))
+	focus_remaining = clampf(float(snapshot.get("focus_remaining",0.0)),0.0,RELEASE_SLOWMO_SECONDS) if bool(snapshot.get("focus_active",false)) else 0.0
 	safe_anchor_id = int(snapshot["safe_anchor_id"])
 	safe_position = Vector2(snapshot["safe_x"],snapshot["safe_y"])
 	revive_used = bool(snapshot["revive_used"])
@@ -734,7 +742,7 @@ func screen_bottom_y() -> float:
 func below_screen() -> bool:
 	return sim.pos.y+float(model.balance["fall_screen_margin_units"])<screen_bottom_y()
 
-func release_hook(keep_primary: bool = false) -> void:
+func release_hook(keep_primary: bool = false, reason: String = "manual") -> void:
 	if not sim.attached:
 		return
 	var factor := model.value("impulse_factors",1)
@@ -750,7 +758,11 @@ func release_hook(keep_primary: bool = false) -> void:
 		for shot in hook_volley.shots:
 			if shot["state"]=="attached": shot["state"] = "idle"
 	anchor_id = -1
-	focus_remaining = .7
+	# Release focus is real-time and does not depend on the input still being held.
+	focus_remaining = RELEASE_SLOWMO_SECONDS
+	last_release_reason = reason
+	if reason!="manual":
+		print("HOOK_RELEASE reason=%s keep_primary=%s position=%s" % [reason,keep_primary,sim.pos])
 	_sound(310,.07)
 	if keep_primary:
 		_recenter_climb_control()
@@ -765,7 +777,7 @@ func _physics_process(delta: float) -> void:
 	_update_touch_controls()
 	_refresh_aim()
 	var step := delta
-	if pressed and not sim.attached and focus_remaining>0:
+	if not sim.attached and focus_remaining>0:
 		focus_remaining = maxf(0,focus_remaining-delta)
 		step *= .32
 	var keyboard_pump := float(Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT))-float(Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT))
@@ -780,7 +792,7 @@ func _physics_process(delta: float) -> void:
 		if not point.is_empty():
 			if int(point["kind"])==1 and anchor_time>2.6:
 				point["broken"] = true
-				release_hook(true)
+				release_hook(true,"root_break")
 				toast("Корень сломался — успей зацепиться!",2.5,"release")
 			elif int(point["kind"])==3:
 				sim.anchor = anchor_contact+Vector2(0,-minf(1.2,anchor_time*.18))
@@ -804,7 +816,7 @@ func _physics_process(delta: float) -> void:
 	if world.location==0 and sim.attached:
 		if world.generation_version>=10:
 			if not world.update_rope_path(sim):
-				release_hook(true)
+				release_hook(true,"rope_path")
 				toast("Не хватает каната для обхода выступа",1.5)
 			else:
 				# A rope correction is itself swept so it cannot pull the body
@@ -815,10 +827,10 @@ func _physics_process(delta: float) -> void:
 				sim.pos = correction["position"]
 				sim.vel = correction["velocity"]
 				if sim.path_distance()>sim.length+.12:
-					release_hook(true)
+					release_hook(true,"rope_pinned")
 					toast("Канат зажат между выступами",1.5)
 		elif world.rope_blocked(sim.pos,sim.anchor):
-			release_hook(true)
+			release_hook(true,"rope_blocked")
 			toast("Канат упёрся в выступ")
 	if below_screen():
 		fail_run("Упал ниже экрана")
@@ -902,7 +914,7 @@ func _catch_contact(hit: Dictionary, contact: Vector2) -> void:
 	catches += 1
 	anchor_id = hit["id"]
 	anchor_time = 0
-	focus_remaining = .7
+	focus_remaining = 0.0
 	if hint_context=="release": hint_timer = 0
 	if pressed: _recenter_climb_control()
 	if int(hit["kind"]) in [0,2] and hit.get("permanent",true) and (world.generation_version<9 or hit.get("primary",false)):
@@ -1025,7 +1037,7 @@ func _collect_finds() -> void:
 func fail_run(reason: String) -> void:
 	if state!="play":
 		return
-	if sim.attached: release_hook()
+	if sim.attached: release_hook(false,"fall")
 	var offer_revive := not revive_used and run_mode!="practice" and revive_available()
 	state = "revive" if offer_revive else "result"
 	failure_reason = reason
@@ -1247,7 +1259,7 @@ func save_snapshot() -> void:
 		"highest":sim.highest,"flight_peak":sim.flight_peak,"launched":sim.launched,"grounded":sim.grounded,
 		"run_seconds":run_seconds,"shots":shots,"catches":catches,"failure_reason":failure_reason,"zone_gold":zone_gold,"zone_diamonds":zone_diamonds,
 		"anchor_id":anchor_id,"anchor_time":anchor_time,"contact_x":anchor_contact.x,"contact_y":anchor_contact.y,"rope_pivots":pivots,
-		"safe_contact_x":safe_contact.x,"safe_contact_y":safe_contact.y,"focus_remaining":focus_remaining,"safe_anchor_id":safe_anchor_id,
+		"safe_contact_x":safe_contact.x,"safe_contact_y":safe_contact.y,"focus_remaining":focus_remaining,"focus_active":focus_remaining>0.0,"safe_anchor_id":safe_anchor_id,
 		"safe_x":safe_position.x,"safe_y":safe_position.y,"revive_used":revive_used,"awaiting_revive":state=="revive","ad_revive_earned":ad_revive_pending,
 		"bag":model.bag.duplicate(true),"picked":model.picked.duplicate(),"broken":broken,"active_reserves":active_reserves,
 		"bolt_active":bolt_active,"bolt_x":bolt_pos.x,"bolt_y":bolt_pos.y,"bolt_ox":bolt_origin.x,"bolt_oy":bolt_origin.y,

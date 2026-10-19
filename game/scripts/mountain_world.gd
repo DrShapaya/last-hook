@@ -292,6 +292,12 @@ func set_loot_prices_visible(show_prices: bool) -> void:
 			find["price_visual"].visible = show_prices
 
 func _build_sky() -> void:
+	# The volumetric canvas shader is intentionally desktop-only.  A few
+	# Android GPUs abort while compiling its nested noise loops during startup;
+	# the Environment sky remains as a lightweight gradient fallback.
+	if OS.has_feature("mobile"):
+		sky_backdrop = null
+		return
 	sky_backdrop = ProceduralSkyBackdrop.new()
 	add_child(sky_backdrop)
 	sky_backdrop.setup(seed_value)

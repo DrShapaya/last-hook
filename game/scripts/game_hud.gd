@@ -11,10 +11,12 @@ var danger_label: Label
 var goal_label: Label
 var aim_label: Label
 var climb_bar: ClimbMeter
+var slowmo_indicator: SlowmoIndicator
 var bag_panel: HBoxContainer
 var pause_button: Button
 var aim_overlay: AimOverlay
 var base_theme: Theme
+var body_font: Font
 var heading_font: FontVariation
 var backdrop: LobbyView.Backdrop
 var layout_mode := "modal"
@@ -27,21 +29,45 @@ var shot_preview_time := -1.0
 var shot_preview_direction := Vector2.ZERO
 var ad_blocker: Control
 var touch_controls_hint := OS.has_feature("mobile")
-const INK := Color("19352d")
-const GOLD := Color("efc779")
-const WHITE := Color("f3eddb")
-const MUTED := Color("a0b5ab")
+const INK := Color("101a2b")
+const GOLD := Color("ffc857")
+const WHITE := Color("f7f2e8")
+const MUTED := Color("a8b7c9")
+const CYAN := Color("78d5d2")
+const CORAL := Color("ff8f70")
+const INK_PANEL := Color("111f34")
 
 class ClimbMeter extends Control:
 	var value := 0.0
 	func _draw() -> void:
 		var track := StyleBoxFlat.new()
-		track.bg_color = Color("30434a")
+		track.bg_color = Color("22364d")
 		track.set_corner_radius_all(3)
 		draw_style_box(track,Rect2(Vector2.ZERO,size))
 		var fill := track.duplicate() as StyleBoxFlat
-		fill.bg_color = Color("f3c668")
+		fill.bg_color = GOLD
 		draw_style_box(fill,Rect2(Vector2.ZERO,Vector2(size.x*value/100,size.y)))
+
+class SlowmoIndicator extends Control:
+	var remaining := 0.0
+	var duration := .7
+	var text_font: Font
+	func _draw() -> void:
+		if remaining<=0: return
+		var panel := StyleBoxFlat.new()
+		panel.bg_color = Color("102742e8")
+		panel.border_color = CYAN
+		panel.set_border_width_all(1)
+		panel.set_corner_radius_all(10)
+		draw_style_box(panel,Rect2(Vector2.ZERO,size))
+		var font := text_font if text_font!=null else ThemeDB.fallback_font
+		draw_string(font,Vector2(12,20),"СЛОУМО · %.2f с" % remaining,HORIZONTAL_ALIGNMENT_LEFT,size.x-24,14,Color("dcffff"))
+		var track := Rect2(12,29,size.x-24,6)
+		draw_style_box(panel,track)
+		var fill := StyleBoxFlat.new()
+		fill.bg_color = GOLD
+		fill.set_corner_radius_all(3)
+		draw_style_box(fill,Rect2(track.position,Vector2(track.size.x*clampf(remaining/duration,0,1),track.size.y)))
 
 class AimOverlay extends Control:
 	var origin := Vector2.ZERO
@@ -53,7 +79,7 @@ class AimOverlay extends Control:
 	var control_attached := false
 	var vertical_direction := 0
 	var vertical_progress := 0.0
-	var aim_color := Color("f3c668")
+	var aim_color := GOLD
 	var trajectory := PackedVector2Array()
 	var branches: Array[Dictionary] = []
 	var animation := 0.0
@@ -85,36 +111,59 @@ class AimOverlay extends Control:
 			draw_arc(contact,pulse,animation,animation+TAU*.78,24,color,1.5*ui_scale,true)
 
 	func draw_controls() -> void:
-			var color := Color("96d9b4") if vertical_progress>=1 else Color("f3c668")
+			var color := CYAN if vertical_progress>=1 else GOLD
 			var radius := 48*ui_scale
 			var knob := control_origin+(control_target-control_origin).limit_length(ClimbGesture.STICK_RADIUS*ui_scale)*(48/ClimbGesture.STICK_RADIUS)
-			draw_circle(control_origin,radius,Color("122c29",.28))
-			draw_circle(control_origin,radius,Color(color,.38),false,ui_scale,true)
-			draw_circle(control_origin,ClimbGesture.DEAD_ZONE*ui_scale,Color(color,.28),false,ui_scale,true)
+			# Layered ring treatment keeps the control legible over bright terrain while
+			# preserving the original touch origin and travel distance.
+			draw_circle(control_origin,radius+13*ui_scale,Color("071323",.22))
+			draw_circle(control_origin,radius+8*ui_scale,Color("0c1d31",.55))
+			draw_arc(control_origin,radius+8*ui_scale,-PI*.15,PI*1.15,64,Color(color,.24),1.5*ui_scale,true)
+			draw_circle(control_origin,radius,Color("0b1c2e",.78))
+			draw_circle(control_origin,radius,Color(color,.62),false,1.5*ui_scale,true)
+			draw_circle(control_origin,radius-8*ui_scale,Color("132942",.42),false,1*ui_scale,true)
+			draw_circle(control_origin,ClimbGesture.DEAD_ZONE*ui_scale,Color(color,.12))
+			draw_circle(control_origin,ClimbGesture.DEAD_ZONE*ui_scale,Color(color,.52),false,1*ui_scale,true)
 			if control_attached:
 				for axis_angle in [-PI*.5,PI*.5]:
 					for side in [-1,1]:
 						var angle: float = axis_angle+side*deg_to_rad(15)
-						draw_line(control_origin,control_origin+Vector2.from_angle(angle)*radius,Color(color,.22),ui_scale,true)
+						draw_line(control_origin,control_origin+Vector2.from_angle(angle)*(radius-5*ui_scale),Color(color,.18),ui_scale,true)
+				for angle in [-PI*.5,0,PI*.5,PI]:
+					var tick := control_origin+Vector2.from_angle(angle)*(radius+3*ui_scale)
+					draw_circle(tick,2*ui_scale,Color(color,.72))
 			if vertical_direction!=0 and control_attached:
-				draw_arc(control_origin,radius+4*ui_scale,-PI*.5,-PI*.5+TAU*maxf(.001,vertical_progress),48,color,3*ui_scale,true)
-			draw_line(control_origin,knob,Color(color,.6),2*ui_scale,true)
-			draw_circle(knob,8*ui_scale,color,false,2*ui_scale,true)
+				draw_arc(control_origin,radius+7*ui_scale,-PI*.5,-PI*.5+TAU*maxf(.001,vertical_progress),64,color,3*ui_scale,true)
+			# Direction rail and a raised, high-contrast thumb make the drag state obvious.
+			draw_line(control_origin,knob,Color(color,.35),5*ui_scale,true)
+			draw_circle(knob,13*ui_scale,Color("071323",.65))
+			draw_circle(knob,10*ui_scale,color)
+			draw_circle(knob,5*ui_scale,Color("fff7df",.72))
+			draw_arc(knob,10*ui_scale,-PI*.85,PI*.05,24,Color("fff7df",.8),1.5*ui_scale,true)
 
 func setup(controller) -> void:
 	game = controller
 	base_theme = Theme.new()
+	# The built-in fallback font is rasterized at a small reference size and
+	# becomes soft when the responsive HUD is scaled. Use a native vector font
+	# family so every label is rasterized at its final on-screen size.
+	var system_font := SystemFont.new()
+	system_font.font_names = PackedStringArray(["Segoe UI", "Roboto", "Noto Sans", "Arial"])
+	system_font.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+	system_font.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
+	system_font.oversampling = 3.0
+	body_font = system_font
 	heading_font = FontVariation.new()
-	heading_font.base_font = ThemeDB.fallback_font
+	heading_font.base_font = body_font
 	heading_font.variation_embolden = .65
 	base_theme.default_font_size = 17
 	base_theme.set_color("font_color","Label",WHITE)
 	base_theme.set_color("font_color","Button",WHITE)
-	base_theme.set_stylebox("normal","Button",style(Color("253f4d"),12,Color("54717c")))
-	base_theme.set_stylebox("hover","Button",style(Color("355a66"),12,Color("85b6c0")))
-	base_theme.set_stylebox("pressed","Button",style(Color("162e3b"),12,Color("8bc6d2")))
-	base_theme.set_stylebox("disabled","Button",style(Color("253743"),12,Color("3c505c")))
-	base_theme.set_color("font_disabled_color","Button",Color("879ca5"))
+	base_theme.set_stylebox("normal","Button",style(Color("172a42"),14,Color("34516a")))
+	base_theme.set_stylebox("hover","Button",style(Color("223c59"),14,CYAN))
+	base_theme.set_stylebox("pressed","Button",style(Color("0d1d32"),14,Color("9af0e5")))
+	base_theme.set_stylebox("disabled","Button",style(Color("172235"),14,Color("2b3b50")))
+	base_theme.set_color("font_disabled_color","Button",Color("71839a"))
 	base_theme.set_font("font","Button",heading_font)
 	backdrop = LobbyView.Backdrop.new()
 	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -181,6 +230,9 @@ func style(color: Color, radius: int = 16, border: Color = Color.TRANSPARENT) ->
 	box.corner_radius_bottom_right = radius
 	box.border_color = border
 	box.set_border_width_all(1 if border.a>0 else 0)
+	box.shadow_color = Color("050b16",.42) if color.a>0 else Color.TRANSPARENT
+	box.shadow_size = 7 if color.a>0 else 0
+	box.shadow_offset = Vector2(0,4)
 	box.content_margin_left = 18
 	box.content_margin_right = 18
 	box.content_margin_top = 14
@@ -190,6 +242,8 @@ func style(color: Color, radius: int = 16, border: Color = Color.TRANSPARENT) ->
 func label(parent: Node, text: String, size: int = 17, color: Color = WHITE) -> Label:
 	var node := Label.new()
 	node.text = text
+	if body_font!=null:
+		node.add_theme_font_override("font",body_font)
 	node.add_theme_font_size_override("font_size",size)
 	node.add_theme_color_override("font_color",color)
 	node.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -218,28 +272,28 @@ func skin_button(node: Button, tone: String = "secondary") -> void:
 	var selected := tone=="selected"
 	var ghost := tone=="ghost"
 	for state_name in ["normal","hover","pressed","disabled"]:
-		var fill := GOLD if primary else Color("314a3b") if selected else Color("1c3630")
-		var edge := Color("f8dea3") if primary else Color("88996a") if selected else Color("3e584a")
+		var fill := GOLD if primary else Color("23435a") if selected else Color("172a42")
+		var edge := Color("ffe09a") if primary else CYAN if selected else Color("34516a")
 		if ghost:
 			fill = Color.TRANSPARENT
 			edge = Color.TRANSPARENT
-		if state_name=="hover": fill = fill.lightened(.09) if not ghost else Color("263f33")
-		if state_name=="pressed": fill = fill.darkened(.12) if not ghost else Color("324e3d")
+		if state_name=="hover": fill = fill.lightened(.11) if not ghost else Color("1f3650")
+		if state_name=="pressed": fill = fill.darkened(.12) if not ghost else Color("294760")
 		if state_name=="disabled":
-			fill = Color("1c302b")
-			edge = Color("30463a")
-		var box := style(fill,13,edge)
+			fill = Color("172235")
+			edge = Color("2b3b50")
+		var box := style(fill,14,edge)
 		box.content_margin_left = 14
 		box.content_margin_right = 14
 		box.content_margin_top = 6
 		box.content_margin_bottom = 6
 		node.add_theme_stylebox_override(state_name,box)
-	var focus := style(Color.TRANSPARENT,13,Color("e9d9a5"))
+	var focus := style(Color.TRANSPARENT,14,Color("ffe09a"))
 	focus.set_border_width_all(2)
 	node.add_theme_stylebox_override("focus",focus)
 	for color_name in ["font_color","font_hover_color","font_pressed_color"]:
 		node.add_theme_color_override(color_name,INK if primary else WHITE)
-	node.add_theme_color_override("font_disabled_color",Color("82998a"))
+	node.add_theme_color_override("font_disabled_color",Color("71839a"))
 	node.add_theme_font_size_override("font_size",16)
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	node.clip_text = true
@@ -259,7 +313,7 @@ func panel(at: Vector2, dimensions: Vector2, parent: Node = null) -> VBoxContain
 	card.position = at
 	card.size = dimensions
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
-	card.add_theme_stylebox_override("panel",style(Color("102a29ed"),18,Color("55725b80")))
+	card.add_theme_stylebox_override("panel",style(Color("0e1d31e8"),18,Color("385a72")))
 	(parent if parent!=null else content).add_child(card)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation",12)
@@ -278,6 +332,7 @@ func clear() -> void:
 	goal_label = null
 	aim_label = null
 	climb_bar = null
+	slowmo_indicator = null
 	aim_overlay.active = false
 	aim_overlay.control_active = false
 	aim_overlay.queue_redraw()
@@ -334,6 +389,13 @@ func show_play() -> void:
 	climb_bar.size = Vector2(root.size.x-48,5)
 	climb_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(climb_bar)
+	slowmo_indicator = SlowmoIndicator.new()
+	slowmo_indicator.text_font = body_font
+	slowmo_indicator.size = Vector2(196,44)
+	slowmo_indicator.position = Vector2((root.size.x-slowmo_indicator.size.x)*.5,22)
+	slowmo_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slowmo_indicator.visible = false
+	content.add_child(slowmo_indicator)
 	bag_panel = HBoxContainer.new()
 	bag_panel.add_theme_constant_override("separation",7)
 	bag_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -369,6 +431,10 @@ func update_play() -> void:
 	toast_label.position.y = root.size.y-(154 if game.state=="play" else 59)
 	if not is_instance_valid(height_label) or game.state!="play":
 		return
+	if is_instance_valid(slowmo_indicator):
+		slowmo_indicator.remaining = game.focus_remaining
+		slowmo_indicator.visible = game.focus_remaining>0.0
+		slowmo_indicator.queue_redraw()
 	height_label.text = "%d м" % maxi(0,int((game.sim.pos.y-game.START_Y)*10))
 	record_label.text = "♛ Рекорд: %d м" % int(game.model.profile["best"])
 	var remaining: float = game.sim.pos.y-game.screen_bottom_y()
@@ -414,7 +480,7 @@ func update_play() -> void:
 			var points := PackedVector2Array()
 			for sample in branch["points"]: points.append(game.camera.unproject_position(Vector3(sample.x,sample.y,0)))
 			var hit: Dictionary = branch["collision"]
-			var color := GOLD if hit.is_empty() else Color("ff987f") if hit.get("blocked",false) or not branch["reachable"] else Color("8ae0ac")
+			var color := GOLD if hit.is_empty() else CORAL if hit.get("blocked",false) or not branch["reachable"] else Color("8ae0ac")
 			var contact: Vector2 = branch["contact"]
 			aim_overlay.branches.append({"points":points,"target":game.camera.unproject_position(Vector3(contact.x,contact.y,0)),"color":color})
 		aim_overlay.animation = game.animation_time
@@ -424,13 +490,13 @@ func update_play() -> void:
 			point = collision["contact"]
 			if collision.get("blocked",false):
 				aim_label.text = "Карниз · можно приземлиться сверху" if collision.get("object",{}).get("rest",false) else "Твёрдый выступ · крюк не зацепится"
-				aim_overlay.aim_color = Color("ff987f")
+				aim_overlay.aim_color = CORAL
 			else:
 				aim_label.text = game.world.object_description(collision["object"])
 				aim_overlay.aim_color = Color("8ae0ac")
 				aim_label.text += " · %.2f с" % float(shot_preview["time"])
 				if not shot_preview["reachable"]:
-					aim_overlay.aim_color = Color("ff987f")
+					aim_overlay.aim_color = CORAL
 					aim_label.text = "Удаляешься от цели — каната не хватит"
 	else:
 		shot_preview.clear()

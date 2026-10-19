@@ -53,12 +53,23 @@ public final class LastHookAds extends GodotPlugin {
             if (ready) { emitSignal("initialized"); return; }
             if (initializing) return;
             initializing = true;
-            YandexAds.initialize(getActivity(), () -> ui(() -> {
-                ready = true;
-                rewardedLoader = new RewardedAdLoader(getActivity());
-                interstitialLoader = new InterstitialAdLoader(getActivity());
-                emitSignal("initialized");
-            }));
+            try {
+                YandexAds.initialize(getActivity(), () -> ui(() -> {
+                    try {
+                        ready = true;
+                        rewardedLoader = new RewardedAdLoader(getActivity());
+                        interstitialLoader = new InterstitialAdLoader(getActivity());
+                        emitSignal("initialized");
+                    } catch (Throwable error) {
+                        ready = false;
+                        initializing = false;
+                        failed("initialize", error.toString());
+                    }
+                }));
+            } catch (Throwable error) {
+                initializing = false;
+                failed("initialize", error.toString());
+            }
         });
     }
 

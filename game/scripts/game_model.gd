@@ -7,7 +7,7 @@ const THROW := 6
 # Release slow motion. Its track has as many levels as balance.json lists
 # durations, so one entry means the upgrade is not on sale yet.
 const SLOWMO := 7
-const BUILD_VERSION := "0.13.2"
+const BUILD_VERSION := "0.14.0"
 const HOOK_NAMES = ["Одинарный", "Тройной", "2 одинарных", "2 тройных"]
 const PREVIOUS_UPGRADE_PRICES = [90, 300, 1000, 3200, 15500]
 const PREVIOUS_TIP_PRICES = [2400, 12000]

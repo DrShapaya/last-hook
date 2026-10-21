@@ -8,6 +8,8 @@ param(
     [string]$KeystorePasswordFile = ''
 )
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 (used by Release.cmd) loads neither assembly itself.
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $taskApk = [IO.Path]::GetFullPath($ApkPath)
 $taskPacked = $taskApk + '.icon-fix.zip'

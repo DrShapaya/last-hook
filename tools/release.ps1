@@ -11,6 +11,13 @@ $taskModel = Join-Path $taskRoot 'game\scripts\game_model.gd'
 $taskPresets = Join-Path $taskRoot 'game\export_presets.cfg'
 $taskUtf8 = [Text.UTF8Encoding]::new($false)
 
+# Stop before touching the version if a build is already running; build.ps1
+# then holds the same lock for the whole build.
+$taskLockPath = Join-Path $taskRoot 'artifacts\build.lock'
+New-Item -ItemType Directory -Path (Split-Path $taskLockPath) -Force | Out-Null
+try { [IO.File]::Open($taskLockPath, 'OpenOrCreate', 'ReadWrite', 'None').Dispose() }
+catch { throw 'Another Last Hook build is already running. Wait for it to finish and start again.' }
+
 $taskModelText = [IO.File]::ReadAllText($taskModel)
 $taskCurrent = [regex]::Match($taskModelText, 'const BUILD_VERSION := "([^"]+)"').Groups[1].Value
 if (-not $taskCurrent) { throw 'BUILD_VERSION is missing from game_model.gd.' }

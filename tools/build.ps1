@@ -28,7 +28,18 @@ if ($Release -and $Target -in @('All','Android')) {
 }
 New-Item -ItemType Directory -Path $taskArtifacts -Force | Out-Null
 if (-not (Test-Path -LiteralPath $taskGodot)) { throw 'Portable Godot is missing from tools/godot.' }
-$env:LASTHOOK_SAVE_DIR = (Join-Path $taskArtifacts 'build-test-profile').Replace('\','/')
+# Builds share the Godot import cache, test saves and output folders, so only
+# one may run at a time. The lock is released when this process exits.
+try {
+    $taskLock = [IO.File]::Open((Join-Path $taskArtifacts 'build.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+} catch {
+    throw 'Another Last Hook build is already running. Wait for it to finish and start again.'
+}
+# Tests start from empty saves every time, never from a previous build's files.
+$taskTestProfile = Join-Path $taskArtifacts 'build-test-profile'
+if (Test-Path -LiteralPath $taskTestProfile) { Remove-Item -LiteralPath $taskTestProfile -Recurse -Force }
+New-Item -ItemType Directory -Path $taskTestProfile -Force | Out-Null
+$env:LASTHOOK_SAVE_DIR = $taskTestProfile.Replace('\','/')
 $env:APPDATA = (Join-Path $taskArtifacts 'build-appdata').Replace('\','/')
 $env:TEMP = Join-Path $taskArtifacts 'build-temp'
 $env:TMP = $env:TEMP

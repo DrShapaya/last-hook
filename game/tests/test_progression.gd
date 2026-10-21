@@ -25,6 +25,11 @@ func has_label(game, value: String) -> bool:
 		if label.text==value: return true
 	return false
 
+func has_text(node: Node, value: String) -> bool:
+	for label in node.find_children("*","Label",true,false):
+		if label.text==value: return true
+	return false
+
 func run_tests() -> void:
 	var directory := OS.get_environment("LASTHOOK_SAVE_DIR")
 	if directory.is_empty():
@@ -84,9 +89,10 @@ func run_tests() -> void:
 	game.hud.select_menu("equipment")
 	for expected in [2,3,4]:
 		var tip_button: Button
+		var price := 900 if expected==2 else 1800 if expected==3 else 3000
 		for button in game.hud.content.find_children("*","Button",true,false):
-			var price := 900 if expected==2 else 1800 if expected==3 else 3000
-			if button.text=="Улучшить · %d" % price: tip_button = button
+			# The price is a label inside the button and the row is named by its card.
+			if button.text=="Улучшить" and has_text(button.get_parent(),"Крюки") and has_text(button,str(price)): tip_button = button
 		check(tip_button!=null and not tip_button.disabled,"tip purchase has an enabled real menu button for %d tips" % expected)
 		if tip_button!=null: tip_button.pressed.emit()
 		game._process(.01)
@@ -140,7 +146,7 @@ func run_tests() -> void:
 	var diamonds_before := int(game.model.profile["diamonds"])
 	game.finish_run(false)
 	check(game.settlement["zone_diamonds"]==3 and game.model.profile["diamonds"]==diamonds_before,"result reports previously banked zone diamonds without paying them again")
-	check(has_label(game,"Новые зоны · уже начислено") and has_label(game,"+3"),"result displays the zone gold row and its diamond reward")
+	check(has_label(game,"Новые зоны, уже на счету") and has_label(game,"+3"),"result displays the zone gold row and its diamond reward")
 	game.show_menu()
 	game.hud.touch_controls_hint = true
 	game.hud.select_menu("settings")

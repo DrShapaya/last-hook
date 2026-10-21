@@ -20,6 +20,14 @@ var picked: Array = []
 var save_path: String
 var save_error: String = ""
 
+static func loot_name(item: Dictionary) -> String:
+	match str(item.get("kind","")):
+		"coin": return "Золотая монетка"
+		"crown": return "Корона ветров"
+		"chalice": return "Кубок вершины"
+		"idol": return "Каменный идол"
+	return LOOT_NAMES[clampi(int(item.get("tier",0)),0,LOOT_NAMES.size()-1)]
+
 func _init(path: String = "") -> void:
 	balance = JSON.parse_string(FileAccess.get_file_as_string("res://data/balance.json"))
 	var custom := OS.get_environment("LASTHOOK_SAVE_DIR")
@@ -30,7 +38,9 @@ func _init(path: String = "") -> void:
 static func fresh_profile() -> Dictionary:
 	return {"version": 5, "gold": 0, "diamonds": 0, "levels": [1, 1, 1, 1, 1, 1, 1], "best": 0.0,
 		"endless_best": 0.0, "reached_zones": 1, "summit_cleared": false, "locations": [0],
-		"cleared_locations": [], "runs": 0, "wins": 0, "last_settled": "", "active": {}, "sound": true,"selected_location":0,"run_history":[],"learned_controls":[]}
+		"cleared_locations": [], "runs": 0, "wins": 0, "last_settled": "", "active": {},
+		"sound": true, "vibration": true, "notifications": true, "graphics_quality": "balanced",
+		"selected_location":0,"run_history":[],"learned_controls":[]}
 
 func load_profile() -> void:
 	for path in [save_path, save_path + ".bak"]:

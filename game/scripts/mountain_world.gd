@@ -2,7 +2,7 @@ class_name MountainWorld
 extends Node3D
 
 const GENERATION_VERSION := 11
-const COLORS := [Color("e3b95e"),Color("b97bed"),Color("61d6a5"),Color("88dafa"),Color("ed99da")]
+const COLORS := [Color("e3b95e"),Color("e8624d"),Color("70c995"),Color("78d8e5"),Color("a994df"),Color("f1d27b")]
 var layout := MountainLayout.new()
 var visuals: MountainVisuals
 var visuals_enabled := true
@@ -14,14 +14,20 @@ var finds: Array[Dictionary] = []
 var ledges: Array[Dictionary] = []
 var chunks: Dictionary = {}
 var materials: Dictionary = {}
+# Shared shaders live with the world, not in static vars, so they are freed
+# before the renderer shuts down.
+var shaders: Dictionary = {}
 var seed_value := 0
 var location := 0
 var generation_version := GENERATION_VERSION
 var generated_height := 0.0
 var ghost_texture: ImageTexture
 var sky_backdrop: ProceduralSkyBackdrop
+var far_layers: Array[Node3D] = []
+var far_bands: Dictionary = {}
 var camera_center := Vector2(0,7)
 var show_loot_prices := true
+var visual_quality := "balanced"
 
 static func generation_version_for(biome: int) -> int:
 	return GENERATION_VERSION if biome==0 else 4
@@ -47,6 +53,17 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	if layout is MassifLayout: visuals = MassifVisuals.new(self,layout)
 	if location!=0: visuals = LegacyMountainVisuals.new(self,layout)
 	if visuals_enabled and location==0: _build_sky()
+
+func set_visual_quality(quality: String) -> void:
+	var selected := quality if quality in ["high","balanced","battery"] else "balanced"
+	var changed := selected!=visual_quality
+	visual_quality = selected
+	if visuals!=null and visuals.has_method("set_quality"):
+		visuals.set_quality(visual_quality)
+	# Decor density, loot glints and shadow casters are baked per chunk.
+	if changed and visuals_enabled and not chunks.is_empty():
+		for key in chunks.keys(): _release_chunk(key)
+		update_visibility(camera_center.y,camera_center.x)
 
 func seeded_rng(index: int, stream: int) -> RandomNumberGenerator:
 	return layout.rng(index,stream)
@@ -154,7 +171,14 @@ func update_rope_path(sim: RopeSim) -> bool:
 		sim.request_length(sim.target_length)
 	return not rope_clearance_blocked(sim.effective_anchor(),sim.pos,.045)
 
-func mat(key: String, color: Color, unlit: bool = true) -> StandardMaterial3D:
+func shader(key: String, code: String) -> Shader:
+	if not shaders.has(key):
+		var result := Shader.new()
+		result.code = code
+		shaders[key] = result
+	return shaders[key]
+
+func mat(key: String, color: Color, unlit: bool = false) -> StandardMaterial3D:
 	if materials.has(key):
 		return materials[key]
 	var result := StandardMaterial3D.new()
@@ -172,6 +196,7 @@ func box(node_name: String, where: Vector3, dimensions: Vector3, material: Mater
 	instance.name = node_name
 	instance.mesh = mesh
 	instance.material_override = material
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	var owner_node: Node3D = self if parent==null else parent
 	owner_node.add_child(instance)
 	instance.position = owner_node.to_local(where)
@@ -186,6 +211,7 @@ func sphere(node_name: String, where: Vector3, dimensions: Vector3, material: Ma
 	mesh.rings = 4
 	instance.mesh = mesh
 	instance.material_override = material
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	(self if parent==null else parent).add_child(instance)
 	instance.name = node_name
 	instance.position = where if parent==null else parent.to_local(where)
@@ -220,7 +246,39 @@ func cast_hook(from: Vector2, to: Vector2, grip: float, ignore_anchor: int = -1)
 		if fraction>=0 and fraction<=best:
 			best = fraction
 			result = {"blocked":true,"object":obstacle,"fraction":fraction,"contact":from.lerp(to,fraction),"normal":contact["normal"]}
+	# The grip radius only decides whether a shot catches. The hook itself
+	# rests on the drawn stone, never on the invisible assist margin.
+	if not result.is_empty() and not result.get("blocked",false):
+		result["contact"] = anchor_surface_point(result["object"],result["contact"],to-from)
 	return result
+
+func anchor_outline(object: Dictionary) -> PackedVector2Array:
+	var pos: Vector2 = object["pos"]
+	var outline := PackedVector2Array()
+	if object.has("surface") or object.has("polygon"):
+		for point in object["surface"] if object.has("surface") else object["polygon"]: outline.append(point+pos)
+	else:
+		var half: Vector2 = object["dimensions"]*.5
+		outline = PackedVector2Array([pos-half,pos+Vector2(half.x,-half.y),pos+half,pos+Vector2(-half.x,half.y)])
+	return outline
+
+# Moves a point onto the visible grip surface: along the shot direction when
+# it still meets the stone, otherwise to the nearest point of the contour.
+func anchor_surface_point(object: Dictionary, point: Vector2, direction: Vector2 = Vector2.ZERO) -> Vector2:
+	var outline := anchor_outline(object)
+	if outline.size()<3 or Geometry2D.is_point_in_polygon(point,outline): return point
+	var best := outline[0]
+	for index in range(outline.size()):
+		var closest := Geometry2D.get_closest_point_to_segment(point,outline[index],outline[(index+1)%outline.size()])
+		if closest.distance_squared_to(point)<best.distance_squared_to(point): best = closest
+	if direction.length_squared()>.000001:
+		# A grazing ray may meet the stone far along its path; then the nearest
+		# point reads better than a hook sliding across the face.
+		var limit := point.distance_to(best)*2+.05
+		var reach := point+direction.normalized()*limit
+		var fraction := RopeSim.hit_polygon(point,reach,outline)
+		if fraction>=0: return point.lerp(reach,fraction)
+	return best
 
 func move_player(from: Vector2, to: Vector2, velocity: Vector2) -> Dictionary:
 	var position_value := from
@@ -264,26 +322,96 @@ func move_player(from: Vector2, to: Vector2, velocity: Vector2) -> Dictionary:
 			rest = bool(best["object"].get("rest",false))
 	return {"position":position_value,"velocity":velocity,"grounded":grounded,"rest":rest,"impact":impact,"contacts":contacts}
 
+func _loot_material(key: String, color: Color, metallic: float, roughness: float, glow: Color = Color.TRANSPARENT) -> StandardMaterial3D:
+	var material := mat(key,color,false)
+	material.metallic = metallic
+	material.roughness = roughness
+	if glow.a>0:
+		material.emission_enabled = true
+		material.emission = glow
+		material.emission_energy_multiplier = .55
+	return material
+
+func _loot_mesh(parent: Node3D, mesh: Mesh, material: Material, at: Vector3 = Vector3.ZERO, scale_value: Vector3 = Vector3.ONE) -> MeshInstance3D:
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.material_override = material
+	instance.position = at
+	instance.scale = scale_value
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	parent.add_child(instance)
+	return instance
+
+func _loot_shadow(parent: Node3D) -> MeshInstance3D:
+	var quad := QuadMesh.new()
+	quad.size = Vector2(.82,.34)
+	var shader := Shader.new()
+	shader.code = "shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_never; void fragment(){ vec2 p=UV*2.0-1.0; float d=length(p); float a=smoothstep(1.0,.08,d)*.22; ALBEDO=vec3(.015,.025,.045); ALPHA=a; }"
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	var shadow := _loot_mesh(parent,quad,material,Vector3(0,-.04,-.11),Vector3(1,1,1))
+	shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return shadow
+
+func _loot_polygon(parent: Node3D, points: PackedVector2Array, material: Material, z: float = .08) -> MeshInstance3D:
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var indices := Geometry2D.triangulate_polygon(points)
+	for index in range(0,indices.size(),3):
+		for vertex_index in [indices[index],indices[index+1],indices[index+2]]:
+			surface.set_normal(Vector3(0,0,1))
+			surface.add_vertex(Vector3(points[vertex_index].x,points[vertex_index].y,z))
+	var instance := MeshInstance3D.new()
+	instance.mesh = surface.commit()
+	if material is StandardMaterial3D:
+		var flat_material := material.duplicate() as StandardMaterial3D
+		flat_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		instance.material_override = flat_material
+	else:
+		instance.material_override = material
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	parent.add_child(instance)
+	return instance
+
 func _build_find(find: Dictionary, parent: Node3D) -> void:
 	var holder := Node3D.new()
 	parent.add_child(holder)
 	var point: Vector2 = find["pos"]
 	holder.position = Vector3(point.x,point.y,2.2)
+	holder.scale = Vector3.ONE*1.22
 	find["visual"] = holder
-	var mesh := box("Предмет",holder.position,Vector3(.28,.38,.26),mat("loot",Color("ffca60")),holder)
-	mesh.rotation_degrees.z = 35
+	var wall_z := 1.1
+	if visuals is MassifVisuals: wall_z = (visuals as MassifVisuals).wall_depth(point)
+	holder.position.z = clampf(wall_z+.75,1.7,2.4)
+	# Contact offsets are in holder space; the holder is uniformly scaled.
+	LootVisuals.build(self,find,holder,visual_quality,(wall_z-holder.position.z)/holder.scale.x)
 	var price := Label3D.new()
 	price.text = str(find["item"]["value"])
 	price.font_size = 30
-	price.pixel_size = .012
-	price.outline_size = 9
-	price.modulate = Color("ffe5a0")
-	price.outline_modulate = Color("233743")
+	price.pixel_size = .011
+	price.outline_size = 10
+	price.modulate = Color("fff1c4")
+	price.outline_modulate = Color("1d3330dd")
+	price.shaded = false
+	price.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	holder.add_child(price)
-	price.position = Vector3(0,.55,.2)
+	price.position = Vector3(0,.62,.3)
 	price.visible = show_loot_prices
 	find["price_visual"] = price
 	holder.visible = not find.get("picked",false)
+
+const PRICE_NEAR := 3.2
+const PRICE_AIM := 1.6
+
+func update_loot_prices(playing: bool, always: bool, hero: Vector2, aim: Vector2) -> void:
+	show_loot_prices = playing and always
+	for find in finds:
+		var price = find.get("price_visual")
+		if not is_instance_valid(price): continue
+		var point: Vector2 = find["pos"]
+		var near := hero.distance_to(point)<PRICE_NEAR
+		var aimed := aim.is_finite() and Geometry2D.get_closest_point_to_segment(point,hero,aim).distance_to(point)<PRICE_AIM
+		price.visible = playing and (always or near or aimed)
 
 func set_loot_prices_visible(show_prices: bool) -> void:
 	show_loot_prices = show_prices
@@ -292,12 +420,9 @@ func set_loot_prices_visible(show_prices: bool) -> void:
 			find["price_visual"].visible = show_prices
 
 func _build_sky() -> void:
-	# The volumetric canvas shader is intentionally desktop-only.  A few
-	# Android GPUs abort while compiling its nested noise loops during startup;
-	# the Environment sky remains as a lightweight gradient fallback.
-	if OS.has_feature("mobile"):
-		sky_backdrop = null
-		return
+	# A flat two-colour gradient on every platform. The volumetric cloud
+	# shader is no longer used in game: a few Android GPUs abort while
+	# compiling its nested noise loops.
 	sky_backdrop = ProceduralSkyBackdrop.new()
 	add_child(sky_backdrop)
 	sky_backdrop.setup(seed_value)
@@ -319,6 +444,7 @@ func update_visibility(center_y: float, center_x: float = 0) -> void:
 	camera_center = Vector2(center_x,center_y)
 	if is_instance_valid(sky_backdrop): sky_backdrop.set_view(camera_center)
 	if not visuals_enabled: return
+	_update_far_layers()
 	var first := maxi(0,int(floor((center_y-32)/24)))
 	var ready_chunk := int(floor((layout.main_point(layout.row).y-2)/24))-1
 	if location!=0: ready_chunk = int(ceil(generated_height/24))
@@ -350,6 +476,39 @@ func update_visibility(center_y: float, center_x: float = 0) -> void:
 		if is_instance_valid(object.get("visual")): object["visual"].visible = not object["broken"]
 	for find in finds:
 		if is_instance_valid(find.get("visual")): find["visual"].visible = not find.get("picked",false)
+func _update_far_layers() -> void:
+	# Distant cliffs live in their own parallax space: each layer follows a
+	# share of the camera motion, so it drifts slower than the climbing face.
+	if not visuals is MassifVisuals: return
+	var massif := visuals as MassifVisuals
+	for far in range(1,MassifVisuals.FAR_LAYERS.size()+1):
+		var settings: Dictionary = MassifVisuals.FAR_LAYERS[far-1]
+		if far_layers.size()<far:
+			var node := Node3D.new()
+			node.name = "Дальний слой_%d" % far
+			add_child(node)
+			far_layers.append(node)
+		var holder := far_layers[far-1]
+		var follow: float = settings["follow"]
+		holder.position = Vector3(camera_center.x*follow,camera_center.y*follow,settings["z"])
+		holder.visible = far<=massif.far_layer_count()
+		var view := camera_center.y*(1.0-follow)
+		var first := int(floor((view-20)/24))
+		var last := int(floor((view+20)/24))
+		for key in far_bands.keys():
+			if key.x==far and (key.y<first or key.y>last or not holder.visible):
+				far_bands[key].queue_free()
+				far_bands.erase(key)
+		if not holder.visible: continue
+		for band in range(first,last+1):
+			var key := Vector2i(far,band)
+			if far_bands.has(key): continue
+			var node := Node3D.new()
+			node.name = "Дальние скалы_%d" % band
+			holder.add_child(node)
+			far_bands[key] = node
+			massif.build_far_band(far,band,node)
+
 func anchor_by_id(id: int) -> Dictionary:
 	return anchors[id] if id>=0 and id<anchors.size() else {}
 

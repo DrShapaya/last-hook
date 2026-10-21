@@ -1,75 +1,61 @@
 class_name LevelPreview
 extends Control
 
+# Postcard of the selected route in the same daylight palette as the climb:
+# faceted limestone peaks, lit from the upper left, with the hold line drawn
+# up the main face to the summit flag.
 var world: MountainWorld
 
-func project(point: Vector2) -> Vector2:
-	return Vector2(size.x*.5+point.x*size.x/40,size.y-point.y*size.y/24)
+const ROCK_LIT := Color("e9e4d6")
+const ROCK_MID := Color("cfc8b4")
+const ROCK_SHADE := Color("a99f88")
+const ROCK_DEEP := Color("8a8270")
 
 func _draw() -> void:
-	if is_instance_valid(world) and world.location!=0:
-		_draw_legacy()
-		return
 	var w := size.x
 	var h := size.y
+	var location: int = world.location if is_instance_valid(world) else 0
 	for band in range(40):
-		var color := Color("395b69").lerp(Color("afc7bb"),float(band)/39)
-		draw_rect(Rect2(0,h*band/40,w,h/40+1),color)
-	draw_circle(Vector2(w*.76,h*.25),h*.32,Color(1,.84,.52,.06))
-	draw_circle(Vector2(w*.76,h*.25),h*.19,Color(1,.88,.64,.12))
-	draw_circle(Vector2(w*.76,h*.25),h*.105,Color("f7da9d"))
-	for layer in range(3):
-		var points := PackedVector2Array([Vector2(0,h)])
-		for index in range(10):
-			points.append(Vector2(index*w/9,h*(.46+layer*.13)-sin(index*1.8+layer*2)*h*.14))
-		points.append(Vector2(w,h))
-		draw_colored_polygon(points,[Color("74928e"),Color("537a79"),Color("365f64")][layer])
-	var peak := Vector2(w*.52,h*.13)
-	var left := Vector2(w*.12,h)
-	var right := Vector2(w*.90,h)
-	draw_colored_polygon(PackedVector2Array([left,peak,right]),Color("628378"))
-	draw_colored_polygon(PackedVector2Array([peak,Vector2(w*.57,h*.47),Vector2(w*.38,h*.70),left]),Color("96a58b"))
-	draw_colored_polygon(PackedVector2Array([peak,Vector2(w*.57,h*.47),Vector2(w*.73,h*.74),right]),Color("3f665e"))
-	draw_colored_polygon(PackedVector2Array([peak,Vector2(w*.46,h*.30),Vector2(w*.51,h*.27),Vector2(w*.54,h*.35),Vector2(w*.59,h*.28)]),Color("e5e9d2"))
+		draw_rect(Rect2(0,h*band/40,w,h/40+1),MenuSurface.SKY_TOP.lerp(MenuSurface.SKY_LOW,float(band)/39))
+	var far := PackedVector2Array([Vector2(0,h)])
+	for index in range(9):
+		far.append(Vector2(index*w/8,h*(.52-.1*sin(index*1.9+location))))
+	far.append(Vector2(w,h))
+	draw_colored_polygon(far,MenuSurface.RIDGE_FAR)
+	var peaks: Array = [[.5,.12,.40]]
+	if location==1: peaks = [[.30,.30,.17],[.70,.24,.16],[.5,.10,.17]]
+	elif location==2: peaks = [[.24,.40,.22],[.78,.36,.22],[.5,.14,.30]]
+	for peak in peaks:
+		facet_peak(Vector2(w*peak[0],h*peak[1]),w*peak[2],h)
+	if location==2:
+		for index in range(5):
+			var at := Vector2(w*(.40+index*.05),h*(.15+absf(index-2)*.035))
+			draw_rect(Rect2(at-Vector2(6,14),Vector2(12,14)),ROCK_LIT)
+			draw_rect(Rect2(at-Vector2(6,14),Vector2(4,14)),ROCK_SHADE)
+		for index in range(4):
+			draw_circle(Vector2(w*(.1+index*.27),h*.58),h*.06,Color(1,1,1,.55))
+	var summit: Array = peaks[-1]
+	var top := Vector2(w*summit[0],h*summit[1])
+	var spread: float = w*summit[2]
 	for index in range(7):
-		var t := float(index)/7
-		var point := Vector2(w*(.42+.07*sin(index*1.6)),h*(.86-t*.56))
-		draw_circle(point,2.2,Color("efcc84"))
-	draw_line(peak+Vector2(0,2),peak+Vector2(0,-16),Color("dbe2cb"),1.4,true)
-	draw_colored_polygon(PackedVector2Array([peak+Vector2(0,-16),peak+Vector2(15,-12),peak+Vector2(0,-8)]),Color("f8c969"))
-	for index in range(24):
-		var x := index*w/23
-		var tree_height := h*(.08+.035*sin(index*3.2))
-		var base := Vector2(x,h*.96+sin(index)*h*.03)
-		draw_colored_polygon(PackedVector2Array([base+Vector2(-8,0),base+Vector2(0,-tree_height),base+Vector2(8,0)]),Color("234b49"))
+		var t := float(index+1)/8
+		var point := Vector2(top.x+sin(index*2.3)*spread*.32*(1-t*.6),h-(h-top.y)*t*.92)
+		draw_colored_polygon(PackedVector2Array([point+Vector2(-7,-2),point+Vector2(7,-2),point+Vector2(5,2),point+Vector2(-5,2)]),[MenuSurface.HOLD,Color("62c46c"),Color("9b7be0")][index%3] if index%3!=0 else MenuSurface.HOLD)
+	draw_line(top+Vector2(0,2),top+Vector2(0,-20),MenuSurface.INK,2,true)
+	draw_colored_polygon(PackedVector2Array([top+Vector2(1,-20),top+Vector2(17,-15),top+Vector2(1,-10)]),MenuSurface.HOLD)
+	for index in range(16):
+		var base := Vector2(index*w/15+sin(index*3.1)*8,h*(.97+.02*sin(index)))
+		var tuft := h*(.05+.02*sin(index*2.7))
+		draw_colored_polygon(PackedVector2Array([base+Vector2(-9,0),base+Vector2(-2,-tuft),base+Vector2(3,-tuft*.6),base+Vector2(9,0)]),Color("4a9a52") if index%2 else Color("3c8446"))
 
-func clip_triangle(points: Array[Vector2], color: Color) -> void:
-	var fields: Array[float] = []
-	for p in points: fields.append(world.layout.rock_field(p))
-	var polygon := PackedVector2Array()
-	for i in range(3):
-		var j := (i+1)%3
-		if fields[i]>=0: polygon.append(project(points[i]))
-		if (fields[i]>=0)!=(fields[j]>=0):
-			polygon.append(project(points[i].lerp(points[j],fields[i]/(fields[i]-fields[j]))))
-	if polygon.size()>=3: draw_colored_polygon(polygon,color)
-
-func _draw_legacy() -> void:
-	draw_rect(Rect2(Vector2.ZERO,size),Color("142438"))
-	var ratio := size.x/14
-	for side in [-1,1]:
-		var points := PackedVector2Array()
-		points.append(Vector2(0 if side<0 else size.x,0))
-		for index in range(7): points.append(Vector2(size.x*.5+world.cliff_edge(6-index,side)*ratio,index*size.y/6))
-		points.append(Vector2(0 if side<0 else size.x,size.y))
-		draw_colored_polygon(points,Color("354d66"))
-	for anchor in world.anchors:
-		var p: Vector2 = anchor["pos"]
-		if p.y>24: continue
-		var dimensions: Vector2 = anchor["dimensions"]*Vector2(ratio,size.y/24)
-		draw_rect(Rect2(Vector2(size.x*.5+p.x*ratio,size.y-p.y*size.y/24)-dimensions*.5,dimensions),MountainWorld.COLORS[anchor["kind"]])
-	for obstacle in world.obstacles:
-		var p: Vector2 = obstacle["pos"]
-		if p.y>24: continue
-		var dimensions: Vector2 = obstacle["dimensions"]*Vector2(ratio,size.y/24)
-		draw_rect(Rect2(Vector2(size.x*.5+p.x*ratio,size.y-p.y*size.y/24)-dimensions*.5,dimensions),Color("d75c67"))
+func facet_peak(top: Vector2, half: float, bottom: float) -> void:
+	var left := Vector2(top.x-half*1.15,bottom)
+	var right := Vector2(top.x+half*1.15,bottom)
+	var ridge := top.lerp(Vector2(top.x+half*.15,bottom),.45)
+	var shoulder_l := top.lerp(left,.42)+Vector2(-half*.08,0)
+	var shoulder_r := top.lerp(right,.38)+Vector2(half*.1,0)
+	draw_colored_polygon(PackedVector2Array([top,shoulder_l,ridge]),ROCK_LIT)
+	draw_colored_polygon(PackedVector2Array([top,ridge,shoulder_r]),ROCK_SHADE)
+	draw_colored_polygon(PackedVector2Array([shoulder_l,left,Vector2(top.x-half*.2,bottom),ridge]),ROCK_MID)
+	draw_colored_polygon(PackedVector2Array([ridge,Vector2(top.x-half*.2,bottom),Vector2(top.x+half*.5,bottom)]),ROCK_LIT.darkened(.05))
+	draw_colored_polygon(PackedVector2Array([ridge,Vector2(top.x+half*.5,bottom),right,shoulder_r]),ROCK_DEEP)

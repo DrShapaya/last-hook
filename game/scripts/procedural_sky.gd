@@ -10,13 +10,25 @@ var cloud_offset := Vector2.ZERO
 var ridge_offset := Vector2.ZERO
 var render_accumulator := 0.0
 var last_sky_time := -1.0
+# The cloud shader is kept for tools/validate_sky.gd; the game uses the flat sky.
+var volumetric_sky := false
 
-func setup(world_seed: int) -> void:
+func setup(world_seed: int, volumetric: bool = false) -> void:
 	name = "Процедурная атмосфера"
 	var quad := QuadMesh.new()
 	quad.size = Vector2(180,180)
 	mesh = quad
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if not volumetric:
+		# Default sky: one flat, saturated blue that lightens towards the
+		# horizon, without clouds. A two-colour gradient costs nothing on phones.
+		var flat := ShaderMaterial.new()
+		var shader := Shader.new()
+		shader.code = "shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled, depth_draw_never, fog_disabled; uniform vec3 top_color : source_color = vec3(.353,.663,.941); uniform vec3 bottom_color : source_color = vec3(.55,.77,.96); void fragment(){ ALBEDO=mix(top_color,bottom_color,smoothstep(.0,1.0,UV.y)); }"
+		flat.shader = shader
+		material_override = flat
+		return
+	volumetric_sky = true
 	sky_viewport.name = "Небо_640"
 	sky_viewport.disable_3d = true
 	sky_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
@@ -55,12 +67,14 @@ func set_view(center: Vector2) -> void:
 		var top_left := camera.project_position(Vector2.ZERO,50)
 		var bottom_right := camera.project_position(size,50)
 		(mesh as QuadMesh).size = Vector2(absf(bottom_right.x-top_left.x),absf(bottom_right.y-top_left.y)) * 1.002
+	if not volumetric_sky: return
 	cloud_offset = Vector2(center.x*.19,(center.y-7)*.045)
 	ridge_offset = Vector2(center.x*.065,clampf(log(1.0+maxf(center.y-7,0)*.03),0,3))
 	sky_material.set_shader_parameter("cloud_offset",cloud_offset)
 	sky_material.set_shader_parameter("ridge_offset",ridge_offset)
 
 func advance(time: float, delta: float) -> void:
+	if not volumetric_sky: return
 	render_accumulator += delta
 	if render_accumulator<UPDATE_INTERVAL or is_equal_approx(last_sky_time,time): return
 	render_accumulator = fmod(render_accumulator,UPDATE_INTERVAL)

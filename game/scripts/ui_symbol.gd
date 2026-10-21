@@ -5,6 +5,7 @@ var kind := 0
 var tint := Color("f3c668")
 var tip_count := 3
 var hook_count := 1
+var badge := false
 
 func hook_icon(offset: Vector2) -> void:
 	draw_set_transform(size*.5+offset*minf(size.x,size.y)/32,0,Vector2.ONE*minf(size.x,size.y)/32*(.58 if hook_count==2 else 1.0))
@@ -25,6 +26,10 @@ func plate(rect: Rect2, color: Color, radius: int = 4) -> void:
 	draw_style_box(box,rect)
 
 func _draw() -> void:
+	if badge:
+		var badge_radius := minf(size.x,size.y)*.46
+		draw_circle(size*.5,badge_radius,Color(tint,.08))
+		draw_arc(size*.5,badge_radius,-PI*.9,PI*.25,24,Color(tint,.24),1.0,true)
 	draw_set_transform(size*.5,0,Vector2.ONE*minf(size.x,size.y)/32)
 	var soft := Color(tint,.18)
 	match kind:
@@ -99,7 +104,7 @@ func _draw() -> void:
 		15: # Settings sliders.
 			for y in [-8,0,8]: stroke([Vector2(-12,y),Vector2(12,y)],1.6)
 			for point in [Vector2(-5,-8),Vector2(6,0),Vector2(-2,8)]:
-				draw_circle(point,3,Color("18382c"))
+				draw_circle(point,3,Color(tint,.15))
 				draw_arc(point,3,0,TAU,16,tint,1.8,true)
 		16: # Summit flag.
 			stroke([Vector2(-4,13),Vector2(-4,-13)],2.2)

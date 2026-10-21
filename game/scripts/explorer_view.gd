@@ -27,12 +27,14 @@ var shot_time := -10.0
 var impact_time := -10.0
 var impact_point := Vector2.ZERO
 var impact_kind := ""
+var body_shadow: MeshInstance3D
+var visual_quality := "balanced"
 
 func setup(world: MountainWorld, tips: int = 1) -> void:
 	body = preload("res://scenes/player_sprite.tscn").instantiate() as ExplorerRig
 	add_child(body)
 	body.setup()
-	rope_material = world.mat("braided_rope",Color.WHITE,true)
+	rope_material = world.mat("braided_rope",Color.WHITE,false)
 	rope_material.albedo_texture = load(ART+"rope-albedo.png") as Texture2D
 	rope_material.uv1_scale = Vector3(.20,1,1)
 	rope_material.texture_repeat = true
@@ -41,19 +43,21 @@ func setup(world: MountainWorld, tips: int = 1) -> void:
 	rope = MeshInstance3D.new()
 	rope.name = "Плетёный канат"
 	rope.material_override = rope_material
-	rope.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	rope.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	world.add_child(rope)
 	rope_outer = MeshInstance3D.new()
 	rope_outer.name = "Контур каната"
-	var edge := world.mat("rope_edge",Color("58412a"),true)
+	var edge := world.mat("rope_edge",Color("58412a"),false)
 	edge.cull_mode = BaseMaterial3D.CULL_DISABLED
 	rope_outer.material_override = edge
+	# The outline is an art edge; only the braided tube casts a shadow so the
+	# line keeps one soft, coherent silhouette on the rock.
 	rope_outer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	world.add_child(rope_outer)
 	rope_secondary = MeshInstance3D.new()
 	rope_secondary.name = "Плетёный канат 2"
 	rope_secondary.material_override = rope_material
-	rope_secondary.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	rope_secondary.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	world.add_child(rope_secondary)
 	rope_outer_secondary = MeshInstance3D.new()
 	rope_outer_secondary.name = "Контур каната 2"
@@ -64,11 +68,16 @@ func setup(world: MountainWorld, tips: int = 1) -> void:
 	bolt.name = "Кованый крюк"
 	bolt.scale = Vector3.ONE*.5
 	world.add_child(bolt)
-	var metal := world.mat("painted_hook",Color.WHITE,true)
+	var metal := world.mat("painted_hook",Color.WHITE,false)
 	metal.albedo_texture = load(ART+"hook-head.png") as Texture2D
 	metal.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	metal.alpha_scissor_threshold = .20
 	metal.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# Painted steel: mostly diffuse so the compatibility renderer (no
+	# reflection probes) keeps the forged faces readable instead of black.
+	metal.metallic = .30
+	metal.roughness = .34
+	metal.metallic_specular = .8
 	metal.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	# The shaft is not a tip: one curved hook, two side hooks, then a third
 	# central point. Match the count shown in the equipment menu.
@@ -80,13 +89,13 @@ func setup(world: MountainWorld, tips: int = 1) -> void:
 	var stem := MeshInstance3D.new()
 	stem.mesh = hook_piece(shaft,Vector2(1189,1323))
 	stem.material_override = metal
-	stem.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	stem.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	bolt.add_child(stem)
 	for polygon in [right,left,center]:
 		var piece := MeshInstance3D.new()
 		piece.mesh = hook_piece(polygon,Vector2(1189,1323))
 		piece.material_override = metal
-		piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		bolt.add_child(piece)
 		prongs.append(piece)
 	bolt_secondary = bolt.duplicate()
@@ -116,6 +125,43 @@ func setup(world: MountainWorld, tips: int = 1) -> void:
 	impact_mesh.material_override = effects
 	impact_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	world.add_child(impact_mesh)
+	var shadow_quad := QuadMesh.new()
+	shadow_quad.size = Vector2(.82,.28)
+	var shadow_shader := Shader.new()
+	shadow_shader.code = "shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_never; void fragment(){ vec2 p=UV*2.0-1.0; float d=length(p*vec2(1.0,.64)); ALBEDO=vec3(.012,.020,.028); ALPHA=smoothstep(1.0,.05,d)*.24; }"
+	var shadow_material := ShaderMaterial.new()
+	shadow_material.shader = shadow_shader
+	body_shadow = MeshInstance3D.new()
+	body_shadow.name = "Мягкая тень персонажа"
+	body_shadow.mesh = shadow_quad
+	body_shadow.material_override = shadow_material
+	body_shadow.position = Vector3(0,-.64,-.18)
+	body_shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(body_shadow)
+	set_visual_quality(world.visual_quality)
+
+func _update_body_shadow(sim: RopeSim) -> void:
+	# The sun casts the hero's real shadow. The contact blob only marks the
+	# feet on a ledge; with shadows off (battery) it stands in for the cast
+	# shadow at the same sun offset, so nothing floats under a hanging hero.
+	if visual_quality=="battery":
+		body_shadow.visible = true
+		body_shadow.position = Vector3(.42,-.66,-1.6) if not sim.grounded else Vector3(.06,-.62,-.18)
+		body_shadow.scale = Vector3(1.15,1.6,1.0) if not sim.grounded else Vector3.ONE
+	else:
+		body_shadow.visible = sim.grounded
+		body_shadow.position = Vector3(.06,-.62,-.18)
+		body_shadow.scale = Vector3.ONE
+
+func set_visual_quality(value: String) -> void:
+	visual_quality = value if value in ["high","balanced","battery"] else "balanced"
+	var cast := GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if visual_quality=="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	if is_instance_valid(rope): rope.cast_shadow = cast
+	if is_instance_valid(rope_secondary): rope_secondary.cast_shadow = cast
+	for head in [bolt,bolt_secondary]:
+		if not is_instance_valid(head): continue
+		for piece in head.get_children():
+			if piece is GeometryInstance3D: piece.cast_shadow = cast
 
 static func hook_piece(polygon: PackedVector2Array, texture_size: Vector2) -> ArrayMesh:
 	var surface := SurfaceTool.new()
@@ -152,7 +198,13 @@ func draw(sim: RopeSim, target: Vector2, tether: bool, flying_bolt: bool, time: 
 	if volley.size()>1:
 		_draw_volley(sim,time,warning,volley)
 		return
+	# The second line belongs to the volley renderer only. When the volley
+	# ends, hide it here or its last frame stays hanging in the world.
+	bolt_secondary.visible = false
+	rope_secondary.visible = false
+	rope_outer_secondary.visible = false
 	position = Vector3(sim.pos.x,sim.pos.y,3.2)
+	_update_body_shadow(sim)
 	var aiming: bool = flight.get("aiming",false)
 	var body_target: Vector2 = sim.pos+flight.get("aim",Vector2.UP)*3 if aiming else target
 	body.position.x = 0
@@ -224,6 +276,7 @@ func _draw_volley(sim: RopeSim, time: float, warning: bool, volley: Array) -> vo
 	# Each line has its own head and rope. An attached shot remains on the
 	# anchor while the losing shot visibly winds back to the hand.
 	position = Vector3(sim.pos.x,sim.pos.y,3.2)
+	_update_body_shadow(sim)
 	var body_target := sim.effective_anchor() if sim.attached else Vector2(volley[0].get("position",sim.pos))
 	body.position.x = 0
 	body.animate(sim,body_target,sim.attached,time)

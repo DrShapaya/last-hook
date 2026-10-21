@@ -130,6 +130,17 @@ func run_tests() -> void:
 	await touch_tap(find_button(game.hud.content,"Вкл" if was_enabled else "Выкл"))
 	var reloaded := GameModel.new(game.model.save_path)
 	check(game.model.profile["sound"]!=was_enabled and reloaded.profile["sound"]==game.model.profile["sound"],"sound setting persists across reload")
+	game.hud.select_menu("settings")
+	await touch_tap(find_button(game.hud.content,"Высокая"))
+	check(game.model.profile["graphics_quality"]=="high" and game.sun_light.shadow_enabled,"high graphics preset applies shadows and persists")
+	await touch_tap(find_button(game.hud.content,"Экономия"))
+	check(game.model.profile["graphics_quality"]=="battery" and Engine.max_fps==30 and not game.sun_light.shadow_enabled,"battery graphics preset lowers frame target and disables shadows")
+	var vibration_before: bool = game.model.profile["vibration"]
+	game.hud.toggle_vibration()
+	check(game.model.profile["vibration"]!=vibration_before,"vibration setting toggles")
+	var notifications_before: bool = game.model.profile["notifications"]
+	game.hud.toggle_notifications()
+	check(game.model.profile["notifications"]!=notifications_before,"notifications setting toggles")
 	game.model.profile["active"] = {}
 	game.run_id = ""
 	game.state = "menu"

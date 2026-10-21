@@ -253,12 +253,15 @@ func run_tests() -> void:
 	grip["broken"] = false
 	game.world.update_visibility(7,0)
 	var backdrop: ProceduralSkyBackdrop = game.world.sky_backdrop
-	var far_before: float = backdrop.ridge_offset.x
-	var near_before: float = backdrop.cloud_offset.x
+	var near_layer: Node3D = game.world.far_layers[0]
+	var far_layer: Node3D = game.world.far_layers[1]
+	var near_before := near_layer.position.x
+	var far_before := far_layer.position.x
 	game.world.update_visibility(7,4)
-	var far_shift: float = absf(backdrop.ridge_offset.x-far_before)
-	var near_shift: float = absf(backdrop.cloud_offset.x-near_before)
-	check(near_shift>far_shift+.4 and backdrop.position==Vector3(4,7,-22),"procedural clouds move faster than distant ridges while the sky follows the camera")
+	# On screen a layer drifts by (1 - follow) of the camera motion.
+	var near_drift := 4.0-(near_layer.position.x-near_before)
+	var far_drift := 4.0-(far_layer.position.x-far_before)
+	check(near_drift>far_drift+.4 and far_drift>0 and backdrop.position==Vector3(4,7,-22),"nearer distant cliffs drift faster than farther ones while the flat sky follows the camera")
 	game.start_run(false)
 	game.sim.pos = Vector2(21,40)
 	game._physics_process(1.0/120)

@@ -224,7 +224,13 @@ func _add_find(point: Vector2, zone: int, rare: bool) -> void:
 		var balance: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://data/balance.json"))
 		loot_values = balance["loot_values"]
 	var value := int(float(loot_values[zone])*(1.8 if rare else 1.0))
-	finds.append({"item":{"id":finds.size(),"tier":zone,"value":value},"pos":point,"picked":false,"rare":rare})
+	var kinds := ["coin", "amber", "crown", "chalice", "idol", "star"]
+	var kind: String = str(kinds[clampi(zone,0,kinds.size()-1)])
+	# Rare finds become named relics instead of only being a larger value.
+	if rare and zone==1: kind = "crown"
+	if rare and zone==3: kind = "chalice"
+	if rare and zone==4: kind = "idol"
+	finds.append({"item":{"id":finds.size(),"tier":zone,"value":value,"kind":kind},"pos":point,"picked":false,"rare":rare})
 
 static func blocked(a: Vector2, b: Vector2, object: Dictionary, padding: Vector2 = Vector2.ZERO) -> bool:
 	var half: Vector2 = object["dimensions"]*.5+padding

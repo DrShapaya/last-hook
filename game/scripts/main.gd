@@ -7,6 +7,7 @@ var world: MountainWorld
 var explorer: ExplorerView
 var camera: Camera3D
 var scene_environment: Environment
+var sun_light: DirectionalLight3D
 var hud: GameHud
 var state := "menu"
 var run_mode := "summit"
@@ -69,6 +70,9 @@ var capture_overview := false
 var capture_location := 0
 var capture_tips := 1
 var capture_left := false
+var capture_grip := 12
+var capture_seed := 58273
+var capture_quality := ""
 var audio: AudioStreamPlayer
 var preview := false
 var run_seconds := 0.0
@@ -87,11 +91,13 @@ func _ready() -> void:
 	Engine.max_fps = 60
 	get_tree().auto_accept_quit = false
 	model = GameModel.new()
+	_apply_graphics_quality(str(model.profile.get("graphics_quality","balanced")),false)
 	selected_location = int(model.profile.get("selected_location",0))
 	if not model.profile["active"].is_empty():
 		selected_location = int(model.profile["active"].get("location",0))
 	lobby_location = selected_location
 	_setup_lighting()
+	_apply_graphics_quality(str(model.profile.get("graphics_quality","balanced")),false)
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	camera.size = 24
@@ -125,17 +131,21 @@ func _ready() -> void:
 			capture_tips = clampi(int(argument.trim_prefix("--tips=")),1,4)
 		if argument=="--overview": capture_overview = true
 		if argument=="--left": capture_left = true
+		if argument.begins_with("--seed="): capture_seed = int(argument.trim_prefix("--seed="))
+		if argument.begins_with("--grip="): capture_grip = maxi(2,int(argument.trim_prefix("--grip=")))
+		if argument.begins_with("--quality="): capture_quality = argument.trim_prefix("--quality=")
 	if not capture_path.is_empty():
 		preview = true
 		model.profile = GameModel.fresh_profile()
+		if not capture_quality.is_empty(): _apply_graphics_quality(capture_quality,false)
 		model.profile["levels"][2] = capture_tips
 		selected_location = capture_location
 		lobby_location = capture_location
 		if capture_screen in ["play","rope","inventory","equipment","flight"]:
 			start_run(false)
-			run_seed = 58273
+			run_seed = capture_seed
 			_create_world(run_seed,selected_location,summit_height+6)
-			var point: Dictionary = world.anchor_by_id(world.main_route[12])
+			var point: Dictionary = world.anchor_by_id(world.main_route[mini(capture_grip,world.main_route.size()-1)])
 			anchor_id = point["id"]
 			sim.pos = point["pos"]+Vector2(2.5 if capture_left else -2.5,-3.5)
 			var contact_fraction := world.hit_object(sim.pos,point["pos"],point,.32)
@@ -149,7 +159,7 @@ func _ready() -> void:
 			model.reach(maxf(0,sim.highest-START_Y))
 			catches = 12
 			shots = 15
-			for route_index in range(12):
+			for route_index in range(mini(capture_grip,world.main_route.size()-1)):
 				var previous_grip := world.anchor_by_id(world.main_route[route_index])
 				if not previous_grip.get("permanent",true): previous_grip["broken"] = true
 			model.profile["learned_controls"] = ["aim","swing","rope","release"]
@@ -278,23 +288,97 @@ func _setup_lighting() -> void:
 	sky_material.sun_curve = .08
 	sky.sky_material = sky_material
 	environment.sky = sky
+	# One light model for every object on the climb: a warm sun from the upper
+	# left in front of the wall, and a cool sky fill that keeps shaded facets
+	# blue-grey instead of black.
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color("b7d1df")
-	environment.ambient_light_energy = .65
+	environment.ambient_light_color = Color("bcc8cf")
+	environment.ambient_light_energy = .58
+	environment.glow_enabled = true
+	environment.glow_intensity = .10
+	environment.glow_strength = .45
+	environment.glow_hdr_threshold = 1.15
 	environment.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	environment.fog_enabled = false
 	environment.fog_light_color = Color("b8d1df")
 	environment.fog_density = .0025
 	environment_node.environment = environment
 	add_child(environment_node)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-28,-20,0)
-	sun.light_color = Color("ffe8b7")
-	sun.light_energy = .85
-	sun.shadow_enabled = true
-	sun.shadow_opacity = .55
-	sun.directional_shadow_max_distance = 45
-	add_child(sun)
+	sun_light = DirectionalLight3D.new()
+	sun_light.name = "Солнце"
+	sun_light.basis = Basis.looking_at(SUN_DIRECTION,Vector3.UP)
+	sun_light.light_color = Color("fff0d2")
+	sun_light.light_energy = SUN_ENERGY
+	sun_light.light_specular = .35
+	sun_light.shadow_enabled = true
+	# A single orthographic map: the camera is orthographic and moves only in
+	# XY, so splits waste resolution and make edges swim between cascades.
+	sun_light.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	sun_light.directional_shadow_fade_start = .9
+	# Pancaking flattens casters in front of the shadow camera; with a flat
+	# wall this misplaces the hero's and rope's shadows, so it is disabled.
+	sun_light.directional_shadow_pancake_size = 0.0
+	_apply_shadow_preset("balanced")
+	add_child(sun_light)
+
+const SUN_DIRECTION := Vector3(.30,-.50,-.81)
+const SUN_ENERGY := .46
+
+func _apply_shadow_preset(preset: String) -> void:
+	if not is_instance_valid(sun_light): return
+	# Texel-scaled biases are tuned for objects floating 0.3-3 units in front
+	# of the wall: low enough that shadows touch their casters, high enough
+	# that facets never self-acne while the camera scrolls.
+	match preset:
+		"high":
+			sun_light.shadow_enabled = true
+			# Soft, light shadows: shaded stone keeps its colour, as in the art.
+			sun_light.shadow_opacity = .28
+			sun_light.light_energy = SUN_ENERGY
+			sun_light.shadow_bias = .04
+			sun_light.shadow_normal_bias = 1.2
+			sun_light.shadow_blur = 1.8
+			sun_light.directional_shadow_max_distance = 46
+			RenderingServer.directional_shadow_atlas_set_size(4096,true)
+			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_LOW)
+		"battery":
+			sun_light.shadow_enabled = false
+			sun_light.shadow_opacity = .28
+			# The compatibility renderer adds shadowed directional light in a
+			# separate pass, which reads brighter; match exposure without it.
+			sun_light.light_energy = SUN_ENERGY*3.2
+			sun_light.directional_shadow_max_distance = 40
+			RenderingServer.directional_shadow_atlas_set_size(1024,true)
+			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_HARD)
+		_:
+			sun_light.shadow_enabled = true
+			sun_light.shadow_opacity = .27
+			sun_light.light_energy = SUN_ENERGY
+			sun_light.shadow_bias = .04
+			sun_light.shadow_normal_bias = 1.2
+			sun_light.shadow_blur = 1.4
+			sun_light.directional_shadow_max_distance = 42
+			RenderingServer.directional_shadow_atlas_set_size(2048,true)
+			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_LOW)
+
+func _apply_graphics_quality(quality: String, save: bool = true) -> void:
+	var selected := quality if quality in ["high","balanced","battery"] else "balanced"
+	if not is_instance_valid(sun_light):
+		# _ready calls this before lighting exists; the final values are applied
+		# again by the next menu change or when the scene is ready.
+		if model!=null: model.profile["graphics_quality"] = selected
+		return
+	Engine.max_fps = 30 if selected=="battery" else 60
+	_apply_shadow_preset(selected)
+	if is_instance_valid(world): world.set_visual_quality(selected)
+	if is_instance_valid(explorer): explorer.set_visual_quality(selected)
+	if model!=null:
+		model.profile["graphics_quality"] = selected
+		if save and not preview: model.save()
+
+func set_graphics_quality(quality: String) -> void:
+	_apply_graphics_quality(quality)
+	if is_instance_valid(hud): hud.show_menu()
 
 func _create_world(seed_number: int, location_number: int, height: float, saved_version: int = 0) -> void:
 	if is_instance_valid(world):
@@ -304,6 +388,7 @@ func _create_world(seed_number: int, location_number: int, height: float, saved_
 	world = MountainWorld.new()
 	add_child(world)
 	world.setup(seed_number,location_number,saved_version,run_mode=="practice")
+	world.set_visual_quality(str(model.profile.get("graphics_quality","balanced")))
 	scene_environment.background_color = Color("88bfd9") if location_number==0 else Color("142438")
 	world.generate_to(height,run_mode in ["summit","practice"],summit_height)
 	explorer = ExplorerView.new()
@@ -429,7 +514,7 @@ func resume_run() -> void:
 			anchor_contact = Vector2(snapshot.get("contact_x",point["pos"].x),snapshot.get("contact_y",point["pos"].y))
 			sim.anchor = anchor_contact
 			if int(point["kind"])==3:
-				sim.anchor.y -= minf(1.2,anchor_time*.18)
+				sim.anchor = world.anchor_surface_point(point,anchor_contact+Vector2(0,-minf(1.2,anchor_time*.18)))
 			if world.generation_version>=10:
 				for pivot in snapshot.get("rope_pivots",[]):
 					if pivot is Array and pivot.size()==2: sim.rope_pivots.append(Vector2(pivot[0],pivot[1]))
@@ -462,6 +547,10 @@ func resume_run() -> void:
 		hook_volley = HookVolley.new()
 		hook_volley.restore(snapshot["hook_volley"])
 		volley_primary = clampi(int(snapshot.get("volley_primary",0)),0,1)
+		# A saved catch whose anchor did not survive must not leave a head on it.
+		for index in range(hook_volley.shots.size()):
+			var saved_state: String = hook_volley.shots[index]["state"]
+			if saved_state=="contact" or (saved_state=="attached" and not sim.attached): hook_volley.return_shot(index)
 		_sync_volley()
 	camera_y = float(snapshot.get("camera_y",maxf(4.8,sim.pos.y+2.5)))
 	camera_x = float(snapshot.get("camera_x",sim.pos.x))
@@ -795,7 +884,8 @@ func _physics_process(delta: float) -> void:
 				release_hook(true,"root_break")
 				toast("Корень сломался — успей зацепиться!",2.5,"release")
 			elif int(point["kind"])==3:
-				sim.anchor = anchor_contact+Vector2(0,-minf(1.2,anchor_time*.18))
+				# Ice slips the hook down the face but never past the stone.
+				sim.anchor = world.anchor_surface_point(point,anchor_contact+Vector2(0,-minf(1.2,anchor_time*.18)))
 	var was_grounded := sim.grounded
 	if was_grounded and not sim.attached:
 		sim.vel.x = move_toward(sim.vel.x,0,step*7)
@@ -977,7 +1067,7 @@ func _register_hook_impact(point: Vector2, kind: String) -> void:
 	impact_serial += 1
 	hook_impact = point
 	hook_impact_kind = kind
-	if OS.has_feature("mobile") and kind=="catch": Input.vibrate_handheld(18,.25)
+	if OS.has_feature("mobile") and kind=="catch" and model.profile.get("vibration",true): Input.vibrate_handheld(18,.25)
 
 func _begin_hook_return(message: String, rebound := Vector2.ZERO, kind := "limit") -> void:
 	bolt_active = false
@@ -1044,6 +1134,8 @@ func fail_run(reason: String) -> void:
 	_reset_input()
 	bolt_active = false
 	bolt_returning = false
+	hook_volley = null
+	volley_primary = 0
 	_sound(120,.2)
 	if offer_revive:
 		save_snapshot()
@@ -1146,6 +1238,8 @@ func finish_run(success: bool) -> void:
 	_reset_input()
 	bolt_active = false
 	bolt_returning = false
+	hook_volley = null
+	volley_primary = 0
 	if run_mode=="practice":
 		model.profile["active"] = {}
 		settlement = {"mode":"practice","success":success,"highest":maxi(0,roundi((sim.highest-START_Y)*10)),"seconds":run_seconds,"shots":shots,"catches":catches,"reason":failure_reason}
@@ -1330,8 +1424,10 @@ func _process(delta: float) -> void:
 	_refresh_aim()
 	world.update_visibility(camera_y,camera_x)
 	if is_instance_valid(world.sky_backdrop): world.sky_backdrop.advance(animation_time,delta)
-	if world.show_loot_prices!=(state=="play"):
-		world.set_loot_prices_visible(state=="play")
+	# Prices show near the hero and along the aim, unless the player asked
+	# for them always. Only the labels change; pickup rules are untouched.
+	var aim_at := aim_point if pressed and not sim.attached and not bolt_active else Vector2.INF
+	world.update_loot_prices(state=="play",str(model.profile.get("loot_prices","near"))=="always",sim.pos,aim_at)
 	var target := sim.anchor if sim.attached else bolt_pos
 	var warning := sim.attached and anchor_id>=0 and anchor_time>2.1 and int(world.anchor_by_id(anchor_id).get("kind",0))==1
 	var shot_visual := {"velocity":return_velocity if bolt_returning else hook_flight.velocity,"age":hook_flight.age,

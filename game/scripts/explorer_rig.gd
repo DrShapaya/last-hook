@@ -71,9 +71,10 @@ func sprite(parent: Node3D, texture: Texture2D, title: String, height: float, at
 	node.texture = texture
 	node.pixel_size = height/texture.get_height()
 	node.position = at+Vector3((.5-pivot.x)*texture.get_width()*node.pixel_size,(pivot.y-.5)*height,0)
-	node.shaded = false
+	node.shaded = true
 	node.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
 	node.alpha_scissor_threshold = .20
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	node.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	parent.add_child(node)
 	return node
@@ -117,10 +118,10 @@ func limb_core(parent: Node3D, length: float, radius: float, color: Color) -> vo
 	core.mesh = mesh
 	core.position = Vector3(0,-length*.5,-radius-.005)
 	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	material.albedo_color = color
 	core.material_override = material
-	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	parent.add_child(core)
 
 func cloth_cover(parent: Node3D, at: Vector3, size: Vector2, angle: float, texture_center := Vector2(184,457), texture_span := Vector2(24,-43), edge_shade := .68) -> void:
@@ -138,12 +139,12 @@ func cloth_cover(parent: Node3D, at: Vector3, size: Vector2, angle: float, textu
 	cover.position = at
 	cover.rotation.z = angle
 	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	material.albedo_texture = load(ART+"character-parts.png") as Texture2D
 	material.vertex_color_use_as_albedo = true
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	cover.material_override = material
-	cover.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	cover.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	parent.add_child(cover)
 
 func setup() -> void:

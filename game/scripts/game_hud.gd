@@ -29,24 +29,30 @@ var shot_preview_time := -1.0
 var shot_preview_direction := Vector2.ZERO
 var ad_blocker: Control
 var touch_controls_hint := OS.has_feature("mobile")
-const INK := Color("101a2b")
-const GOLD := Color("ffc857")
-const WHITE := Color("f7f2e8")
-const MUTED := Color("a8b7c9")
-const CYAN := Color("78d5d2")
+var strong_font: FontVariation
+var hud_chips: Array[PanelContainer] = []
+var toast_chip: PanelContainer
+const INK := MenuSurface.INK
+const GOLD := MenuSurface.HOLD
+const WHITE := MenuSurface.STONE
+const MUTED := Color("c9d2d8")
+const CYAN := MenuSurface.CRYSTAL_LIGHT
 const CORAL := Color("ff8f70")
-const INK_PANEL := Color("111f34")
+const INK_PANEL := MenuSurface.SLATE
+const PLAY_PANEL := Color("24323deb")
 
 class ClimbMeter extends Control:
 	var value := 0.0
 	func _draw() -> void:
 		var track := StyleBoxFlat.new()
-		track.bg_color = Color("22364d")
-		track.set_corner_radius_all(3)
+		track.bg_color = Color("24323dcc")
+		track.set_corner_radius_all(2)
+		track.corner_detail = 1
 		draw_style_box(track,Rect2(Vector2.ZERO,size))
+		if value<=0: return
 		var fill := track.duplicate() as StyleBoxFlat
 		fill.bg_color = GOLD
-		draw_style_box(fill,Rect2(Vector2.ZERO,Vector2(size.x*value/100,size.y)))
+		draw_style_box(fill,Rect2(Vector2(1,1),Vector2((size.x-2)*value/100,size.y-2)))
 
 class SlowmoIndicator extends Control:
 	var remaining := 0.0
@@ -55,19 +61,18 @@ class SlowmoIndicator extends Control:
 	func _draw() -> void:
 		if remaining<=0: return
 		var panel := StyleBoxFlat.new()
-		panel.bg_color = Color("102742e8")
-		panel.border_color = CYAN
-		panel.set_border_width_all(1)
-		panel.set_corner_radius_all(10)
+		panel.bg_color = PLAY_PANEL
+		panel.border_color = MenuSurface.SLATE_LIP
+		panel.border_width_bottom = 3
+		panel.set_corner_radius_all(8)
+		panel.corner_detail = 1
 		draw_style_box(panel,Rect2(Vector2.ZERO,size))
 		var font := text_font if text_font!=null else ThemeDB.fallback_font
-		draw_string(font,Vector2(12,20),"СЛОУМО · %.2f с" % remaining,HORIZONTAL_ALIGNMENT_LEFT,size.x-24,14,Color("dcffff"))
-		var track := Rect2(12,29,size.x-24,6)
-		draw_style_box(panel,track)
-		var fill := StyleBoxFlat.new()
-		fill.bg_color = GOLD
-		fill.set_corner_radius_all(3)
-		draw_style_box(fill,Rect2(track.position,Vector2(track.size.x*clampf(remaining/duration,0,1),track.size.y)))
+		draw_string(font,Vector2(14,20),"Замедление",HORIZONTAL_ALIGNMENT_LEFT,size.x-80,14,WHITE)
+		draw_string(font,Vector2(14,20),"%.2f с" % remaining,HORIZONTAL_ALIGNMENT_RIGHT,size.x-28,14,GOLD)
+		var track := Rect2(14,28,size.x-28,4)
+		draw_rect(track,Color(WHITE,.18))
+		draw_rect(Rect2(track.position,Vector2(track.size.x*clampf(remaining/duration,0,1),track.size.y)),GOLD)
 
 class AimOverlay extends Control:
 	var origin := Vector2.ZERO
@@ -116,12 +121,12 @@ class AimOverlay extends Control:
 			var knob := control_origin+(control_target-control_origin).limit_length(ClimbGesture.STICK_RADIUS*ui_scale)*(48/ClimbGesture.STICK_RADIUS)
 			# Layered ring treatment keeps the control legible over bright terrain while
 			# preserving the original touch origin and travel distance.
-			draw_circle(control_origin,radius+13*ui_scale,Color("071323",.22))
-			draw_circle(control_origin,radius+8*ui_scale,Color("0c1d31",.55))
+			draw_circle(control_origin,radius+13*ui_scale,Color("121b22",.20))
+			draw_circle(control_origin,radius+8*ui_scale,Color("24323d",.45))
 			draw_arc(control_origin,radius+8*ui_scale,-PI*.15,PI*1.15,64,Color(color,.24),1.5*ui_scale,true)
-			draw_circle(control_origin,radius,Color("0b1c2e",.78))
+			draw_circle(control_origin,radius,Color("24323d",.80))
 			draw_circle(control_origin,radius,Color(color,.62),false,1.5*ui_scale,true)
-			draw_circle(control_origin,radius-8*ui_scale,Color("132942",.42),false,1*ui_scale,true)
+			draw_circle(control_origin,radius-8*ui_scale,Color("efebe1",.16),false,1*ui_scale,true)
 			draw_circle(control_origin,ClimbGesture.DEAD_ZONE*ui_scale,Color(color,.12))
 			draw_circle(control_origin,ClimbGesture.DEAD_ZONE*ui_scale,Color(color,.52),false,1*ui_scale,true)
 			if control_attached:
@@ -136,35 +141,42 @@ class AimOverlay extends Control:
 				draw_arc(control_origin,radius+7*ui_scale,-PI*.5,-PI*.5+TAU*maxf(.001,vertical_progress),64,color,3*ui_scale,true)
 			# Direction rail and a raised, high-contrast thumb make the drag state obvious.
 			draw_line(control_origin,knob,Color(color,.35),5*ui_scale,true)
-			draw_circle(knob,13*ui_scale,Color("071323",.65))
+			draw_circle(knob,13*ui_scale,Color("121b22",.60))
 			draw_circle(knob,10*ui_scale,color)
 			draw_circle(knob,5*ui_scale,Color("fff7df",.72))
 			draw_arc(knob,10*ui_scale,-PI*.85,PI*.05,24,Color("fff7df",.8),1.5*ui_scale,true)
 
+func font_weight(file: FontFile, weight: int) -> FontVariation:
+	var variation := FontVariation.new()
+	variation.base_font = file
+	variation.variation_opentype = {TextServerManager.get_primary_interface().name_to_tag("wght"):weight}
+	return variation
+
 func setup(controller) -> void:
 	game = controller
 	base_theme = Theme.new()
-	# The built-in fallback font is rasterized at a small reference size and
-	# becomes soft when the responsive HUD is scaled. Use a native vector font
-	# family so every label is rasterized at its final on-screen size.
+	# Bundled OFL fonts: Russo One's squared, chunky forms carry headings,
+	# numbers and buttons; variable Onest keeps body text calm and legible.
+	var display_file: FontFile = load("res://assets/fonts/RussoOne.ttf")
+	var body_file: FontFile = load("res://assets/fonts/Onest.ttf")
 	var system_font := SystemFont.new()
-	system_font.font_names = PackedStringArray(["Segoe UI", "Roboto", "Noto Sans", "Arial"])
-	system_font.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
-	system_font.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
-	system_font.oversampling = 3.0
-	body_font = system_font
+	system_font.font_names = PackedStringArray(["Segoe UI Symbol","Segoe UI","Roboto","Noto Sans"])
+	for file in [display_file,body_file]:
+		file.fallbacks = [system_font]
+		file.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+		file.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
+		file.set("oversampling",3.0)
+	body_font = font_weight(body_file,440)
+	strong_font = font_weight(body_file,640)
 	heading_font = FontVariation.new()
-	heading_font.base_font = body_font
-	heading_font.variation_embolden = .65
+	heading_font.base_font = display_file
+	base_theme.default_font = body_font
 	base_theme.default_font_size = 17
 	base_theme.set_color("font_color","Label",WHITE)
-	base_theme.set_color("font_color","Button",WHITE)
-	base_theme.set_stylebox("normal","Button",style(Color("172a42"),14,Color("34516a")))
-	base_theme.set_stylebox("hover","Button",style(Color("223c59"),14,CYAN))
-	base_theme.set_stylebox("pressed","Button",style(Color("0d1d32"),14,Color("9af0e5")))
-	base_theme.set_stylebox("disabled","Button",style(Color("172235"),14,Color("2b3b50")))
-	base_theme.set_color("font_disabled_color","Button",Color("71839a"))
 	base_theme.set_font("font","Button",heading_font)
+	base_theme.set_font("font","TooltipLabel",body_font)
+	base_theme.set_stylebox("panel","TooltipPanel",slab_style(MenuSurface.SLATE,MenuSurface.SLATE_LIP,3))
+	base_theme.set_color("font_color","TooltipLabel",WHITE)
 	backdrop = LobbyView.Backdrop.new()
 	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(backdrop)
@@ -179,14 +191,10 @@ func setup(controller) -> void:
 	content = Control.new()
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(content)
-	toast_label = label(root,"",15,MUTED)
-	toast_label.position = Vector2(38,901)
-	toast_label.size = Vector2(464,58)
+	toast_chip = chip(root,MenuSurface.SLATE)
+	toast_label = label(toast_chip,"",15,WHITE)
 	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	toast_label.add_theme_color_override("font_shadow_color",Color("12212d"))
-	toast_label.add_theme_constant_override("shadow_outline_size",4)
-	toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ad_blocker = Control.new()
 	ad_blocker.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ad_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -209,8 +217,9 @@ func fit_viewport() -> void:
 	content.position = (root.size-Vector2(540,960))*.5 if layout_mode=="modal" else Vector2.ZERO
 	backdrop.size = viewport_size
 	backdrop.visible = layout_mode!="play"
+	backdrop.veil = layout_mode in ["pause","revive"]
 	backdrop.queue_redraw()
-	toast_label.position = Vector2((root.size.x-464)*.5,root.size.y-(154 if layout_mode=="play" else 59))
+	place_toast()
 
 func _resize() -> void:
 	if game.state=="play": game._reset_input()
@@ -221,23 +230,51 @@ func _resize() -> void:
 	elif layout_mode=="revive": show_revive(revive_reason)
 	elif layout_mode=="result": show_result(result_data)
 
-func style(color: Color, radius: int = 16, border: Color = Color.TRANSPARENT) -> StyleBoxFlat:
+func style(color: Color, radius: int = 10, border: Color = Color.TRANSPARENT) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
 	box.bg_color = color
-	box.corner_radius_top_left = radius
-	box.corner_radius_top_right = radius
-	box.corner_radius_bottom_left = radius
-	box.corner_radius_bottom_right = radius
+	box.set_corner_radius_all(radius)
+	# A single straight segment per corner turns rounded boxes into chamfered,
+	# faceted slabs that match the low-poly rock.
+	box.corner_detail = 1
+	box.anti_aliasing = true
 	box.border_color = border
 	box.set_border_width_all(1 if border.a>0 else 0)
-	box.shadow_color = Color("050b16",.42) if color.a>0 else Color.TRANSPARENT
-	box.shadow_size = 7 if color.a>0 else 0
-	box.shadow_offset = Vector2(0,4)
 	box.content_margin_left = 18
 	box.content_margin_right = 18
 	box.content_margin_top = 14
 	box.content_margin_bottom = 14
 	return box
+
+# Face plus a darker lip along the bottom edge, like the lit top and shaded
+# underside of a hold.
+func slab_style(face: Color, lip: Color, lip_size: int = 4, cut: int = 10) -> StyleBoxFlat:
+	var box := style(face,cut)
+	box.border_color = lip
+	box.set_border_width_all(0)
+	box.border_width_bottom = lip_size
+	box.border_blend = false
+	return box
+
+func chip(parent: Node, face: Color) -> PanelContainer:
+	var node := PanelContainer.new()
+	var box := slab_style(Color(face,.92),MenuSurface.SLATE_LIP,3,7)
+	box.content_margin_left = 12
+	box.content_margin_right = 12
+	box.content_margin_top = 5
+	box.content_margin_bottom = 7
+	node.add_theme_stylebox_override("panel",box)
+	node.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(node)
+	return node
+
+func place_toast() -> void:
+	if not is_instance_valid(toast_chip): return
+	var wide_text := body_font.get_string_size(toast_label.text,HORIZONTAL_ALIGNMENT_LEFT,-1,15).x>440
+	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if wide_text else TextServer.AUTOWRAP_OFF
+	toast_label.custom_minimum_size = Vector2(440 if wide_text else 0,0)
+	toast_chip.reset_size()
+	toast_chip.position = Vector2((root.size.x-toast_chip.size.x)*.5,root.size.y-(150 if layout_mode=="play" else 64)-toast_chip.size.y*.5)
 
 func label(parent: Node, text: String, size: int = 17, color: Color = WHITE) -> Label:
 	var node := Label.new()
@@ -255,46 +292,52 @@ func button(parent: Node, text: String, callback: Callable, gold: bool = false) 
 	node.text = text
 	node.custom_minimum_size = Vector2(0,51)
 	node.focus_mode = Control.FOCUS_NONE
-	if gold:
-		node.add_theme_stylebox_override("normal",style(GOLD,12))
-		node.add_theme_stylebox_override("hover",style(Color("ffdb89"),12))
-		node.add_theme_stylebox_override("pressed",style(Color("d7a949"),12))
-		node.add_theme_color_override("font_color",INK)
-		node.add_theme_color_override("font_hover_color",INK)
-		node.add_theme_color_override("font_pressed_color",INK)
 	parent.add_child(node)
 	node.pressed.connect(callback)
 	skin_button(node,"primary" if gold else "secondary")
 	return node
 
+# Tones: primary (hold yellow), secondary (stone), buy (stone on a yellow
+# lip), selected (slate), ghost (text only), dark (slate over the climb).
 func skin_button(node: Button, tone: String = "secondary") -> void:
-	var primary := tone=="primary"
-	var selected := tone=="selected"
-	var ghost := tone=="ghost"
+	var faces := {"primary":MenuSurface.HOLD,"secondary":MenuSurface.STONE,"buy":MenuSurface.STONE,"selected":MenuSurface.SLATE,"ghost":Color(MenuSurface.STONE,0),"dark":PLAY_PANEL}
+	var lips := {"primary":MenuSurface.HOLD_LIP,"secondary":MenuSurface.STONE_LIP,"buy":MenuSurface.HOLD,"selected":MenuSurface.SLATE_LIP,"ghost":Color.TRANSPARENT,"dark":MenuSurface.SLATE_LIP}
+	var inks := {"primary":MenuSurface.INK,"secondary":MenuSurface.INK,"buy":MenuSurface.INK,"selected":MenuSurface.STONE,"ghost":MenuSurface.INK_SOFT,"dark":MenuSurface.STONE}
+	var face: Color = faces.get(tone,MenuSurface.STONE)
+	var lip: Color = lips.get(tone,MenuSurface.STONE_LIP)
+	var lip_size := 0 if tone=="ghost" else 5 if tone=="primary" else 4
 	for state_name in ["normal","hover","pressed","disabled"]:
-		var fill := GOLD if primary else Color("23435a") if selected else Color("172a42")
-		var edge := Color("ffe09a") if primary else CYAN if selected else Color("34516a")
-		if ghost:
-			fill = Color.TRANSPARENT
-			edge = Color.TRANSPARENT
-		if state_name=="hover": fill = fill.lightened(.11) if not ghost else Color("1f3650")
-		if state_name=="pressed": fill = fill.darkened(.12) if not ghost else Color("294760")
+		var fill := face
+		var edge := lip
+		var depth := lip_size
+		if state_name=="hover": fill = Color(MenuSurface.STONE,.55) if tone=="ghost" else face.lightened(.08)
+		if state_name=="pressed":
+			fill = Color(MenuSurface.STONE_SHADE,.7) if tone=="ghost" else face.darkened(.06)
+			depth = mini(lip_size,1)
 		if state_name=="disabled":
-			fill = Color("172235")
-			edge = Color("2b3b50")
-		var box := style(fill,14,edge)
+			fill = Color(MenuSurface.STONE,.0) if tone=="ghost" else Color(MenuSurface.STONE_SHADE,.75)
+			edge = Color.TRANSPARENT
+			depth = 0
+		var box := slab_style(fill,edge,depth,9)
 		box.content_margin_left = 14
 		box.content_margin_right = 14
-		box.content_margin_top = 6
+		# Pressing sinks the face into its lip: the label moves down by the
+		# depth it lost so the press reads as physical.
+		box.content_margin_top = 6+lip_size-depth
 		box.content_margin_bottom = 6
+		if state_name=="pressed": box.expand_margin_top = -float(lip_size-depth)
 		node.add_theme_stylebox_override(state_name,box)
-	var focus := style(Color.TRANSPARENT,14,Color("ffe09a"))
+	var focus := style(Color.TRANSPARENT,9,MenuSurface.INK)
 	focus.set_border_width_all(2)
 	node.add_theme_stylebox_override("focus",focus)
-	for color_name in ["font_color","font_hover_color","font_pressed_color"]:
-		node.add_theme_color_override(color_name,INK if primary else WHITE)
-	node.add_theme_color_override("font_disabled_color",Color("71839a"))
-	node.add_theme_font_size_override("font_size",16)
+	var ink: Color = inks.get(tone,MenuSurface.INK)
+	for color_name in ["font_color","font_hover_color","font_pressed_color","font_hover_pressed_color","font_focus_color"]:
+		node.add_theme_color_override(color_name,ink if not (tone=="ghost" and color_name!="font_color") else MenuSurface.INK)
+	node.add_theme_color_override("font_disabled_color",MenuSurface.INK_FAINT)
+	# The display face is reserved for the one primary action; every other
+	# control uses the strong text weight so long labels still fit.
+	node.add_theme_font_override("font",heading_font if tone=="primary" else strong_font)
+	node.add_theme_font_size_override("font_size",18 if tone=="primary" else 16)
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	node.clip_text = true
 
@@ -308,17 +351,23 @@ func toggle_sound() -> void:
 	if not game.model.profile["sound"]: game.audio.stop()
 	show_menu()
 
-func panel(at: Vector2, dimensions: Vector2, parent: Node = null) -> VBoxContainer:
-	var card := PanelContainer.new()
-	card.position = at
-	card.size = dimensions
-	card.mouse_filter = Control.MOUSE_FILTER_STOP
-	card.add_theme_stylebox_override("panel",style(Color("0e1d31e8"),18,Color("385a72")))
-	(parent if parent!=null else content).add_child(card)
-	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation",12)
-	card.add_child(column)
-	return column
+func toggle_loot_prices() -> void:
+	set_loot_prices("near" if str(game.model.profile.get("loot_prices","near"))=="always" else "always")
+
+func set_loot_prices(mode: String) -> void:
+	game.model.profile["loot_prices"] = mode
+	game.model.save()
+	show_menu()
+
+func toggle_vibration() -> void:
+	game.model.profile["vibration"] = not game.model.profile.get("vibration",true)
+	game.model.save()
+	show_menu()
+
+func toggle_notifications() -> void:
+	game.model.profile["notifications"] = not game.model.profile.get("notifications",true)
+	game.model.save()
+	show_menu()
 
 func clear() -> void:
 	layout_mode = "modal"
@@ -337,13 +386,6 @@ func clear() -> void:
 	aim_overlay.control_active = false
 	aim_overlay.queue_redraw()
 
-func wallet(column: VBoxContainer) -> void:
-	var row := HBoxContainer.new()
-	column.add_child(row)
-	var gold_label := label(row,"●  %d золота" % int(game.model.profile["gold"]),17,GOLD)
-	gold_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	label(row,"◆  %d" % int(game.model.profile["diamonds"]),17,Color("a8deee"))
-
 func show_menu() -> void:
 	clear()
 	layout_mode = "menu"
@@ -358,46 +400,62 @@ func show_play() -> void:
 	clear()
 	layout_mode = "play"
 	fit_viewport()
-	var top := panel(Vector2(20,22),Vector2(228,84))
+	# In-run chrome is dark slate so it reads over the sunlit limestone; the
+	# same chamfer and lip as the menus keep it part of one family.
+	var top := Panel.new()
+	top.position = Vector2(20,20)
+	top.size = Vector2(196,74)
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	top.get_parent().mouse_filter = Control.MOUSE_FILTER_IGNORE
-	top.add_theme_constant_override("separation",2)
-	height_label = label(top,"0 м",30)
-	record_label = label(top,"Рекорд: 0 м",13,GOLD)
-	pause_button = button(content,"Ⅱ",game.pause_run)
-	pause_button.position = Vector2(root.size.x-78,22)
-	pause_button.size = Vector2(58,58)
-	pause_button.add_theme_font_size_override("font_size",27)
-	danger_label = label(content,"",14,Color("ffbe97"))
-	danger_label.position = Vector2(23,119)
-	danger_label.size = Vector2(275,28)
-	goal_label = label(content,"",13,MUTED)
-	goal_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	goal_label.position = Vector2(24,151)
-	goal_label.size = Vector2(root.size.x-48,24)
-	goal_label.add_theme_color_override("font_color",WHITE)
-	goal_label.add_theme_color_override("font_shadow_color",Color("13232b"))
-	goal_label.add_theme_constant_override("shadow_outline_size",4)
-	aim_label = label(content,"",14,GOLD)
-	aim_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	aim_label.position = Vector2(24,184)
-	aim_label.size = Vector2(root.size.x-48,25)
-	aim_label.add_theme_color_override("font_shadow_color",Color("13232b"))
-	aim_label.add_theme_constant_override("shadow_outline_size",4)
+	top.add_theme_stylebox_override("panel",slab_style(PLAY_PANEL,MenuSurface.SLATE_LIP,4,10))
+	content.add_child(top)
+	height_label = label(top,"0 м",34)
+	height_label.add_theme_font_override("font",heading_font)
+	height_label.position = Vector2(16,2)
+	height_label.size = Vector2(170,44)
+	record_label = label(top,"Рекорд 0 м",13,MUTED)
+	record_label.position = Vector2(17,44)
+	record_label.size = Vector2(170,20)
+	pause_button = button(content,"",game.pause_run)
+	skin_button(pause_button,"dark")
+	pause_button.position = Vector2(root.size.x-76,20)
+	pause_button.custom_minimum_size = Vector2(56,56)
+	pause_button.size = Vector2(56,56)
+	pause_button.tooltip_text = "Пауза"
+	var bars := UiSymbol.new()
+	bars.kind = 18
+	bars.tint = WHITE
+	bars.badge = false
+	bars.position = Vector2(14,12)
+	bars.size = Vector2(28,28)
+	bars.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pause_button.add_child(bars)
 	climb_bar = ClimbMeter.new()
-	climb_bar.position = Vector2(24,109)
-	climb_bar.size = Vector2(root.size.x-48,5)
+	climb_bar.position = Vector2(20,102)
+	climb_bar.size = Vector2(root.size.x-40,6)
 	climb_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(climb_bar)
+	var notes := VBoxContainer.new()
+	notes.position = Vector2(20,118)
+	notes.add_theme_constant_override("separation",6)
+	notes.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_child(notes)
+	danger_label = label(chip(notes,MenuSurface.DANGER),"",14,WHITE)
+	danger_label.add_theme_font_override("font",strong_font)
+	goal_label = label(chip(notes,MenuSurface.SLATE),"",14,WHITE)
+	aim_label = label(chip(notes,MenuSurface.SLATE),"",14,GOLD)
+	aim_label.add_theme_font_override("font",strong_font)
+	for holder in notes.get_children():
+		holder.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		holder.visible = false
 	slowmo_indicator = SlowmoIndicator.new()
-	slowmo_indicator.text_font = body_font
-	slowmo_indicator.size = Vector2(196,44)
-	slowmo_indicator.position = Vector2((root.size.x-slowmo_indicator.size.x)*.5,22)
+	slowmo_indicator.text_font = strong_font
+	slowmo_indicator.size = Vector2(196,42)
+	slowmo_indicator.position = Vector2((root.size.x-slowmo_indicator.size.x)*.5,20)
 	slowmo_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	slowmo_indicator.visible = false
 	content.add_child(slowmo_indicator)
 	bag_panel = HBoxContainer.new()
-	bag_panel.add_theme_constant_override("separation",7)
+	bag_panel.add_theme_constant_override("separation",8)
 	bag_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(bag_panel)
 	refresh_bag()
@@ -409,8 +467,8 @@ func refresh_bag() -> void:
 		bag_panel.remove_child(child)
 		child.queue_free()
 	var capacity: int = game.model.level(3)
-	var width: float = capacity*54+(capacity-1)*7
-	bag_panel.position = Vector2((root.size.x-width)*.5,root.size.y-74)
+	var width: float = capacity*54+(capacity-1)*8
+	bag_panel.position = Vector2((root.size.x-width)*.5,root.size.y-76)
 	bag_panel.size = Vector2(width,54)
 	for index in range(capacity):
 		var slot := BagSlot.new()
@@ -427,8 +485,9 @@ func _discard(index: int) -> void:
 	game.save_snapshot()
 
 func update_play() -> void:
-	toast_label.visible = game.hint_timer>0 and game.state in ["play","menu","revive"]
-	toast_label.position.y = root.size.y-(154 if game.state=="play" else 59)
+	toast_label.visible = game.model.profile.get("notifications",true) and game.hint_timer>0 and game.state in ["play","menu","revive"]
+	toast_chip.visible = toast_label.visible
+	if toast_chip.visible: place_toast()
 	if not is_instance_valid(height_label) or game.state!="play":
 		return
 	if is_instance_valid(slowmo_indicator):
@@ -436,7 +495,7 @@ func update_play() -> void:
 		slowmo_indicator.visible = game.focus_remaining>0.0
 		slowmo_indicator.queue_redraw()
 	height_label.text = "%d м" % maxi(0,int((game.sim.pos.y-game.START_Y)*10))
-	record_label.text = "♛ Рекорд: %d м" % int(game.model.profile["best"])
+	record_label.text = "Рекорд %d м" % int(game.model.profile["best"])
 	var remaining: float = game.sim.pos.y-game.screen_bottom_y()
 	var danger: bool = game.sim.launched and remaining<4
 	danger_label.text = "Нижний край близко — цепляйся выше!" if danger else ""
@@ -513,6 +572,8 @@ func update_play() -> void:
 			danger_label.text = "Корень сломается через %.1f с" % maxf(0,2.6-game.anchor_time)
 		elif not grip.is_empty() and grip["kind"]==3:
 			danger_label.text = "Лёд скользит — готовь следующий бросок"
+	for note in [danger_label,goal_label,aim_label]:
+		note.get_parent().visible = not note.text.is_empty()
 
 func tutorial_hint() -> String:
 	var learned: Array = game.model.profile["learned_controls"]
@@ -537,6 +598,7 @@ func world_input_allowed(point: Vector2) -> bool:
 
 func set_toast(text: String) -> void:
 	toast_label.text = text
+	place_toast()
 
 func show_workshop() -> void:
 	show_menu()

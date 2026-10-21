@@ -19,6 +19,7 @@ func build_chunk(index: int, parent: Node3D) -> void:
 			var color := Color("263c52").lightened(random.randf_range(0,.1))
 			mesh.material_override = world.mat("legacy_cliff_%s" % color.to_html(),color)
 			mesh.material_override.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 			parent.add_child(mesh)
 			world.box("Пласт скалы",Vector3(side*random.randf_range(5.5,6.5),y+random.randf_range(.5,3.5),-.8),Vector3(random.randf_range(1,2),random.randf_range(.35,1.2),.3),world.mat("legacy_facet_%d" % (sample%3),Color("38526b").lightened((sample%3)*.035)),parent)
 		world.box("Дальний хребет",Vector3(random.randf_range(-2,2),y+2,-5),Vector3(random.randf_range(2,5),4.1,.1),world.mat("legacy_distant",Color("1a2b3e")),parent)

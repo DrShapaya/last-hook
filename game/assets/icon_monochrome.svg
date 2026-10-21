@@ -1,6 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="432" height="432" viewBox="0 0 1024 1024">
-  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" transform="translate(512 512) scale(.76) translate(-536 -500)">
-    <path d="M422 570 546 397 675 615 727 560 839 742 M238 740 385 537 457 623 488 597 575 725" stroke-width="36"/>
-    <path d="M546 397V252L655 302 546 343" stroke-width="31"/>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="432" height="432" viewBox="0 0 1024 1024"><defs></defs><defs><mask id="m"><rect width="1024" height="1024" fill="#fff"/><rect x="332" y="450" width="80" height="170" rx="40" fill="#000"/><rect x="480" y="450" width="80" height="170" rx="40" fill="#000"/></mask></defs><g transform="translate(512 0) scale(1.6 1) translate(-512 0)"><g transform="translate(512 512) scale(.70) translate(-508 -520)"><polygon points="-40.0,694.0 1064.0,650.0 1064.0,720.0 -40.0,760.0" fill="#ffffff" /></g></g><g transform="translate(512 512) scale(.70) translate(-508 -520)"><g mask="url(#m)"><polygon points="250.0,330.0 372.0,214.0 762.0,202.0 776.0,640.0 664.0,760.0 240.0,770.0" fill="#ffffff" /><rect x="132" y="626" width="168" height="104" rx="46" fill="#fff"/><rect x="616" y="606" width="168" height="104" rx="46" fill="#fff"/><path d="M690 360 C 730 250 800 140 870 -40" fill="none" stroke="#fff" stroke-width="40" stroke-linecap="round"/></g></g></svg>

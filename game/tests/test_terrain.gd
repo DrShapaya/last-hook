@@ -109,13 +109,12 @@ func run_tests() -> void:
 	var next_vertices: PackedVector3Array = next_arrays[Mesh.ARRAY_VERTEX]
 	var shared := 0
 	var seam_matches := true
-	for column in range(MassifVisuals.COLUMNS+1):
-		var point := renderer.sample_point(column,MassifVisuals.ROWS)
-		if mesh_world.layout.rock_field(point)<.05: continue
-		var expected := renderer.vertex(point)
-		var a := vertices.find(expected)
-		var b := next_vertices.find(expected)
-		if a>=0 and b>=0:
+	# Both chunks clip the same facets at y=24, so every seam vertex of one
+	# chunk exists in the other with the same analytic normal.
+	for a in range(vertices.size()):
+		if not is_equal_approx(vertices[a].y,24.0): continue
+		var b := next_vertices.find(vertices[a])
+		if b>=0:
 			shared += 1
 			seam_matches = seam_matches and first_arrays[Mesh.ARRAY_NORMAL][a].distance_to(next_arrays[Mesh.ARRAY_NORMAL][b])<.0001
 		else: seam_matches = false

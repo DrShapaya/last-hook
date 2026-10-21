@@ -49,7 +49,7 @@ func setup() -> void:
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,arrays)
 	surface.mesh = mesh
 	surface.custom_aabb = AABB(Vector3(-1,-1,-.1),Vector3(2,2,.2))
-	surface.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	surface.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	material = ShaderMaterial.new()
 	material.shader = preload("res://shaders/explorer_sprite.gdshader")
 	material.set_shader_parameter("art",preload("res://assets/art/explorer-whole-v3.png"))

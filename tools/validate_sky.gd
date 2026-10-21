@@ -9,7 +9,7 @@ func capture(seed_value: int, time: float, center: Vector2, size: Vector2i) -> D
 	await process_frame
 	var sky := ProceduralSkyBackdrop.new()
 	root.add_child(sky)
-	sky.setup(seed_value)
+	sky.setup(seed_value,true)
 	sky.set_view(center)
 	camera.position = Vector3(center.x,center.y,28)
 	sky.advance(time,1)

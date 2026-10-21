@@ -119,6 +119,29 @@ func run_tests() -> void:
 		if game.hook_volley==null: break
 		game._physics_process(HookFlight.STEP)
 	check(game.sim.attached and game.hook_volley==null,"losing hook finishes its return without disturbing the caught rope")
+	game._process(HookFlight.STEP)
+	check(not game.explorer.bolt_secondary.visible and not game.explorer.rope_secondary.visible,"the losing hook does not stay drawn after the volley ends")
+	game.release_hook()
+	clear_shot(game)
+	game.fire_hook(Vector2.UP)
+	game._physics_process(HookFlight.STEP)
+	game.revive_used = true
+	game.fail_run("test")
+	check(game.hook_volley==null and not game.bolt_active and not game.bolt_returning,"a fall discards both lines so a revive cannot inherit a frozen hook")
+	game.state = "play"
+	# A wide grip radius may still catch, but the contact rests on the stone.
+	game.world.add_anchor(Vector2(30,40),0)
+	var grip: Dictionary = game.world.anchors[-1]
+	var outline: PackedVector2Array = game.world.anchor_outline(grip)
+	var graze: Dictionary = game.world.cast_hook(Vector2(26,40.3+grip["dimensions"].y*.5),Vector2(34,40.3+grip["dimensions"].y*.5),.76)
+	check(not graze.is_empty() and not graze.get("blocked",false),"the upgraded grip radius still catches a near miss")
+	if not graze.is_empty():
+		var gap := INF
+		for index in range(outline.size()):
+			gap = minf(gap,Geometry2D.get_closest_point_to_segment(graze["contact"],outline[index],outline[(index+1)%outline.size()]).distance_to(graze["contact"]))
+		check(gap<.01,"an assisted catch snaps onto the grip surface instead of hanging in the air")
+	var slid: Vector2 = game.world.anchor_surface_point(grip,grip["pos"]+Vector2(0,-1.2-grip["dimensions"].y))
+	check(Geometry2D.is_point_in_polygon(slid,outline) or slid.y>=grip["pos"].y-grip["dimensions"].y,"a slipping hook stops at the grip's lower edge")
 	clear_shot(game)
 	game.model.profile["levels"][2] = 1
 	game.fire_hook(Vector2.RIGHT)

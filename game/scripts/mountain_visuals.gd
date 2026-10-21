@@ -76,6 +76,9 @@ func build_chunk(index: int, parent: Node3D) -> void:
 	material.vertex_color_use_as_albedo = true
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	instance.material_override = material
+	# The mountain surface receives shadows from gameplay objects, but casting
+	# its own low-poly shadow creates broken dark wedges across the climb route.
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(instance)
 	# Small mineral/vegetation accents, attached only to solid surface.
 	var random := layout.rng(index,67)
@@ -94,6 +97,7 @@ func beam(a: Vector3, b: Vector3, radius: float, color: Color, parent: Node3D) -
 	var instance := MeshInstance3D.new()
 	instance.mesh = cylinder
 	instance.material_override = world.mat("wood_%s" % color.to_html(),color,false)
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	parent.add_child(instance)
 	instance.position = (a+b)*.5
 	instance.quaternion = Quaternion(Vector3.UP,(b-a).normalized())
@@ -122,6 +126,7 @@ func _extruded_polygon(polygon: PackedVector2Array, depth: float, color: Color, 
 		material.vertex_color_use_as_albedo = true
 		material.cull_mode = BaseMaterial3D.CULL_DISABLED
 		mesh.material_override = material
+	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	parent.add_child(mesh)
 
 func anchor_polygon(dimensions: Vector2) -> PackedVector2Array:
@@ -154,10 +159,10 @@ func build_anchor(object: Dictionary, parent: Node3D) -> void:
 	# The support extends backward only, never inventing a collision in XY.
 	world.box("Опора в скале",Vector3(p.x,p.y,1.3),Vector3(d.x*.75,d.y*.7,1.4),world.mat("support_%d" % biome,color.darkened(.12),false),holder)
 	# A narrow material strip communicates mechanics without rectangular targets.
-	world.box("Материал зацепа",Vector3(p.x,p.y+d.y*.35,2.43),Vector3(d.x*.7,.065,.06),world.mat("kind_%d" % kind,MountainWorld.COLORS[kind]),holder)
+	world.box("Материал зацепа",Vector3(p.x,p.y+d.y*.35,2.43),Vector3(d.x*.7,.065,.06),world.mat("kind_%d" % kind,MountainWorld.COLORS[kind],false),holder)
 	if object.get("permanent",true):
 		for side in [-1,1]:
-			world.box("Золотое крепление",Vector3(p.x+side*d.x*.38,p.y,2.47),Vector3(.11,d.y*.75,.07),world.mat("fixed_grip",Color("ffda83"),true),holder)
+			world.box("Золотое крепление",Vector3(p.x+side*d.x*.38,p.y,2.47),Vector3(.11,d.y*.75,.07),world.mat("fixed_grip",Color("ffda83"),false),holder)
 	else:
 		beam(Vector3(-d.x*.12,d.y*.35,.43),Vector3(d.x*.04,-d.y*.1,.43),.018,Color("655b48"),holder)
 		beam(Vector3(d.x*.04,-d.y*.1,.43),Vector3(-d.x*.02,-d.y*.4,.43),.018,Color("655b48"),holder)

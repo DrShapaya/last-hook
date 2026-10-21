@@ -1,9 +1,19 @@
 shader_type spatial;
-render_mode cull_disabled;
+render_mode cull_disabled, specular_disabled;
 
+// Low-poly mountain stone. The mesh is piecewise planar over large facets
+// (see MassifVisuals); the flat normal is rebuilt from screen derivatives so
+// each facet receives one clean sun value, like the art reference.
 uniform float aerial_depth : hint_range(0.0,1.0) = 0.0;
 uniform float snow_override : hint_range(-1.0,1.0) = -1.0;
 uniform float material_tint : hint_range(0.0,1.5) = 1.0;
+uniform float facet_strength : hint_range(0.0,1.0) = 0.86;
+uniform float detail_strength : hint_range(0.0,1.0) = 1.0;
+uniform vec3 aerial_color : source_color = vec3(0.56,0.70,0.82);
+// Painterly form light: the sun casts steep, short shadows, but facets are
+// shaded as if lit from a lower upper-left angle so every mass reads round.
+uniform vec3 form_light_world = vec3(-0.62,0.62,0.48);
+uniform float form_strength : hint_range(0.0,1.0) = 0.85;
 
 varying vec3 rock_position;
 varying vec3 rock_normal;
@@ -26,31 +36,48 @@ void vertex() {
 }
 void fragment() {
 	vec3 p=rock_position;
-	float weather=noise3(p*vec3(0.21,0.13,0.24));
-	float grain=noise3(p*3.8)*0.65+noise3(p*10.1)*0.35;
-	float layers=p.y*0.78+p.x*0.19+(weather-0.5)*2.7;
-	float seam=1.0-smoothstep(0.015,0.075,abs(fract(layers)-0.5));
-	seam*=smoothstep(0.30,0.61,noise3(p*0.56+vec3(13.0)));
-	float fissure=1.0-smoothstep(0.0,0.021,abs(noise3(p*vec3(0.65,0.15,0.48))-0.49));
-	vec3 stone=COLOR.rgb*(0.87+weather*0.24+(grain-0.5)*0.11);
+	float weather=noise3(p*vec3(0.17,0.11,0.2));
+	float grain=noise3(p*3.1)*0.6+noise3(p*9.0)*0.4;
+	// Hairline cracks: thin, sparse and only slightly darker than the facet.
+	float crack_field=noise3(p*vec3(0.9,0.42,0.6));
+	float crack=1.0-smoothstep(0.0,0.018,abs(crack_field-0.5));
+	crack*=smoothstep(0.74,0.86,noise3(p*0.37+vec3(7.0)))*detail_strength;
+	float upwards=smoothstep(0.05,0.6,rock_normal.y);
+	vec3 stone=COLOR.rgb*(0.96+weather*0.05+(grain-0.5)*0.035*detail_strength);
 	stone*=material_tint;
-	stone*=1.0-seam*0.08-fissure*0.055;
-	float upwards=smoothstep(0.12,0.65,rock_normal.y);
-	float damp=smoothstep(0.49,0.70,weather)*upwards;
+	stone*=1.0-crack*0.06;
+	// Broad warm and cool patches, a few metres across, so the massif is not
+	// one flat grey.
+	float patch=noise3(p*0.12+vec3(31.0));
+	stone*=mix(vec3(0.95,0.975,1.03),vec3(1.05,1.0,0.94),patch);
+	// Faint vertical rain streaks running down from rims and creases.
+	float streak=smoothstep(0.62,0.82,noise3(p*vec3(1.1,0.10,0.6)+vec3(3.0)))*smoothstep(0.25,0.7,noise3(p*vec3(0.4,0.25,0.4)));
+	stone*=1.0-streak*0.08*detail_strength;
+	// Small pale lichen spots on stone that does not face down.
+	float lichen=smoothstep(0.86,0.90,noise3(p*vec3(7.0,7.0,3.0)+vec3(11.0)))*smoothstep(0.5,0.8,noise3(p*0.5+vec3(5.0)))*smoothstep(-0.3,0.2,rock_normal.y);
+	stone=mix(stone,vec3(0.72,0.72,0.56),lichen*0.20*detail_strength);
+	// Sparse moss on gently upward facing stone in the forest band.
+	float damp=smoothstep(0.58,0.74,weather)*upwards*detail_strength;
 	float forest=1.0-smoothstep(30.0,55.0,p.y);
-	stone=mix(stone,vec3(0.12,0.19,0.10),damp*forest*0.48);
+	stone=mix(stone,vec3(0.50,0.58,0.36),damp*forest*0.22);
 	float snow=smoothstep(65.0,95.0,p.y)*upwards*smoothstep(0.40,0.65,weather);
 	if (snow_override>=0.0) { snow*=snow_override; }
-	stone=mix(stone,vec3(0.60,0.72,0.77),snow*0.60);
-	ALBEDO=mix(stone,vec3(0.19,0.28,0.33),aerial_depth);
-	// Surface-gradient bump follows the mesh in view space without UV textures.
-	float bump=(grain-0.5)*0.016+(weather-0.5)*0.04-seam*0.006;
-	vec3 sigma_x=dFdx(VERTEX);
-	vec3 sigma_y=dFdy(VERTEX);
-	vec3 r1=cross(sigma_y,NORMAL);
-	vec3 r2=cross(NORMAL,sigma_x);
-	float determinant=dot(sigma_x,r1);
-	vec3 gradient=sign(determinant)*(dFdx(bump)*r1+dFdy(bump)*r2);
-	if (abs(determinant)>0.00000001) { NORMAL=normalize(abs(determinant)*NORMAL-gradient); }
-	ROUGHNESS=0.94;
+	stone=mix(stone,vec3(0.86,0.90,0.92),snow*0.65);
+	ALBEDO=mix(stone,aerial_color,aerial_depth);
+	vec3 flat_normal=normalize(cross(dFdx(VERTEX),dFdy(VERTEX)));
+	if (dot(flat_normal,VIEW)<0.0) { flat_normal=-flat_normal; }
+	vec3 smooth_normal=normalize(NORMAL);
+	if (dot(smooth_normal,VIEW)<0.0) { smooth_normal=-smooth_normal; }
+	NORMAL=normalize(mix(smooth_normal,flat_normal,facet_strength));
+	vec3 form_dir=normalize((VIEW_MATRIX*vec4(normalize(form_light_world),0.0)).xyz);
+	float form=dot(NORMAL,form_dir);
+	ALBEDO*=mix(1.0,mix(0.93,1.44,smoothstep(-0.2,0.9,form)),form_strength);
+	ROUGHNESS=0.95;
+}
+// Wrapped sun light: faces turned away from the sun stay mid-grey instead
+// of dropping to the ambient floor, like the soft shade sides of the
+// reference. Shadows still come through ATTENUATION.
+void light() {
+	float wrapped = mix(0.68,1.0,clamp((dot(NORMAL,LIGHT)+1.0)/2.0,0.0,1.0));
+	DIFFUSE_LIGHT += LIGHT_COLOR*ATTENUATION*wrapped/PI;
 }

@@ -35,7 +35,10 @@ void vertex() {
 
 void fragment() {
 	vec4 color = texture(art,UV);
-	ALBEDO = color.rgb;
+	// Unshaded art keeps its painted values; a gentle warm-to-cool ramp ties
+	// the hero to the scene's upper-left sun and cool sky fill.
+	float sun = clamp(1.15-UV.y*.75-UV.x*.55,0.0,1.0);
+	ALBEDO = color.rgb*mix(vec3(.90,.94,1.0),vec3(1.07,1.03,.95),sun);
 	ALPHA = color.a;
 	ALPHA_SCISSOR_THRESHOLD = .14;
 }

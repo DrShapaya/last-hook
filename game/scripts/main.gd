@@ -50,14 +50,23 @@ var aim_stick_valid := false
 var aim_point := Vector2.ZERO
 var pump := 0.0
 var reel := 0.0
-const RELEASE_SLOWMO_SECONDS := .7
+# Walking on a platform without a rope. A gesture that walked never throws.
+var walk := 0.0
+var walk_used := false
+const WALK_SPEED := 2.6
+const WALK_ACCELERATION := 14.0
 var focus_remaining := 0.0
 var last_release_reason := ""
 var aim_direction := Vector2.UP
 var elapsed := 0.0
 var animation_time := 0.0
+# camera_y is the framing that defines the lower danger edge; it only rises
+# during a run. After landing the view may sink by camera_dip to show the
+# ground, without moving that edge.
 var camera_y := 7.0
 var camera_x := 0.0
+var camera_dip := 0.0
+const CAMERA_DIP_SHARE := .22
 var snapshot_timer := 0.0
 var hint_timer := 0.0
 var hint := ""
@@ -141,7 +150,7 @@ func _ready() -> void:
 		model.profile["levels"][2] = capture_tips
 		selected_location = capture_location
 		lobby_location = capture_location
-		if capture_screen in ["play","rope","inventory","equipment","flight"]:
+		if capture_screen in ["play","rope","inventory","equipment","flight","slowmo"]:
 			start_run(false)
 			run_seed = capture_seed
 			_create_world(run_seed,selected_location,summit_height+6)
@@ -181,11 +190,15 @@ func _ready() -> void:
 				bolt_active = true
 				bolt_pos = sim.anchor
 				sim.attached = false
+			if capture_screen=="slowmo":
+				sim.attached = false
+				anchor_id = -1
+				focus_remaining = model.slowmo_seconds()*.6
 		elif capture_screen == "result":
 			state = "result"
 			model.profile["gold"] = 4540
 			model.profile["reached_zones"] = 6
-			model.profile["levels"] = [3,2,2,3,2,2,3]
+			model.profile["levels"] = [3,2,2,3,2,2,3,1]
 			hud.show_result({"success":true,"highest":1200,"height":540,"loot":900,"carried":900,"finish":1300,"total":2740,"diamonds":20,"zone_bonus":1800,"first":true,"seconds":214,"shots":51,"catches":43})
 		elif capture_screen in ["practice","practice_result"]:
 			start_practice()
@@ -211,7 +224,7 @@ func _ready() -> void:
 		elif capture_screen in ["workshop","settings"]:
 			model.profile["gold"] = 640
 			model.profile["reached_zones"] = 4
-			model.profile["levels"] = [3,2,2,3,2,2,3]
+			model.profile["levels"] = [3,2,2,3,2,2,3,1]
 			show_workshop()
 			if capture_screen=="settings": hud.select_menu("settings")
 		elif capture_screen=="terrain":
@@ -292,8 +305,10 @@ func _setup_lighting() -> void:
 	# left in front of the wall, and a cool sky fill that keeps shaded facets
 	# blue-grey instead of black.
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color("bcc8cf")
-	environment.ambient_light_energy = .58
+	# Slightly cooler and higher than before, so the flanks of the volumes
+	# stay readable and hollows never drop to near black.
+	environment.ambient_light_color = Color("b6c7d6")
+	environment.ambient_light_energy = .62
 	environment.glow_enabled = true
 	environment.glow_intensity = .10
 	environment.glow_strength = .45
@@ -430,6 +445,7 @@ func start_run(endless: bool) -> void:
 	focus_remaining = 0.0
 	camera_y = 4.8
 	camera_x = 0
+	camera_dip = 0.0
 	_position_camera()
 	state = "play"
 	lobby_location = selected_location
@@ -461,7 +477,7 @@ func resume_run() -> void:
 	if snapshot.is_empty():
 		return
 	var saved_version := int(snapshot.get("generation_version",0))
-	var compatible_old := saved_version in [6,7,8,9,10] and int(snapshot.get("location",0))==0
+	var compatible_old := saved_version in [6,7,8,9,10,11] and int(snapshot.get("location",0))==0
 	if not compatible_old and saved_version!=MountainWorld.generation_version_for(int(snapshot.get("location",0))):
 		# Old contact IDs describe another route: settle its earned rewards once.
 		model.bag = snapshot.get("bag",[]).duplicate(true)
@@ -495,7 +511,7 @@ func resume_run() -> void:
 	sim.grounded = bool(snapshot.get("grounded",false))
 	anchor_id = int(snapshot["anchor_id"])
 	anchor_time = float(snapshot["anchor_time"])
-	focus_remaining = clampf(float(snapshot.get("focus_remaining",0.0)),0.0,RELEASE_SLOWMO_SECONDS) if bool(snapshot.get("focus_active",false)) else 0.0
+	focus_remaining = clampf(float(snapshot.get("focus_remaining",0.0)),0.0,model.slowmo_seconds()) if bool(snapshot.get("focus_active",false)) else 0.0
 	safe_anchor_id = int(snapshot["safe_anchor_id"])
 	safe_position = Vector2(snapshot["safe_x"],snapshot["safe_y"])
 	revive_used = bool(snapshot["revive_used"])
@@ -513,8 +529,7 @@ func resume_run() -> void:
 			sim.attached = true
 			anchor_contact = Vector2(snapshot.get("contact_x",point["pos"].x),snapshot.get("contact_y",point["pos"].y))
 			sim.anchor = anchor_contact
-			if int(point["kind"])==3:
-				sim.anchor = world.anchor_surface_point(point,anchor_contact+Vector2(0,-minf(1.2,anchor_time*.18)))
+			sim.anchor = world.anchor_contact_after(point,anchor_contact,anchor_time)
 			if world.generation_version>=10:
 				for pivot in snapshot.get("rope_pivots",[]):
 					if pivot is Array and pivot.size()==2: sim.rope_pivots.append(Vector2(pivot[0],pivot[1]))
@@ -554,6 +569,7 @@ func resume_run() -> void:
 		_sync_volley()
 	camera_y = float(snapshot.get("camera_y",maxf(4.8,sim.pos.y+2.5)))
 	camera_x = float(snapshot.get("camera_x",sim.pos.x))
+	camera_dip = maxf(0,float(snapshot.get("camera_dip",0.0)))
 	_position_camera()
 	state = "revive" if bool(snapshot.get("awaiting_revive",false)) else "play"
 	_reset_input()
@@ -661,6 +677,10 @@ func _update_touch_controls(timestamp_msec: int = -1) -> void:
 	touch_controls = climb_gesture.sample(maxi(now_msec,gesture_last_msec)*.001)
 	pump = float(touch_controls["pump"]) if sim.attached else 0.0
 	reel = float(touch_controls["reel"]) if sim.attached else 0.0
+	walk = float(touch_controls.get("walk",0.0)) if can_walk() else 0.0
+	if walk!=0.0:
+		walk_used = true
+		aim_stick_valid = false
 
 func pointer_up(point: Vector2) -> void:
 	if not pressed:
@@ -680,7 +700,7 @@ func _refresh_aim() -> void:
 		# The stick selects a launch angle, not a world target. Camera motion,
 		# player velocity and touch location cannot rotate a held direction.
 		var offset := climb_gesture.offset
-		aim_stick_valid = offset.length()>=ClimbGesture.AIM_DEAD_ZONE
+		aim_stick_valid = offset.length()>=ClimbGesture.AIM_DEAD_ZONE and not walk_used
 		if aim_stick_valid:
 			aim_direction = Vector2(offset.x,-offset.y).normalized()
 		aim_point = sim.pos+aim_direction*model.shot_range()
@@ -704,6 +724,8 @@ func _cancel_primary() -> void:
 	aim_stick_valid = false
 	pump = 0
 	reel = 0
+	walk = 0
+	walk_used = false
 	touch_controls = {}
 	climb_gesture.reset()
 
@@ -746,6 +768,14 @@ func fire_hook(direction: Vector2) -> void:
 		_sync_volley()
 	shot_serial += 1
 	_hook_sound("launch")
+
+func can_walk() -> bool:
+	return sim.grounded and not sim.attached and not bolt_active
+
+func ground_ahead(direction: float) -> bool:
+	# A short downward sweep just past the body centre in the walking direction.
+	var probe := sim.pos+Vector2(direction*.14,.04)
+	return bool(world.move_player(probe,probe+Vector2(0,-.5),Vector2(0,-1))["grounded"])
 
 func direction_to_target(target: Vector2) -> Vector2:
 	return HookFlight.aim_solution(sim.pos,target,model.value("throw_speeds",GameModel.THROW),sim.vel)["direction"]
@@ -821,12 +851,15 @@ func shot_window_open(contact: Vector2) -> bool:
 	return true
 
 func _position_camera() -> void:
-	camera.position = Vector3(camera_x,camera_y,28)
-	camera.look_at(Vector3(camera_x,camera_y,0))
+	var view_y := camera_y-camera_dip
+	camera.position = Vector3(camera_x,view_y,28)
+	camera.look_at(Vector3(camera_x,view_y,0))
 
 func screen_bottom_y() -> float:
+	# The danger edge follows the undipped framing: lowering the view after a
+	# landing shows more ground but never extends the rescue margin.
 	var viewport := get_viewport().get_visible_rect().size
-	return _screen_world(Vector2(viewport.x*.5,viewport.y)).y
+	return _screen_world(Vector2(viewport.x*.5,viewport.y)).y+camera_dip
 
 func below_screen() -> bool:
 	return sim.pos.y+float(model.balance["fall_screen_margin_units"])<screen_bottom_y()
@@ -836,8 +869,10 @@ func release_hook(keep_primary: bool = false, reason: String = "manual") -> void
 		return
 	var factor := model.value("impulse_factors",1)
 	var point := world.anchor_by_id(anchor_id)
-	if not point.is_empty() and int(point["kind"])==2:
-		factor *= 1.13
+	# A spring adds its exit impulse before the hand-off; other types keep
+	# the swing velocity exactly.
+	if not point.is_empty(): sim.vel = GripSpec.release_velocity(point,sim.vel)
+	world.release_anchor_load(anchor_id)
 	world.consume_anchor(anchor_id)
 	if anchor_id==safe_anchor_id and not point.get("permanent",true):
 		safe_anchor_id = -1
@@ -848,7 +883,7 @@ func release_hook(keep_primary: bool = false, reason: String = "manual") -> void
 			if shot["state"]=="attached": shot["state"] = "idle"
 	anchor_id = -1
 	# Release focus is real-time and does not depend on the input still being held.
-	focus_remaining = RELEASE_SLOWMO_SECONDS
+	focus_remaining = model.slowmo_seconds()
 	last_release_reason = reason
 	if reason!="manual":
 		print("HOOK_RELEASE reason=%s keep_primary=%s position=%s" % [reason,keep_primary,sim.pos])
@@ -879,16 +914,23 @@ func _physics_process(delta: float) -> void:
 		anchor_time += step
 		var point := world.anchor_by_id(anchor_id)
 		if not point.is_empty():
-			if int(point["kind"])==1 and anchor_time>2.6:
+			if GripSpec.expired(point,anchor_time):
 				point["broken"] = true
 				release_hook(true,"root_break")
 				toast("Корень сломался — успей зацепиться!",2.5,"release")
-			elif int(point["kind"])==3:
-				# Ice slips the hook down the face but never past the stone.
-				sim.anchor = world.anchor_surface_point(point,anchor_contact+Vector2(0,-minf(1.2,anchor_time*.18)))
+			elif GripSpec.kind_of(point)==GripSpec.ICE:
+				# Ice slips the hook along its surface but never past the stone.
+				sim.anchor = world.anchor_contact_after(point,anchor_contact,anchor_time)
 	var was_grounded := sim.grounded
 	if was_grounded and not sim.attached:
-		sim.vel.x = move_toward(sim.vel.x,0,step*7)
+		var walk_input := clampf(walk+(keyboard_pump if not pressed or not touch_gesture else 0.0),-1,1) if can_walk() else 0.0
+		var walk_target := walk_input*WALK_SPEED
+		# The hero stops at the edge of the support instead of stepping off;
+		# leaving a platform takes a hook. Landing momentum still slides.
+		if walk_input!=0 and not ground_ahead(signf(walk_input)):
+			walk_target = 0.0
+			if sim.vel.x*walk_input>0 and absf(sim.vel.x)<=WALK_SPEED+.05: sim.vel.x = 0.0
+		sim.vel.x = move_toward(sim.vel.x,walk_target,step*(WALK_ACCELERATION if walk_input!=0 else 7.0))
 	sim.grounded = false
 	sim.tick(step,clampf(pump+keyboard_pump,-1,1),clampf(reel+keyboard_reel,-1,1))
 	if sim.attached:
@@ -1007,7 +1049,7 @@ func _catch_contact(hit: Dictionary, contact: Vector2) -> void:
 	focus_remaining = 0.0
 	if hint_context=="release": hint_timer = 0
 	if pressed: _recenter_climb_control()
-	if int(hit["kind"]) in [0,2] and hit.get("permanent",true) and (world.generation_version<9 or hit.get("primary",false)):
+	if GripSpec.network_safe_point(hit) and (world.generation_version<9 or hit.get("primary",false)):
 		safe_anchor_id = anchor_id
 		safe_position = sim.pos
 		safe_contact = contact
@@ -1123,6 +1165,7 @@ func _collect_finds() -> void:
 			if is_instance_valid(find.get("visual")): find["visual"].visible = false
 			_sound(1000,.08)
 			hud.refresh_bag()
+			hud.animate_pickup(find["item"],find["pos"])
 
 func fail_run(reason: String) -> void:
 	if state!="play":
@@ -1190,6 +1233,7 @@ func revive(currency: String) -> void:
 	sim.flight_peak = sim.pos.y
 	camera_y = maxf(4.8,sim.pos.y+2.5)
 	camera_x = sim.pos.x
+	camera_dip = 0.0
 	_position_camera()
 	hud.show_play()
 	toast("Продолжение использовано · следующая ошибка завершит попытку")
@@ -1300,6 +1344,7 @@ func show_menu() -> void:
 		sim.attached = true
 		sim.length = sim.pos.distance_to(sim.anchor)
 		camera_y = 7
+	camera_dip = 0.0
 	hud.show_menu()
 
 func show_workshop() -> void:
@@ -1348,7 +1393,7 @@ func save_snapshot() -> void:
 		elif point.get("reserve",false):
 			active_reserves.append(point["id"])
 	model.profile["active"] = {"id":run_id,"seed":run_seed,"generation_version":world.generation_version,"mode":run_mode,"location":selected_location,
-		"camera_y":camera_y,"camera_x":camera_x,
+		"camera_y":camera_y,"camera_x":camera_x,"camera_dip":camera_dip,
 		"x":sim.pos.x,"y":sim.pos.y,"vx":sim.vel.x,"vy":sim.vel.y,"length":sim.length,"target_length":sim.target_length,"reel_velocity":sim.reel_velocity,
 		"highest":sim.highest,"flight_peak":sim.flight_peak,"launched":sim.launched,"grounded":sim.grounded,
 		"run_seconds":run_seconds,"shots":shots,"catches":catches,"failure_reason":failure_reason,"zone_gold":zone_gold,"zone_diamonds":zone_diamonds,
@@ -1393,6 +1438,11 @@ func _move_camera(delta: float) -> void:
 		if not preview:
 			sim.pos = Vector2(-.7+sin(elapsed*.9)*.7,8.9+cos(elapsed*.9)*.15)
 	camera_y = lerpf(camera_y,desired,1-exp(-delta*7.5))
+	# Standing on a shelf below the framing lowers the view a little. In the
+	# air the dip only shrinks, so a fall never drags the view after the hero.
+	var room := maxf(0,camera_y-(sim.pos.y+headroom))
+	var dip_target := minf(room,visible_height*CAMERA_DIP_SHARE) if state=="play" and sim.grounded and not sim.attached else minf(camera_dip,room)
+	camera_dip = lerpf(camera_dip,dip_target,1-exp(-delta*3.0))
 	var visible_width := absf(_screen_world(Vector2.ZERO).x-_screen_world(Vector2(viewport.x,0)).x)
 	var lead := clampf(sim.vel.x*.24,-1.8,1.8)
 	if sim.attached:
@@ -1429,7 +1479,11 @@ func _process(delta: float) -> void:
 	var aim_at := aim_point if pressed and not sim.attached and not bolt_active else Vector2.INF
 	world.update_loot_prices(state=="play",str(model.profile.get("loot_prices","near"))=="always",sim.pos,aim_at)
 	var target := sim.anchor if sim.attached else bolt_pos
-	var warning := sim.attached and anchor_id>=0 and anchor_time>2.1 and int(world.anchor_by_id(anchor_id).get("kind",0))==1
+	var held_grip := world.anchor_by_id(anchor_id) if sim.attached and anchor_id>=0 else {}
+	var fragile := not held_grip.is_empty() and GripSpec.timed(held_grip)
+	if fragile: world.update_anchor_timer(anchor_id,GripSpec.seconds_left(held_grip,anchor_time))
+	if not held_grip.is_empty(): world.update_anchor_load(anchor_id,sim.pos-sim.anchor,sim.vel)
+	var warning := fragile and GripSpec.warning(held_grip,anchor_time)
 	var shot_visual := {"velocity":return_velocity if bolt_returning else hook_flight.velocity,"age":hook_flight.age,
 		"trail":hook_flight.trail,"returning":bolt_returning,"shot":shot_serial,"impact":impact_serial,
 		"impact_position":hook_impact,"impact_kind":hook_impact_kind,"aiming":pressed and not sim.attached and not bolt_active,"aim":aim_direction}

@@ -14,6 +14,10 @@ uniform vec3 aerial_color : source_color = vec3(0.56,0.70,0.82);
 // shaded as if lit from a lower upper-left angle so every mass reads round.
 uniform vec3 form_light_world = vec3(-0.62,0.62,0.48);
 uniform float form_strength : hint_range(0.0,1.0) = 0.85;
+// Macro light from the real geometry: tops of large forms warm and light,
+// undersides and flanks cool, never black. Noise never fakes this volume.
+uniform float macro_strength : hint_range(0.0,1.0) = 1.0;
+uniform float roughness_value : hint_range(0.0,1.0) = 0.95;
 
 varying vec3 rock_position;
 varying vec3 rock_normal;
@@ -45,6 +49,7 @@ void fragment() {
 	float upwards=smoothstep(0.05,0.6,rock_normal.y);
 	vec3 stone=COLOR.rgb*(0.96+weather*0.05+(grain-0.5)*0.035*detail_strength);
 	stone*=material_tint;
+	stone*=mix(vec3(1.0),mix(vec3(0.90,0.94,1.0),vec3(1.04,1.02,0.97),smoothstep(-0.7,0.7,rock_normal.y)),macro_strength);
 	stone*=1.0-crack*0.06;
 	// Broad warm and cool patches, a few metres across, so the massif is not
 	// one flat grey.
@@ -72,7 +77,7 @@ void fragment() {
 	vec3 form_dir=normalize((VIEW_MATRIX*vec4(normalize(form_light_world),0.0)).xyz);
 	float form=dot(NORMAL,form_dir);
 	ALBEDO*=mix(1.0,mix(0.93,1.44,smoothstep(-0.2,0.9,form)),form_strength);
-	ROUGHNESS=0.95;
+	ROUGHNESS=roughness_value;
 }
 // Wrapped sun light: faces turned away from the sun stay mid-grey instead
 // of dropping to the ambient floor, like the soft shade sides of the

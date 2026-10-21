@@ -2,7 +2,13 @@ param(
     [ValidateSet('All','Windows','Android')][string]$Target = 'All',
     [string]$AndroidSdkPath = 'C:\Users\isaev\AppData\Local\Android\Sdk',
     [string]$JavaSdkPath = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.10.7-hotspot',
-    [string]$ProjectPath = ''
+    [string]$ProjectPath = '',
+    # Release mode exports without debug features and signs the APK with the
+    # store key instead of the debug key.
+    [switch]$Release,
+    [string]$ReleaseKeystorePath = '',
+    [string]$ReleaseKeystorePasswordFile = '',
+    [string]$ReleaseKeyAlias = 'lasthook'
 )
 $ErrorActionPreference = 'Stop'
 $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -13,6 +19,13 @@ if (-not $PSBoundParameters.ContainsKey('AndroidSdkPath') -and (Test-Path -Liter
     $AndroidSdkPath = $taskLocalAndroidSdk
 }
 $taskArtifacts = Join-Path $taskRoot 'artifacts'
+$taskExport = if ($Release) { '--export-release' } else { '--export-debug' }
+if ($Release -and $Target -in @('All','Android')) {
+    if (-not $ReleaseKeystorePath) { $ReleaseKeystorePath = Join-Path $taskRoot 'Builds\RuStore\last-hook-release.keystore' }
+    if (-not $ReleaseKeystorePasswordFile) { $ReleaseKeystorePasswordFile = Join-Path $taskRoot 'Builds\RuStore\last-hook-release-password.txt' }
+    if (-not (Test-Path -LiteralPath $ReleaseKeystorePath)) { throw "Release keystore is missing: $ReleaseKeystorePath" }
+    if (-not (Test-Path -LiteralPath $ReleaseKeystorePasswordFile)) { throw "Release keystore password file is missing: $ReleaseKeystorePasswordFile" }
+}
 New-Item -ItemType Directory -Path $taskArtifacts -Force | Out-Null
 if (-not (Test-Path -LiteralPath $taskGodot)) { throw 'Portable Godot is missing from tools/godot.' }
 $env:LASTHOOK_SAVE_DIR = (Join-Path $taskArtifacts 'build-test-profile').Replace('\','/')
@@ -36,6 +49,7 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_integration.gd') (J
 Invoke-TaskGodot @('--headless','--script','res://tests/test_hook.gd') (Join-Path $taskArtifacts 'build-hook.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_controls.gd') (Join-Path $taskArtifacts 'build-controls.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_generation.gd') (Join-Path $taskArtifacts 'build-generation.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_routes.gd') (Join-Path $taskArtifacts 'build-routes.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_terrain.gd') (Join-Path $taskArtifacts 'build-terrain.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_visuals.gd') (Join-Path $taskArtifacts 'build-visuals.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_gameplay_foundation.gd') (Join-Path $taskArtifacts 'build-foundation.log')
@@ -46,9 +60,9 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_character_editing.g
 Invoke-TaskGodot @('--headless','--script','res://tests/test_sprite_animation.gd') (Join-Path $taskArtifacts 'build-sprite-animation.log')
 
 if ($Target -in @('All','Windows')) {
-    $taskWindows = Join-Path $taskRoot 'Builds\Windows'
+    $taskWindows = Join-Path $taskRoot $(if ($Release) { 'Builds\Windows-Release' } else { 'Builds\Windows' })
     New-Item -ItemType Directory -Path $taskWindows -Force | Out-Null
-    Invoke-TaskGodot @('--headless','--export-debug','Windows Desktop',(Join-Path $taskWindows 'LastHook.exe')) (Join-Path $taskArtifacts 'export-windows.log')
+    Invoke-TaskGodot @('--headless',$taskExport,'Windows Desktop',(Join-Path $taskWindows 'LastHook.exe')) (Join-Path $taskArtifacts 'export-windows.log')
 }
 
 if ($Target -in @('All','Android')) {
@@ -73,11 +87,27 @@ if ($Target -in @('All','Android')) {
     [IO.File]::WriteAllText($taskSettings, $taskSettingsText, [Text.UTF8Encoding]::new($false))
     $taskAndroid = Join-Path $taskRoot 'Builds\Android'
     New-Item -ItemType Directory -Path $taskAndroid -Force | Out-Null
-    Invoke-TaskGodot @('--headless','--export-debug','Android',(Join-Path $taskAndroid 'LastHook-debug.apk')) (Join-Path $taskArtifacts 'export-android.log')
+    $taskApk = Join-Path $taskAndroid $(if ($Release) { 'LastHook-release.apk' } else { 'LastHook-debug.apk' })
+    if ($Release) {
+        # Godot reads the release key from the environment, so the password
+        # never lands in editor settings or the export preset.
+        $env:GODOT_ANDROID_KEYSTORE_RELEASE_PATH = $ReleaseKeystorePath
+        $env:GODOT_ANDROID_KEYSTORE_RELEASE_USER = $ReleaseKeyAlias
+        $env:GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD = (Get-Content -Raw -LiteralPath $ReleaseKeystorePasswordFile).Trim()
+    }
+    try {
+        Invoke-TaskGodot @('--headless',$taskExport,'Android',$taskApk) (Join-Path $taskArtifacts 'export-android.log')
+    } finally {
+        Remove-Item Env:GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD -ErrorAction SilentlyContinue
+    }
     $taskBuildTools = Get-ChildItem -LiteralPath (Join-Path $AndroidSdkPath 'build-tools') -Directory |
         Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'apksigner.bat') } |
         Sort-Object { [version]($_.Name -replace '-.*$','') } -Descending | Select-Object -First 1
     if (-not $taskBuildTools) { throw 'Android build tools are missing.' }
-    & (Join-Path $PSScriptRoot 'fix_android_icon.ps1') -ApkPath (Join-Path $taskAndroid 'LastHook-debug.apk') -BuildToolsPath $taskBuildTools.FullName -DebugKeystorePath (Join-Path $PSScriptRoot 'godot\editor_data\keystores\debug.keystore')
+    if ($Release) {
+        & (Join-Path $PSScriptRoot 'fix_android_icon.ps1') -ApkPath $taskApk -BuildToolsPath $taskBuildTools.FullName -DebugKeystorePath $ReleaseKeystorePath -KeyAlias $ReleaseKeyAlias -KeystorePasswordFile $ReleaseKeystorePasswordFile
+    } else {
+        & (Join-Path $PSScriptRoot 'fix_android_icon.ps1') -ApkPath $taskApk -BuildToolsPath $taskBuildTools.FullName -DebugKeystorePath (Join-Path $PSScriptRoot 'godot\editor_data\keystores\debug.keystore')
+    }
 }
 Write-Output 'Last Hook build finished.'

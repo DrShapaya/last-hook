@@ -10,7 +10,22 @@ var record_label: Label
 var danger_label: Label
 var goal_label: Label
 var aim_label: Label
-var climb_bar: ClimbMeter
+var climb_bar: PlayGauges.RouteGauge
+var rope_gauge: PlayGauges.RopeGauge
+var danger_edge: PlayGauges.DangerEdge
+var danger_timer: PlayGauges.TimerBar
+var height_plate: Panel
+var bag_tray: Panel
+var bag_total_label: Label
+var bag_full_chip: PanelContainer
+var shown_height := 0.0
+var shown_bag_total := 0.0
+var flying_value := 0
+var shown_bag_ids: Array = []
+var record_run := ""
+var record_at_start := 0.0
+var record_broken := false
+var last_zone := -1
 var slowmo_indicator: SlowmoIndicator
 var bag_panel: HBoxContainer
 var pause_button: Button
@@ -41,38 +56,30 @@ const CORAL := Color("ff8f70")
 const INK_PANEL := MenuSurface.SLATE
 const PLAY_PANEL := Color("24323deb")
 
-class ClimbMeter extends Control:
-	var value := 0.0
-	func _draw() -> void:
-		var track := StyleBoxFlat.new()
-		track.bg_color = Color("24323dcc")
-		track.set_corner_radius_all(2)
-		track.corner_detail = 1
-		draw_style_box(track,Rect2(Vector2.ZERO,size))
-		if value<=0: return
-		var fill := track.duplicate() as StyleBoxFlat
-		fill.bg_color = GOLD
-		draw_style_box(fill,Rect2(Vector2(1,1),Vector2((size.x-2)*value/100,size.y-2)))
-
 class SlowmoIndicator extends Control:
 	var remaining := 0.0
 	var duration := .7
 	var text_font: Font
+	var number_font: Font
 	func _draw() -> void:
 		if remaining<=0: return
+		# Compact slab with a gold frame in the top bar: it reads at a glance
+		# over sky and sunlit rock without covering the play area.
 		var panel := StyleBoxFlat.new()
-		panel.bg_color = PLAY_PANEL
-		panel.border_color = MenuSurface.SLATE_LIP
-		panel.border_width_bottom = 3
+		panel.bg_color = Color("141d24f2")
+		panel.border_color = GOLD
+		panel.set_border_width_all(2)
+		panel.border_width_bottom = 4
 		panel.set_corner_radius_all(8)
 		panel.corner_detail = 1
 		draw_style_box(panel,Rect2(Vector2.ZERO,size))
 		var font := text_font if text_font!=null else ThemeDB.fallback_font
-		draw_string(font,Vector2(14,20),"Замедление",HORIZONTAL_ALIGNMENT_LEFT,size.x-80,14,WHITE)
-		draw_string(font,Vector2(14,20),"%.2f с" % remaining,HORIZONTAL_ALIGNMENT_RIGHT,size.x-28,14,GOLD)
-		var track := Rect2(14,28,size.x-28,4)
-		draw_rect(track,Color(WHITE,.18))
-		draw_rect(Rect2(track.position,Vector2(track.size.x*clampf(remaining/duration,0,1),track.size.y)),GOLD)
+		var digits := number_font if number_font!=null else font
+		draw_string(font,Vector2(12,25),"ЗАМЕДЛЕНИЕ",HORIZONTAL_ALIGNMENT_LEFT,size.x-80,15,WHITE)
+		draw_string(digits,Vector2(12,26),("%.1f с" % remaining).replace(".",","),HORIZONTAL_ALIGNMENT_RIGHT,size.x-24,19,GOLD)
+		var track := Rect2(12,size.y-15,size.x-24,6)
+		draw_rect(track,Color(WHITE,.22))
+		draw_rect(Rect2(track.position,Vector2(track.size.x*clampf(remaining/maxf(.01,duration),0,1),track.size.y)),GOLD)
 
 class AimOverlay extends Control:
 	var origin := Vector2.ZERO
@@ -84,6 +91,8 @@ class AimOverlay extends Control:
 	var control_attached := false
 	var vertical_direction := 0
 	var vertical_progress := 0.0
+	var walk_direction := 0
+	var walk_progress := 0.0
 	var aim_color := GOLD
 	var trajectory := PackedVector2Array()
 	var branches: Array[Dictionary] = []
@@ -116,7 +125,7 @@ class AimOverlay extends Control:
 			draw_arc(contact,pulse,animation,animation+TAU*.78,24,color,1.5*ui_scale,true)
 
 	func draw_controls() -> void:
-			var color := CYAN if vertical_progress>=1 else GOLD
+			var color := CYAN if (vertical_progress>=1 if control_attached else walk_progress>=1) else GOLD
 			var radius := 48*ui_scale
 			var knob := control_origin+(control_target-control_origin).limit_length(ClimbGesture.STICK_RADIUS*ui_scale)*(48/ClimbGesture.STICK_RADIUS)
 			# Layered ring treatment keeps the control legible over bright terrain while
@@ -139,6 +148,10 @@ class AimOverlay extends Control:
 					draw_circle(tick,2*ui_scale,Color(color,.72))
 			if vertical_direction!=0 and control_attached:
 				draw_arc(control_origin,radius+7*ui_scale,-PI*.5,-PI*.5+TAU*maxf(.001,vertical_progress),64,color,3*ui_scale,true)
+			elif walk_direction!=0 and not control_attached:
+				# Holding left or right on a platform fills the ring, then walks.
+				var start := 0.0 if walk_direction>0 else PI
+				draw_arc(control_origin,radius+7*ui_scale,start,start+TAU*maxf(.001,walk_progress),64,color,3*ui_scale,true)
 			# Direction rail and a raised, high-contrast thumb make the drag state obvious.
 			draw_line(control_origin,knob,Color(color,.35),5*ui_scale,true)
 			draw_circle(knob,13*ui_scale,Color("121b22",.60))
@@ -381,6 +394,13 @@ func clear() -> void:
 	goal_label = null
 	aim_label = null
 	climb_bar = null
+	rope_gauge = null
+	danger_edge = null
+	danger_timer = null
+	height_plate = null
+	bag_tray = null
+	bag_total_label = null
+	bag_full_chip = null
 	slowmo_indicator = null
 	aim_overlay.active = false
 	aim_overlay.control_active = false
@@ -400,14 +420,20 @@ func show_play() -> void:
 	clear()
 	layout_mode = "play"
 	fit_viewport()
+	danger_edge = PlayGauges.DangerEdge.new()
+	danger_edge.size = root.size
+	danger_edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_child(danger_edge)
 	# In-run chrome is dark slate so it reads over the sunlit limestone; the
 	# same chamfer and lip as the menus keep it part of one family.
 	var top := Panel.new()
 	top.position = Vector2(20,20)
 	top.size = Vector2(196,74)
+	top.pivot_offset = top.size*.5
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top.add_theme_stylebox_override("panel",slab_style(PLAY_PANEL,MenuSurface.SLATE_LIP,4,10))
 	content.add_child(top)
+	height_plate = top
 	height_label = label(top,"0 м",34)
 	height_label.add_theme_font_override("font",heading_font)
 	height_label.position = Vector2(16,2)
@@ -420,7 +446,6 @@ func show_play() -> void:
 	pause_button.position = Vector2(root.size.x-76,20)
 	pause_button.custom_minimum_size = Vector2(56,56)
 	pause_button.size = Vector2(56,56)
-	pause_button.tooltip_text = "Пауза"
 	var bars := UiSymbol.new()
 	bars.kind = 18
 	bars.tint = WHITE
@@ -429,18 +454,34 @@ func show_play() -> void:
 	bars.size = Vector2(28,28)
 	bars.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	pause_button.add_child(bars)
-	climb_bar = ClimbMeter.new()
-	climb_bar.position = Vector2(20,102)
-	climb_bar.size = Vector2(root.size.x-40,6)
+	climb_bar = PlayGauges.RouteGauge.new()
+	climb_bar.position = Vector2(20,96)
+	climb_bar.size = Vector2(root.size.x-40,24)
 	climb_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(climb_bar)
+	rope_gauge = PlayGauges.RopeGauge.new()
+	rope_gauge.font = heading_font
+	rope_gauge.position = Vector2(root.size.x-64,132)
+	rope_gauge.size = Vector2(44,170)
+	rope_gauge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rope_gauge.visible = false
+	content.add_child(rope_gauge)
 	var notes := VBoxContainer.new()
-	notes.position = Vector2(20,118)
+	notes.position = Vector2(20,128)
 	notes.add_theme_constant_override("separation",6)
 	notes.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(notes)
-	danger_label = label(chip(notes,MenuSurface.DANGER),"",14,WHITE)
+	var danger := chip(notes,MenuSurface.DANGER)
+	var danger_column := VBoxContainer.new()
+	danger_column.add_theme_constant_override("separation",4)
+	danger_column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	danger.add_child(danger_column)
+	danger_label = label(danger_column,"",14,WHITE)
 	danger_label.add_theme_font_override("font",strong_font)
+	danger_timer = PlayGauges.TimerBar.new()
+	danger_timer.custom_minimum_size = Vector2(0,3)
+	danger_timer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	danger_column.add_child(danger_timer)
 	goal_label = label(chip(notes,MenuSurface.SLATE),"",14,WHITE)
 	aim_label = label(chip(notes,MenuSurface.SLATE),"",14,GOLD)
 	aim_label.add_theme_font_override("font",strong_font)
@@ -449,40 +490,151 @@ func show_play() -> void:
 		holder.visible = false
 	slowmo_indicator = SlowmoIndicator.new()
 	slowmo_indicator.text_font = strong_font
-	slowmo_indicator.size = Vector2(196,42)
-	slowmo_indicator.position = Vector2((root.size.x-slowmo_indicator.size.x)*.5,20)
+	slowmo_indicator.number_font = heading_font
+	slowmo_indicator.duration = game.model.slowmo_seconds()
+	slowmo_indicator.size = Vector2(204,50)
+	# Top bar, centred in the gap between the height plate and Pause, so it
+	# stays clear of the climb.
+	var gap_left := top.position.x+top.size.x+8
+	var gap_right := pause_button.position.x-8
+	slowmo_indicator.position = Vector2(clampf((gap_left+gap_right-slowmo_indicator.size.x)*.5,gap_left,maxf(gap_left,gap_right-slowmo_indicator.size.x)),32)
 	slowmo_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	slowmo_indicator.visible = false
 	content.add_child(slowmo_indicator)
+	bag_tray = Panel.new()
+	bag_tray.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bag_tray.add_theme_stylebox_override("panel",slab_style(Color("24323dc8"),MenuSurface.SLATE_LIP,4,12))
+	content.add_child(bag_tray)
+	var coin := UiSymbol.new()
+	coin.kind = 12
+	coin.tint = Color("ffd15c")
+	coin.size = Vector2(22,22)
+	coin.name = "Coin"
+	coin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bag_tray.add_child(coin)
+	bag_total_label = label(bag_tray,"0",18,WHITE)
+	bag_total_label.add_theme_font_override("font",heading_font)
+	bag_full_chip = chip(content,MenuSurface.SLATE)
+	label(bag_full_chip,"Рюкзак полон: удержи находку, чтобы выбросить",13,CORAL).add_theme_font_override("font",strong_font)
+	bag_full_chip.visible = false
 	bag_panel = HBoxContainer.new()
 	bag_panel.add_theme_constant_override("separation",8)
 	bag_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(bag_panel)
+	# Opening the HUD (a new run, a resume, an unpause) shows the bag as it
+	# is; only finds collected from now on get the landing bounce.
+	shown_bag_ids = bag_ids()
+	shown_bag_total = game.model.bag_value()
+	flying_value = 0
+	shown_height = maxf(0,(game.sim.pos.y-game.START_Y)*10)
+	if record_run!=game.run_id:
+		record_run = game.run_id
+		record_at_start = float(game.model.profile["best"])
+		record_broken = false
+		last_zone = -1
 	refresh_bag()
+
+func bag_ids() -> Array:
+	var ids := []
+	for item in game.model.bag: ids.append(item.get("id",-999))
+	return ids
 
 func refresh_bag() -> void:
 	if not is_instance_valid(bag_panel):
 		return
-	for child in bag_panel.get_children():
-		bag_panel.remove_child(child)
-		child.queue_free()
 	var capacity: int = game.model.level(3)
+	if bag_panel.get_child_count()!=capacity:
+		for child in bag_panel.get_children():
+			bag_panel.remove_child(child)
+			child.queue_free()
+		for index in range(capacity):
+			var cell := BagSlot.new()
+			cell.custom_minimum_size = Vector2(54,54)
+			cell.value_font = heading_font
+			bag_panel.add_child(cell)
 	var width: float = capacity*54+(capacity-1)*8
-	bag_panel.position = Vector2((root.size.x-width)*.5,root.size.y-76)
+	var tray_width := width+16+92
+	var tray_at := Vector2((root.size.x-tray_width)*.5,root.size.y-84)
+	bag_tray.position = tray_at
+	bag_tray.size = Vector2(tray_width,70)
+	bag_tray.get_node("Coin").position = Vector2(width+24,15)
+	bag_total_label.position = Vector2(width+22,36)
+	bag_total_label.size = Vector2(84,24)
+	bag_panel.position = tray_at+Vector2(8,8)
 	bag_panel.size = Vector2(width,54)
+	bag_full_chip.reset_size()
+	bag_full_chip.position = Vector2((root.size.x-bag_full_chip.size.x)*.5,tray_at.y-bag_full_chip.size.y-48)
+	# Cells are updated in place so their animations survive a pickup.
 	for index in range(capacity):
-		var slot := BagSlot.new()
-		slot.custom_minimum_size = Vector2(54,54)
-		if index<game.model.bag.size():
-			slot.item = game.model.bag[index]
-			slot.rare = game.model.item_is_rare(slot.item)
-			slot.on_discard = _discard.bind(index)
-		bag_panel.add_child(slot)
+		var cell: BagSlot = bag_panel.get_child(index)
+		var item: Dictionary = game.model.bag[index] if index<game.model.bag.size() else {}
+		cell.item = item
+		cell.rare = not item.is_empty() and game.model.item_is_rare(item)
+		cell.on_discard = _discard.bind(index) if not item.is_empty() else Callable()
+		cell.reveal = true
+		if not item.is_empty() and not shown_bag_ids.has(item.get("id",-999)): cell.pop = 1.0
+		cell.queue_redraw()
+	shown_bag_ids = bag_ids()
+
+func content_point(screen: Vector2) -> Vector2:
+	return content.get_global_transform().affine_inverse()*screen
+
+# A collected find arcs from the ledge into its cell, then the cell bounces,
+# a ring bursts and the value floats up from the tray.
+func animate_pickup(item: Dictionary, world_position: Vector2) -> void:
+	if not is_instance_valid(bag_panel): return
+	var index: int = bag_ids().find(item.get("id",-999))
+	if index<0 or index>=bag_panel.get_child_count(): return
+	var cell: BagSlot = bag_panel.get_child(index)
+	cell.reveal = false
+	cell.pop = 0
+	var flyer := PlayGauges.PickupFlyer.new()
+	flyer.item = item
+	flyer.size = root.size
+	flyer.from = content_point(game.camera.unproject_position(Vector3(world_position.x,world_position.y,0)))
+	flyer.to = content_point(cell.get_global_rect().get_center())
+	flyer.landed = _land_pickup.bind(cell,item)
+	# The tray total waits for the find to arrive before counting it.
+	flying_value += int(item.get("value",0))
+	content.add_child(flyer)
+
+func _land_pickup(cell: BagSlot, item: Dictionary) -> void:
+	flying_value = maxi(0,flying_value-int(item.get("value",0)))
+	if not is_instance_valid(cell) or not is_instance_valid(content): return
+	cell.land()
+	var center := content_point(cell.get_global_rect().get_center())
+	var burst := PlayGauges.Burst.new()
+	burst.color = LootIcon.rarity_color(item)
+	burst.position = center
+	content.add_child(burst)
+	var rise := PlayGauges.FloatText.new()
+	rise.text = "+%d" % int(item.get("value",0))
+	rise.font = heading_font
+	rise.color = Color("ffd15c")
+	rise.position = center+Vector2(0,-14)
+	content.add_child(rise)
 
 func _discard(index: int) -> void:
+	if is_instance_valid(bag_panel) and index<bag_panel.get_child_count() and index<game.model.bag.size():
+		var ghost := PlayGauges.DiscardGhost.new()
+		ghost.item = game.model.bag[index]
+		ghost.position = content_point((bag_panel.get_child(index) as Control).get_global_rect().get_center())
+		content.add_child(ghost)
 	game.model.discard(index)
 	refresh_bag()
 	game.save_snapshot()
+
+func show_chip(holder: Control, wanted: bool) -> void:
+	if wanted and not holder.visible:
+		holder.modulate.a = 0
+		create_tween().tween_property(holder,"modulate:a",1.0,.16)
+	holder.visible = wanted
+
+func pulse(node: Control, amount: float = .08) -> void:
+	node.pivot_offset = node.size*.5
+	var tween := create_tween()
+	tween.tween_property(node,"scale",Vector2.ONE*(1+amount),.09).set_trans(Tween.TRANS_SINE)
+	tween.tween_property(node,"scale",Vector2.ONE,.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 func update_play() -> void:
 	toast_label.visible = game.model.profile.get("notifications",true) and game.hint_timer>0 and game.state in ["play","menu","revive"]
@@ -494,15 +646,30 @@ func update_play() -> void:
 		slowmo_indicator.remaining = game.focus_remaining
 		slowmo_indicator.visible = game.focus_remaining>0.0
 		slowmo_indicator.queue_redraw()
-	height_label.text = "%d м" % maxi(0,int((game.sim.pos.y-game.START_Y)*10))
-	record_label.text = "Рекорд %d м" % int(game.model.profile["best"])
+	var delta := get_process_delta_time()
+	var height := maxf(0,(game.sim.pos.y-game.START_Y)*10)
+	# The counter rolls toward the real height instead of jumping.
+	shown_height = lerpf(shown_height,height,1-exp(-14*delta)) if absf(shown_height-height)>.5 else height
+	height_label.text = "%d м" % int(shown_height)
+	var climbed := maxf(0,(game.sim.highest-game.START_Y)*10)
+	if record_at_start>0 and climbed>record_at_start and not record_broken and game.run_mode!="practice":
+		record_broken = true
+		pulse(height_plate,.12)
+	record_label.text = "Новый рекорд!" if record_broken else "Рекорд %d м" % int(game.model.profile["best"])
+	record_label.add_theme_color_override("font_color",GOLD if record_broken else MUTED)
 	var remaining: float = game.sim.pos.y-game.screen_bottom_y()
 	var danger: bool = game.sim.launched and remaining<4
 	danger_label.text = "Нижний край близко — цепляйся выше!" if danger else ""
-	climb_bar.value = clampf((game.sim.highest-game.START_Y)/game.summit_height*100,0,100)
-	climb_bar.queue_redraw()
+	climb_bar.value = clampf((game.sim.highest-game.START_Y)/game.summit_height,0,1)
+	climb_bar.record = clampf(record_at_start/(game.summit_height*10),0,1)
 	climb_bar.visible = game.run_mode=="summit"
 	var zone := clampi(int(maxf(0,game.sim.pos.y-game.START_Y)/20),0,5)
+	var reached_zone := clampi(int(maxf(0,game.sim.highest-game.START_Y)/20),0,5)
+	if last_zone>=0 and reached_zone>last_zone:
+		climb_bar.flash = 1.0
+		climb_bar.flash_at = float(reached_zone)/climb_bar.zones
+		pulse(height_plate)
+	last_zone = reached_zone
 	goal_label.text = "Тренировка · 16 зацепов" if game.run_mode=="practice" else GameModel.ZONE_NAMES[zone]+" · "+game.model.next_goal()
 	var lesson := tutorial_hint()
 	if not lesson.is_empty(): goal_label.text = lesson
@@ -514,16 +681,34 @@ func update_play() -> void:
 	aim_overlay.control_attached = game.sim.attached
 	aim_overlay.vertical_direction = int(game.touch_controls.get("vertical_direction",0))
 	aim_overlay.vertical_progress = float(game.touch_controls.get("vertical_progress",0))
+	aim_overlay.walk_direction = int(game.touch_controls.get("horizontal_direction",0)) if game.can_walk() else 0
+	aim_overlay.walk_progress = float(game.touch_controls.get("walk_progress",0))
 	aim_overlay.origin = game.camera.unproject_position(Vector3(game.sim.pos.x,game.sim.pos.y,0))
 	var point: Vector2 = game.sim.pos+game.aim_direction*game.model.shot_range()
-	aim_label.text = "Канат: %d / %d м" % [roundi(game.sim.length*10),roundi(game.model.shot_range()*10)] if game.sim.attached else "Крюки · "+GameModel.HOOK_NAMES[game.model.level(2)-1]
+	aim_label.text = "Крюки: "+GameModel.HOOK_NAMES[game.model.level(2)-1]
+	# Rope length now lives in the side gauge; the chip only says what the
+	# current grip will do.
+	var reel := 0
 	if game.sim.attached:
+		var parts: Array[String] = []
 		var current: Dictionary = game.world.anchor_by_id(game.anchor_id)
 		if not current.is_empty():
-			aim_label.text += " · постоянная" if current.get("permanent",true) else " · исчезнет при отпускании"
-		if not game.sim.rope_pivots.is_empty(): aim_label.text += " · канат огибает выступ"
+			parts.append("Опора постоянная" if current.get("permanent",true) else "Опора исчезнет при отпускании")
+			if GripSpec.kind_of(current)==GripSpec.SPRING: parts.append("отпусти по стрелке — ветка подбросит")
+		if not game.sim.rope_pivots.is_empty(): parts.append("канат огибает выступ")
 		if game.pressed and game.touch_gesture and aim_overlay.vertical_direction!=0:
-			aim_label.text += (" · ↑ подтягивание" if aim_overlay.vertical_direction>0 else " · ↓ спуск") if aim_overlay.vertical_progress>=1 else " · держи вертикально…"
+			if aim_overlay.vertical_progress>=1: reel = aim_overlay.vertical_direction
+			parts.append(("подтягивание" if aim_overlay.vertical_direction>0 else "спуск") if aim_overlay.vertical_progress>=1 else "держи вертикально…")
+		aim_label.text = " · ".join(parts)
+		if reel==0 and absf(game.sim.target_length-game.sim.length)>.02:
+			reel = 1 if game.sim.target_length<game.sim.length else -1
+	rope_gauge.active = game.sim.attached
+	danger_edge.strength = clampf(game.camera_dip/.6,0,1)
+	danger_edge.edge_y = content_point(game.camera.unproject_position(Vector3(game.sim.pos.x,game.screen_bottom_y(),0))).y
+	danger_edge.queue_redraw()
+	rope_gauge.ratio = game.sim.length/maxf(.1,game.model.shot_range())
+	rope_gauge.meters = roundi(game.sim.length*10)
+	rope_gauge.direction = reel
 	aim_overlay.aim_color = GOLD
 	if aim_overlay.active:
 		if shot_preview.is_empty() or game.elapsed-shot_preview_time>.035 or game.elapsed<shot_preview_time or shot_preview_direction.dot(game.aim_direction)<.99999:
@@ -568,12 +753,21 @@ func update_play() -> void:
 	aim_overlay.queue_redraw()
 	if game.sim.attached and not danger:
 		var grip: Dictionary = game.world.anchor_by_id(game.anchor_id)
-		if not grip.is_empty() and grip["kind"]==1:
-			danger_label.text = "Корень сломается через %.1f с" % maxf(0,2.6-game.anchor_time)
-		elif not grip.is_empty() and grip["kind"]==3:
+		if not grip.is_empty() and GripSpec.timed(grip):
+			danger_label.text = "Корень сломается через %.1f с" % GripSpec.seconds_left(grip,game.anchor_time)
+			danger_timer.value = GripSpec.seconds_left(grip,game.anchor_time)/GripSpec.ROOT_SECONDS
+		elif not grip.is_empty() and GripSpec.kind_of(grip)==GripSpec.ICE:
 			danger_label.text = "Лёд скользит — готовь следующий бросок"
-	for note in [danger_label,goal_label,aim_label]:
-		note.get_parent().visible = not note.text.is_empty()
+		elif not grip.is_empty() and not GripSpec.choice_exits(grip).is_empty():
+			danger_label.text = "Кристалл: два выхода подсвечены — выбирай"
+	danger_timer.visible = danger_label.text.begins_with("Корень")
+	show_chip(danger_label.get_parent().get_parent(),not danger_label.text.is_empty())
+	for note in [goal_label,aim_label]:
+		show_chip(note.get_parent(),not note.text.is_empty())
+	var total := float(game.model.bag_value()-flying_value)
+	shown_bag_total = move_toward(shown_bag_total,total,maxf(40,absf(total-shown_bag_total)*6)*delta)
+	bag_total_label.text = str(int(round(shown_bag_total)))
+	show_chip(bag_full_chip,game.model.bag.size()>=game.model.level(3) and game.model.level(3)>0)
 
 func tutorial_hint() -> String:
 	var learned: Array = game.model.profile["learned_controls"]
@@ -594,6 +788,7 @@ func world_input_allowed(point: Vector2) -> bool:
 	if not get_viewport().get_visible_rect().has_point(point): return false
 	if is_instance_valid(pause_button) and pause_button.get_global_rect().has_point(point): return false
 	if is_instance_valid(bag_panel) and bag_panel.get_global_rect().has_point(point): return false
+	if is_instance_valid(bag_tray) and bag_tray.get_global_rect().has_point(point): return false
 	return true
 
 func set_toast(text: String) -> void:

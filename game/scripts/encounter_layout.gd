@@ -9,6 +9,27 @@ const REST_GAP := 18.0
 var encounters: Array[Dictionary] = []
 var phrase_bags: Dictionary = {}
 
+# --- Scenario routes (v12) ------------------------------------------------------
+# Each three-transfer phrase gets a scenario before any grip type is chosen:
+# the main path stays on the base kit, and a special type only appears where
+# the scenario gives it a verified exit. Mechanics are introduced by height,
+# one new risk per phrase.
+const SCENARIO_MECHANIC := {"energy":GripSpec.SPRING,"risk":GripSpec.ROOT,"slide":GripSpec.ICE,"choice":GripSpec.CRYSTAL}
+const SCENARIO_NAMES := {"intro":"Введение","energy":"Выходная энергия","risk":"Временный риск","slide":"Скольжение","choice":"Развилка"}
+# Allowed scenarios per height zone (Лес, Скалы, Руины, Лёд, Вулкан, Небеса):
+# low - stone and a rare bough; middle - one timed or impulse phrase and loot
+# detours; top - ice and crystal forks after their introduction.
+const ZONE_SCENARIOS := [["intro","intro","energy"],["intro","energy","risk","risk"],["energy","risk","risk","intro"],["slide","risk","energy","choice"],["choice","slide","risk","energy"],["choice","slide","energy","risk"]]
+# A movement phrase prefers the scenario its geometry explains best.
+const PHRASE_SCENARIO := {2:"slide",3:"energy",4:"intro",6:"risk",7:"choice"}
+# Recovery after this many disposable main grips in a row (the old fixed
+# interval of permanent grips), placed where the series actually ends.
+const RECOVERY_STREAK := 9
+var scenarios: Dictionary = {}
+var introduced: Dictionary = {}
+var disposable_streak := 0
+var pending_choice: Dictionary = {}
+
 func phrase_kind(block: int) -> int:
 	if block<3: return [0,1,4][posmod(block+seed_value,3)]
 	var cycle := (block-3)/8
@@ -53,6 +74,116 @@ func main_point(index: int) -> Vector2:
 		route_points.append(Vector2(next_x,previous.y+rise))
 	return route_points[index]
 
+func scenario(block: int) -> Dictionary:
+	# Planned when the phrase's first row is generated. Rows are generated in
+	# order, so the plan sees the same history for any request size.
+	if scenarios.has(block): return scenarios[block]
+	var entry := 2+block*3
+	var zone := clampi(int(main_point(entry).y/20),0,5)
+	var phrase := phrase_kind(block)
+	var allowed: Array = ZONE_SCENARIOS[zone]
+	var random := rng(block,410)
+	var template := "intro"
+	if block>0:
+		var preferred: String = PHRASE_SCENARIO.get(phrase,"")
+		template = preferred if allowed.has(preferred) else str(allowed[random.randi_range(0,allowed.size()-1)])
+		var previous: String = scenarios.get(block-1,{}).get("template","")
+		if template==previous and template!="intro":
+			template = str(allowed[(allowed.find(template)+1)%allowed.size()])
+	var mechanic: int = SCENARIO_MECHANIC.get(template,GripSpec.STONE)
+	var fresh := mechanic!=GripSpec.STONE and not introduced.has(mechanic)
+	# Known risks may combine with a bough on the middle beat, never with a
+	# second new rule.
+	var combo := zone>=3 and not fresh and template in ["risk","slide","choice"] and introduced.has(GripSpec.SPRING) and random.randf()<.35
+	var plan := {"block":block,"template":template,"name":SCENARIO_NAMES[template],"mechanic":mechanic,"new":fresh,"combo":combo,"zone":zone,"placed":false}
+	scenarios[block] = plan
+	return plan
+
+func scenario_for_row(index: int) -> Dictionary:
+	return scenario(maxi(0,(index-2)/3)) if index>=2 else {}
+
+func _main_kind(index: int, random: RandomNumberGenerator) -> int:
+	var legacy := super._main_kind(index,random)
+	if not scenario_routes: return legacy
+	var plan := scenario_for_row(index)
+	if plan.is_empty() or (index-2)%3!=1: return GripSpec.STONE
+	return GripSpec.SPRING if plan["template"]=="energy" or plan["combo"] else GripSpec.STONE
+
+func _main_created(index: int, id: int) -> void:
+	if not scenario_routes: return
+	var object := anchors[id]
+	var plan := scenario_for_row(index)
+	if index>0:
+		object["permanent"] = false
+		object["role"] = "main"
+		# Recovery follows a long disposable series, and a permanent node
+		# stands before a newly introduced mechanic; neither is a fixed ladder.
+		if disposable_streak>=RECOVERY_STREAK:
+			object["permanent"] = true
+			object["role"] = "recovery"
+		elif not plan.is_empty() and (index-2)%3==0 and plan["new"] and disposable_streak>=3:
+			object["permanent"] = true
+			object["role"] = "tutorial"
+	disposable_streak = 0 if object["permanent"] else disposable_streak+1
+	if not plan.is_empty() and GripSpec.kind_of(object)==GripSpec.SPRING:
+		plan["placed"] = true
+		introduced[GripSpec.SPRING] = introduced.get(GripSpec.SPRING,plan["block"])
+	if pending_choice.has(index):
+		var crystal: Dictionary = anchors[pending_choice[index]]
+		crystal["choice_exits"].append(id)
+		pending_choice.erase(index)
+
+func _scenario_branch(index: int, point: Vector2, entry: int, zone: int) -> void:
+	# Branch scenarios leave from the phrase's first main grip and rejoin at
+	# the next one, after the entry has been consumed.
+	var plan := scenario_for_row(index)
+	if plan.is_empty() or (index-2)%3!=0 or plan["template"] not in ["risk","slide","choice"]: return
+	var exit := main_point(index+1)
+	if finite and exit.y>=summit-.8: return
+	var kinds: Array[int] = [int(plan["mechanic"])]
+	# A crystal needs two verified exits; without them the fork becomes a
+	# plain timed detour rather than an unexplained crystal.
+	if plan["template"]=="choice" and introduced.has(GripSpec.ROOT): kinds.append(GripSpec.ROOT)
+	var toward := int(signf(exit.x-point.x)) if absf(exit.x-point.x)>.1 else 1
+	for kind in kinds:
+		for side in [toward,-toward]:
+			var bonus := point+Vector2(side*3.8,.55)
+			if outside(bonus,0) or not transition_clear(point,bonus): continue
+			var probe := {"pos":bonus,"kind":kind,"slide_dir":slide_direction_at(bonus)}
+			if not exit_reachable(probe,exit): continue
+			var reward := Vector2.INF
+			if kind==GripSpec.CRYSTAL:
+				reward = _choice_reward(index,bonus,side)
+				if not reward.is_finite(): continue
+			var branch_id := _add_anchor(bonus,kind,Vector2(1.3,.6))
+			anchors[branch_id]["role"] = "branch"
+			branches.append({"entry":entry,"anchor":branch_id,"exit_row":index+1,"exit_pos":exit,"scenario":plan["template"]})
+			if kind==GripSpec.CRYSTAL:
+				var reward_id := _add_anchor(reward,GripSpec.STONE,Vector2(1.3,.6))
+				anchors[reward_id]["role"] = "reward"
+				anchors[reward_id]["permanent"] = false
+				anchors[branch_id]["choice_exits"] = [reward_id]
+				pending_choice[index+1] = branch_id
+				branches.append({"entry":branch_id,"anchor":reward_id,"exit_row":index+2,"exit_pos":main_point(index+2),"scenario":"choice","choice":true})
+				_add_find(reward+Vector2(0,-2.05),zone,true)
+			else:
+				_add_find(bonus+Vector2(0,-2.05),zone,true)
+			plan["placed"] = true
+			plan["kind"] = kind
+			introduced[kind] = introduced.get(kind,plan["block"])
+			return
+
+func _choice_reward(index: int, crystal: Vector2, side: int) -> Vector2:
+	# The second exit of a crystal: the loot spot one row higher on the same
+	# side, which then rejoins the main route a row later still.
+	var after := main_point(index+2)
+	if finite and after.y>=summit-.8: return Vector2.INF
+	var reward := main_point(index+1)+Vector2(side*3.8,.55)
+	if outside(reward,0) or reward.distance_to(crystal)>=LINK_REACH or reward.distance_to(after)>=LINK_REACH: return Vector2.INF
+	if reward.distance_to(main_point(index+1))<1.45: return Vector2.INF
+	if not transition_clear(crystal,reward) or not transition_clear(reward,after): return Vector2.INF
+	return reward
+
 func _generate_row(index: int) -> void:
 	var ledges_before := ledges.size()
 	super._generate_row(index)
@@ -65,9 +196,12 @@ func _generate_row(index: int) -> void:
 	if index>3 and (kind==4 or index%9==8) and point.y-REST_DROP-last_top>=REST_GAP and (not finite or ledges.size()<6) and (not finite or point.y<summit-5):
 		ledges.append({"left":point.x-1.4,"right":point.x+1.4,"top":point.y-REST_DROP,"style":int(rng(index,330).randi_range(0,2)),"anchor_row":index})
 		anchors[main_route[-1]]["permanent"] = true
+		anchors[main_route[-1]]["role"] = "rest"
+		disposable_streak = 0
 	if index>=2 and (index-2)%3==0:
 		var block := (index-2)/3
 		var encounter := {"row":index,"kind":kind,"name":NAMES[kind],"entry":main_route[-1],"obstacles":[]}
+		if scenario_routes: encounter["scenario"] = scenario(block)
 		encounters.append(encounter)
 		if index>=5: _build_obstacles(index,encounter)
 

@@ -12,8 +12,8 @@ func _initialize() -> void:
 	call_deferred("setup")
 
 func setup() -> void:
-	root.size = Vector2i(900,680)
-	root.content_scale_size = Vector2i(900,680)
+	root.size = Vector2i(1200,680)
+	root.content_scale_size = Vector2i(1200,680)
 	root.title = "Last Hook — анимации персонажа"
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--frames="): frame_directory = argument.trim_prefix("--frames=")
@@ -34,10 +34,10 @@ func setup() -> void:
 	camera.current = true
 	var overlay := CanvasLayer.new()
 	root_node.add_child(overlay)
-	var names := ["Ожидание","Бросок крюка","На канате","Полёт вверх","Падение","Приземление"]
-	for index in range(6):
+	var names := ["Ожидание","Бросок крюка","На канате","Полёт вверх","Падение","Приземление","Ходьба"]
+	for index in range(names.size()):
 		var anchor := Node3D.new()
-		anchor.position = Vector3((index%3-1)*1.9,.98 if index<3 else -1.03,0)
+		anchor.position = Vector3((index%4-1.5)*1.85,.98 if index<4 else -1.03,0)
 		root_node.add_child(anchor)
 		var rig := ExplorerSprite.new()
 		anchor.add_child(rig)
@@ -46,7 +46,7 @@ func setup() -> void:
 		var label := Label.new()
 		label.text = names[index]
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		label.position = Vector2(index%3*300,280 if index<3 else 600)
+		label.position = Vector2(index%4*300,280 if index<4 else 600)
 		label.size.x = 300
 		label.add_theme_font_size_override("font_size",20)
 		overlay.add_child(label)
@@ -65,6 +65,9 @@ func update() -> void:
 		if index==3: sim.vel = Vector2(4,6)
 		if index==4: sim.vel = Vector2(2,-7)
 		if index==5 and not sim.grounded: sim.vel.y = -4
+		if index==6:
+			sim.grounded = true
+			sim.vel = Vector2(2.6 if fmod(elapsed,6.0)<3.0 else -2.6,0)
 		rigs[index].animate(sim,Vector2(2,4),index==1 or index==2,elapsed)
 	if not frame_directory.is_empty():
 		capturing = true

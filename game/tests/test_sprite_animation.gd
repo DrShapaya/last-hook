@@ -82,6 +82,23 @@ func run_tests() -> void:
 	# A throttled frame must remain bounded, with no jump to a distant sine phase.
 	a.animate(sim,Vector2(3,4),true,100)
 	check(a.pose.distance_to(target_pose)<.05,"a long frame does not skip to a remote animation phase")
+	var walker := create_sprite()
+	var stroll := RopeSim.new()
+	stroll.grounded = true
+	stroll.vel = Vector2(-2.6,0)
+	var leg_low := INF
+	var leg_high := -INF
+	for index in range(90):
+		walker.animate(stroll,Vector2(2,3),false,index/60.0)
+		if index>30:
+			leg_low = minf(leg_low,walker.pose.y)
+			leg_high = maxf(leg_high,walker.pose.y)
+	check(walker.state=="walk" and walker.facing<0,"walking on a platform uses its own state facing the walk")
+	check(leg_high-leg_low>.12,"the walk swings the legs in a stride")
+	stroll.vel = Vector2.ZERO
+	for index in range(90,150): walker.animate(stroll,Vector2(2,3),false,index/60.0)
+	check(walker.state=="idle","stopping returns the walker to idle")
+	walker.free()
 	rig.free()
 	a.free()
 	b.free()

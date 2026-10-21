@@ -13,7 +13,11 @@ func setup(world_seed: int, biome: int) -> void:
 
 func _add_anchor(point: Vector2, kind: int, dimensions: Vector2, primary: bool = false) -> int:
 	var id := super._add_anchor(point,kind,dimensions,primary)
-	anchors[id].erase("polygon")
+	# v4 grips keep their rectangular hit area, now described by the same
+	# polygon field as every other grip: four corners give exactly the old
+	# rectangle test, and the shared visual builder reads the same outline.
+	var half := dimensions*.5
+	anchors[id]["polygon"] = PackedVector2Array([Vector2(-half.x,-half.y),Vector2(half.x,-half.y),half,Vector2(-half.x,half.y)])
 	anchors[id]["shape"] = "rectangle"
 	return id
 
@@ -41,7 +45,8 @@ func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 			var side := signf(point.x)
 			var bonus := Vector2(side*random.randf_range(4.3,4.6),point.y+random.randf_range(.8,1.2))
 			var extra_kind := (4 if zone>=5 else 3) if zone>=3 else 1
-			_add_anchor(bonus,extra_kind,Vector2(1.2,.6))
+			var bonus_id := _add_anchor(bonus,extra_kind,Vector2(1.2,.6))
+			anchors[bonus_id]["role"] = "branch"
 			_add_find(bonus+Vector2(0,-.75),zone,true)
 			obstacles.append({"pos":Vector2(side*5.8,point.y-.65),"dimensions":Vector2(random.randf_range(1.2,1.8),random.randf_range(.7,1.3))})
 		previous_point = point
@@ -53,6 +58,8 @@ func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 		if span.length()>5: x = point.x+signf(span.x)*sqrt(25-rise*rise)
 		next_point = Vector2(x,point.y+rise)
 	if finite and height>=summit and not summit_added:
-		main_route.append(_add_anchor(Vector2(previous_point.x,summit+.9),0,Vector2(2,.6),true))
+		var top := _add_anchor(Vector2(previous_point.x,summit+.9),0,Vector2(2,.6),true)
+		anchors[top]["role"] = "rest"
+		main_route.append(top)
 		ledges.append({"left":previous_point.x-1.5,"right":previous_point.x+1.5,"top":summit-.25})
 		summit_added = true

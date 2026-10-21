@@ -1,7 +1,9 @@
 class_name MountainWorld
 extends Node3D
 
-const GENERATION_VERSION := 11
+const GENERATION_VERSION := 12
+# A timed root holds this long before it breaks (see GripSpec).
+const FRAGILE_SECONDS := GripSpec.ROOT_SECONDS
 const COLORS := [Color("e3b95e"),Color("e8624d"),Color("70c995"),Color("78d8e5"),Color("a994df"),Color("f1d27b")]
 var layout := MountainLayout.new()
 var visuals: MountainVisuals
@@ -42,6 +44,8 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	layout.gentle_intro = generation_version>=7
 	layout.sparse_route = generation_version>=8
 	layout.safe_routes = generation_version>=9
+	# v12 assigns grip types from the movement phrase's scenario.
+	layout.scenario_routes = generation_version>=12
 	if location!=0: layout = LegacyMountainLayout.new()
 	layout.setup(world_seed,world_location)
 	anchors = layout.anchors
@@ -89,7 +93,7 @@ func add_anchor(point: Vector2, kind: int, _bush: bool = false, dimensions: Vect
 	var id := layout._add_anchor(point,kind,dimensions)
 	if visuals_enabled:
 		var key := int(floor(point.y/24))
-		if chunks.has(key): visuals.build_anchor(anchors[id],chunks[key])
+		if chunks.has(key): build_anchor(anchors[id],chunks[key])
 
 func add_obstacle(point: Vector2, dimensions: Vector2) -> void:
 	var object := {"pos":point,"dimensions":dimensions}
@@ -201,6 +205,122 @@ func box(node_name: String, where: Vector3, dimensions: Vector3, material: Mater
 	owner_node.add_child(instance)
 	instance.position = owner_node.to_local(where)
 	return instance
+
+func profile_at(height: float) -> GripBiomeProfile:
+	return GripBiomeProfile.for_place(location,height)
+
+func build_anchor(object: Dictionary, chunk: Node3D) -> void:
+	visuals.build_anchor(object,chunk)
+	# Every root carries its clock, whatever its lifetime: the timer is the
+	# root's mechanic, so it must never break without a visible countdown.
+	if GripSpec.timed(object) and is_instance_valid(object.get("visual")):
+		_add_timer_dial(object)
+
+# Contact after holding for `held` seconds: ice moves the hook along its own
+# downslope, clamped to the drawn stone; every other type keeps the contact.
+func anchor_contact_after(object: Dictionary, contact: Vector2, held: float) -> Vector2:
+	if GripSpec.kind_of(object)!=GripSpec.ICE: return contact
+	return anchor_surface_point(object,contact+GripSpec.slide_offset(object,held))
+
+# Visible reaction of the held grip: a spring bends towards the load and a
+# choice crystal lights its two exits. Purely visual.
+func update_anchor_load(id: int, rope: Vector2, velocity: Vector2) -> void:
+	var object := anchor_by_id(id)
+	if object.is_empty(): return
+	var holder = object.get("visual")
+	if GripSpec.kind_of(object)==GripSpec.SPRING and is_instance_valid(holder):
+		var bend: Node3D = (holder as Node3D).get_node_or_null("Изгиб")
+		if bend!=null:
+			var pull := clampf(rope.normalized().x,-1,1) if rope.length_squared()>.01 else 0.0
+			var charge := GripSpec.spring_load(object,velocity)
+			bend.rotation.z = lerpf(bend.rotation.z,-pull*.22,.25)
+			bend.scale.y = lerpf(bend.scale.y,1.0-.18*charge,.25)
+	for exit_id in GripSpec.choice_exits(object): _highlight_exit(int(exit_id),true)
+
+func release_anchor_load(id: int) -> void:
+	var object := anchor_by_id(id)
+	if object.is_empty(): return
+	var holder = object.get("visual")
+	if GripSpec.kind_of(object)==GripSpec.SPRING and is_instance_valid(holder):
+		var bend: Node3D = (holder as Node3D).get_node_or_null("Изгиб")
+		if bend!=null:
+			var tween := create_tween()
+			tween.tween_property(bend,"rotation:z",0.0,.18).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+			tween.parallel().tween_property(bend,"scale:y",1.0,.18).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+	for exit_id in GripSpec.choice_exits(object): _highlight_exit(int(exit_id),false)
+
+func _highlight_exit(id: int, on: bool) -> void:
+	var object := anchor_by_id(id)
+	if object.is_empty(): return
+	object["choice_lit"] = on
+	var holder = object.get("visual")
+	if not is_instance_valid(holder): return
+	var marker: Node3D = (holder as Node3D).get_node_or_null("Выход кристалла")
+	if marker==null and on:
+		marker = Node3D.new()
+		marker.name = "Выход кристалла"
+		holder.add_child(marker)
+		var ring := MeshInstance3D.new()
+		var torus := TorusMesh.new()
+		torus.inner_radius = maxf(.45,float(object["dimensions"].x)*.5)
+		torus.outer_radius = torus.inner_radius+.08
+		ring.mesh = torus
+		ring.rotation.x = PI*.5
+		ring.position = Vector3(0,0,.95)
+		ring.material_override = mat("choice_exit",Color("bfe4ff"),true)
+		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		marker.add_child(ring)
+	if marker!=null: marker.visible = on
+
+const TIMER_SHADER := "shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled; uniform float remaining = 1.0; uniform vec4 ring : source_color = vec4(1.0,.62,.32,1.0); uniform vec4 face : source_color = vec4(.12,.10,.09,1.0); uniform vec4 rim : source_color = vec4(.97,.93,.85,1.0); void fragment(){ vec2 p=UV*2.0-1.0; p.y=-p.y; float d=length(p); if(d>1.0) discard; float angle=fract(atan(p.x,p.y)/6.2831853+1.0); vec3 color=face.rgb; if(d>.64) color=angle<=remaining?ring.rgb:mix(face.rgb,ring.rgb,.3); if(d>.9) color=rim.rgb; ALBEDO=color; }"
+
+func _add_timer_dial(object: Dictionary) -> void:
+	# The fragile grip carries its own clock: a full dial at rest that drains
+	# clockwise while the hero hangs on it.
+	var holder: Node3D = object["visual"]
+	var material := ShaderMaterial.new()
+	material.shader = shader("timer_dial",TIMER_SHADER)
+	var style: Dictionary = profile_at(object["pos"].y).timer_style
+	material.set_shader_parameter("ring",style["ring"])
+	material.set_shader_parameter("face",style["face"])
+	material.set_shader_parameter("rim",style["rim"])
+	var dial := MeshInstance3D.new()
+	dial.name = "Таймер опоры"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(.56,.56)
+	dial.mesh = quad
+	dial.material_override = material
+	dial.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	dial.position = Vector3(0,-.04,1.05)
+	holder.add_child(dial)
+	var label := Label3D.new()
+	label.name = "Секунды опоры"
+	label.text = _timer_text(GripSpec.ROOT_SECONDS)
+	label.font_size = 56
+	label.outline_size = 0
+	label.pixel_size = .0042
+	label.modulate = Color("fff4e2")
+	label.shaded = false
+	label.double_sided = true
+	label.position = Vector3(0,-.04,1.07)
+	holder.add_child(label)
+	object["timer_dial"] = {"material":material,"label":label,"shown":-1.0}
+
+static func _timer_text(seconds: float) -> String:
+	return GripSpec.timer_text(seconds)
+
+func update_anchor_timer(id: int, seconds_left: float) -> void:
+	var object := anchor_by_id(id)
+	var dial: Dictionary = object.get("timer_dial",{})
+	if dial.is_empty() or not is_instance_valid(dial["label"]): return
+	var shown := snappedf(clampf(seconds_left,0,GripSpec.ROOT_SECONDS),.05)
+	if is_equal_approx(float(dial["shown"]),shown): return
+	dial["shown"] = shown
+	var material: ShaderMaterial = dial["material"]
+	var style: Dictionary = profile_at(object["pos"].y).timer_style
+	material.set_shader_parameter("remaining",shown/GripSpec.ROOT_SECONDS)
+	material.set_shader_parameter("ring",(style["ring"] as Color).lerp(style["alarm"],clampf(1.0-shown/1.2,0,1)))
+	(dial["label"] as Label3D).text = _timer_text(shown)
 
 func sphere(node_name: String, where: Vector3, dimensions: Vector3, material: Material, parent: Node3D = null) -> MeshInstance3D:
 	var instance := MeshInstance3D.new()
@@ -380,8 +500,7 @@ func _build_find(find: Dictionary, parent: Node3D) -> void:
 	holder.position = Vector3(point.x,point.y,2.2)
 	holder.scale = Vector3.ONE*1.22
 	find["visual"] = holder
-	var wall_z := 1.1
-	if visuals is MassifVisuals: wall_z = (visuals as MassifVisuals).wall_depth(point)
+	var wall_z := visuals.wall_depth(point)
 	holder.position.z = clampf(wall_z+.75,1.7,2.4)
 	# Contact offsets are in holder space; the holder is uniformly scaled.
 	LootVisuals.build(self,find,holder,visual_quality,(wall_z-holder.position.z)/holder.scale.x)
@@ -461,7 +580,7 @@ func update_visibility(center_y: float, center_x: float = 0) -> void:
 		chunks[key] = chunk
 		visuals.build_chunk(key,chunk)
 		for object in nearby_anchors(key*24,(key+1)*24-.001):
-			if int(floor(object["pos"].y/24))==key: visuals.build_anchor(object,chunk)
+			if int(floor(object["pos"].y/24))==key: build_anchor(object,chunk)
 		for object in obstacles:
 			if int(floor(object["pos"].y/24))==key: visuals.build_obstacle(object,chunk)
 		for object in ledges:
@@ -553,14 +672,16 @@ func consume_anchor(id: int) -> void:
 		if visuals_enabled:
 			var p: Vector2 = object["pos"]
 			for index in range(4):
-				var chip := box("Осколок",Vector3(p.x+(index-1.5)*.22,p.y,2.5),Vector3(.16,.13,.15),mat("crumb",Color("b3ab87")))
+				var crumb := profile_at(p.y).material_color(GripSpec.kind_of(object))
+				var chip := box("Осколок",Vector3(p.x+(index-1.5)*.22,p.y,2.5),Vector3(.16,.13,.15),mat("crumb_%s" % crumb.to_html(),crumb))
 				var tween := create_tween().set_parallel(true)
 				tween.tween_property(chip,"position",chip.position+Vector3((index-1.5)*.35,-1.4,0),.36).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 				tween.tween_property(chip,"scale",Vector3.ZERO,.36)
 				tween.chain().tween_callback(chip.queue_free)
 
 func object_description(object: Dictionary) -> String:
-	return "Постоянная опора" if object.get("permanent",true) else ["Одноразовая опора","Хрупкий · 2,6 с","Упругая · одноразовая","Скользкая · одноразовая","Кристалл · одноразовый"][int(object["kind"])]
+	# Type and lifetime are separate words: a permanent ice grip still reads as ice.
+	return GripSpec.description(object,profile_at(object["pos"].y))
 
 func _make_glow_texture() -> void:
 	var image := Image.create(48,48,false,Image.FORMAT_RGBA8)

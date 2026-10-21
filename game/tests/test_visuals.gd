@@ -118,6 +118,20 @@ func run_tests() -> void:
 	for node in grip_chunk.find_children("Полоса состояния*","MeshInstance3D",true,false):
 		strip_lit = strip_lit and (node as MeshInstance3D).cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	check(strip_lit,"status strips never add a second shadow line")
+	var contours := grip_chunk.find_children("Контур","MeshInstance3D",true,false).size()
+	check(contours>=a.nearby_anchors(20,70).size(),"every grip has a contrast contour")
+	var dials := 0
+	var dial_ok := true
+	for anchor in a.nearby_anchors(4,110):
+		if int(anchor["kind"])!=1 or anchor.get("permanent",false): continue
+		a.build_anchor(anchor,grip_chunk)
+		dials += 1
+		var label: Label3D = anchor["timer_dial"]["label"]
+		dial_ok = dial_ok and label.text=="2,6"
+		a.update_anchor_timer(anchor["id"],1.0)
+		var material: ShaderMaterial = anchor["timer_dial"]["material"]
+		dial_ok = dial_ok and label.text=="1,0" and absf(float(material.get_shader_parameter("remaining"))-1.0/MountainWorld.FRAGILE_SECONDS)<.001
+	check(dials>0 and dial_ok,"fragile grips carry their own countdown dial (%d)" % dials)
 	# Boulder massif: stone under every gameplay object and along the route
 	# corridor, polygonal boulders, and real sky openings between them.
 	var stone_under := true
@@ -198,10 +212,19 @@ func run_tests() -> void:
 	check(far_mesh_a.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]==far_mesh_b.surface_get_arrays(0)[Mesh.ARRAY_VERTEX],"distant cliffs are deterministic per seed")
 	# Grip types differ by material, not only by the status strip.
 	var names := {}
+	var identity_kept := true
 	for kind in range(5):
 		names[massif.grip_material_name({"kind":kind,"permanent":false})] = true
-	names[massif.grip_material_name({"kind":0,"permanent":true})] = true
-	check(names.size()==6,"each grip type has its own stone material (%s)" % str(names.keys()))
+		identity_kept = identity_kept and massif.grip_material_name({"kind":kind,"permanent":true})==massif.grip_material_name({"kind":kind,"permanent":false})
+	check(names.size()==5 and identity_kept,"each grip type has its own material and permanence keeps it (%s)" % str(names.keys()))
+	# Every profile keeps the five types apart and names them for the HUD.
+	var profiles_ok := true
+	for profile_id in GripBiomeProfile.IDS:
+		var profile := GripBiomeProfile.named(profile_id)
+		var families := {}
+		for kind in range(5): families[profile.family(kind)] = true
+		profiles_ok = profiles_ok and families.size()==5 and profile.type_titles.size()==5
+	check(profiles_ok and GripBiomeProfile.id_for(0,70)=="snow" and GripBiomeProfile.id_for(1,10)=="desert" and GripBiomeProfile.id_for(2,10)=="sky","five biome profiles map onto locations and zones")
 	# Hazards are set into the rock: no closed outline, a warm glint only on
 	# upward edges and rubble at the foot.
 	var hazard_chunk := Node3D.new()
@@ -234,6 +257,55 @@ func run_tests() -> void:
 	for holder in holder_parent.get_children():
 		supported = supported and (holder.find_child("Каменный постамент",false,false)!=null or holder.find_child("Каменная полка",false,false)!=null)
 	check(supported,"every find sits on a stone shelf or pedestal")
+	# Mounted grips: one socket per grip, type cues and lifetime fixings.
+	var mount_chunk := Node3D.new()
+	a.add_child(mount_chunk)
+	var sockets := true
+	var cues := {}
+	var fixed_ok := true
+	var single_contact := true
+	for anchor in a.nearby_anchors(4,118):
+		if anchor.get("reserve",false): continue
+		massif.build_anchor(anchor,mount_chunk)
+		var holder: Node3D = anchor["visual"]
+		var mount: SurfaceMount = anchor["mount"]
+		sockets = sockets and holder.find_child("Каменное гнездо",false,false)!=null
+		single_contact = single_contact and is_equal_approx(holder.position.z,mount.wall_z()+MountainVisuals.GRIP_STANDOFF) and is_equal_approx(mount.wall_z(),massif.wall_depth(anchor["pos"]))
+		match GripSpec.kind_of(anchor):
+			GripSpec.SPRING: if holder.find_child("Изгиб",false,false)!=null and holder.find_child("Направление выхода",true,false)!=null: cues["spring"] = true
+			GripSpec.ICE: if holder.find_child("Трещина",true,false)!=null: cues["ice"] = true
+			GripSpec.CRYSTAL: if holder.find_child("Кристалл",true,false)!=null: cues["crystal"] = true
+			GripSpec.ROOT: if holder.find_child("Трещина",true,false)!=null: cues["root"] = true
+		if anchor["permanent"]: fixed_ok = fixed_ok and holder.find_children("*крепление*","MeshInstance3D",true,false).size()+holder.find_children("Кольцо*","MeshInstance3D",true,false).size()>0
+	check(sockets and single_contact,"every grip sits in a stone socket at one contact depth from its SurfaceMount")
+	check(cues.size()==4 and fixed_ok,"type cues (bend, slide track, crystal, root) and permanent fixings are built: %s" % str(cues.keys()))
+	# Side faces of the massif: same silhouette in every preset, deterministic.
+	var flank_counts := {}
+	for quality in ["high","balanced","battery"]:
+		var world := make_world(58273,quality)
+		var chunk := Node3D.new()
+		world.add_child(chunk)
+		world.visuals.build_chunk(2,chunk)
+		var flank: MeshInstance3D = chunk.get_node_or_null("Боковые грани_2")
+		flank_counts[quality] = flank.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size() if flank!=null else 0
+		world.free()
+	check(flank_counts["high"]>0 and flank_counts["high"]==flank_counts["balanced"] and flank_counts["balanced"]==flank_counts["battery"],"massif flanks keep one silhouette across presets: %s" % str(flank_counts))
+	# Legacy locations use the shared builder: no rectangle boxes remain.
+	var legacy := MountainWorld.new()
+	legacy.visuals_enabled = false
+	root.add_child(legacy)
+	legacy.setup(58273,1)
+	legacy.generate_to(40,true,140)
+	var legacy_chunk := Node3D.new()
+	legacy.add_child(legacy_chunk)
+	var shared := true
+	for anchor in legacy.nearby_anchors(0,24):
+		legacy.visuals.build_anchor(anchor,legacy_chunk)
+		var holder: Node3D = anchor["visual"]
+		shared = shared and holder.find_child("Прямоугольник",false,false)==null and holder.find_child("Каменное гнездо",false,false)!=null
+	for ledge in legacy.ledges: legacy.visuals.build_ledge(ledge,legacy_chunk)
+	check(shared and legacy_chunk.find_children("Площадка отдыха*","Node3D",false,false).size()==legacy.ledges.size(),"legacy locations build grips and shelves through the shared mount API")
+	legacy.free()
 	print("VISUAL_TESTS %d checks, %d failures" % [checks,failures])
 	a.free()
 	b.free()

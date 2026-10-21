@@ -214,7 +214,7 @@ func run_tests() -> void:
 	game.save_snapshot()
 	game.model.load_profile()
 	game.resume_run()
-	check(game.world.generation_version==11 and game.sim.rope_pivots==pivots,"rope contacts survive save and resume with their route version")
+	check(game.world.generation_version==MountainWorld.GENERATION_VERSION and game.sim.rope_pivots==pivots,"rope contacts survive save and resume with their route version")
 	# Magnet reach is never permission to pull an item through a wall.
 	game.world.finds.clear()
 	game.world.obstacles.clear()
@@ -239,6 +239,6 @@ func run_tests() -> void:
 	game.queue_free()
 	await process_frame
 	var report := FileAccess.open(directory.path_join("terrain-test-report.json"),FileAccess.WRITE)
-	report.store_string(JSON.stringify({"checks":checks,"failures":failures,"passed":failures.is_empty(),"seeds":100,"obstacles":count,"generation_version":11,"landforms":forms.size(),"front_width_range":[smallest_width,largest_width],"max_narrow_fraction":float(most_narrow_rows)/104,"shared_seam_vertices":shared,"mesh_depth_range":[low,high]},"\t"))
+	report.store_string(JSON.stringify({"checks":checks,"failures":failures,"passed":failures.is_empty(),"seeds":100,"obstacles":count,"generation_version":MountainWorld.GENERATION_VERSION,"landforms":forms.size(),"front_width_range":[smallest_width,largest_width],"max_narrow_fraction":float(most_narrow_rows)/104,"shared_seam_vertices":shared,"mesh_depth_range":[low,high]},"\t"))
 	print("TERRAIN_TESTS ",checks," checks, ",failures.size()," failures; obstacles=",count)
 	quit(0 if failures.is_empty() else 1)

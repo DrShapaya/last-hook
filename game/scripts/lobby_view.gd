@@ -169,10 +169,12 @@ func build_equipment() -> void:
 	title(self,"Снаряжение",Vector2(28,84),500,32)
 	paragraph(self,"Заверши попытку, чтобы улучшать снаряжение." if active else "Новые уровни открываются, когда ты доходишь до следующей зоны.",Vector2(29,128),Vector2(size.x-56,22),14)
 	var order := [GameModel.THROW,0,1,2,3,4,5]
+	# Slow motion joins the list once balance.json gives it more than one level.
+	if model.max_level(GameModel.SLOWMO)>1: order.append(GameModel.SLOWMO)
 	var columns := 2 if landscape else 1
 	var row_width := 504.0 if landscape else 484.0
-	var row_height := 84.0 if landscape else 90.0
-	var per_column := 4 if landscape else 7
+	var row_height := 84.0 if landscape else 90.0 if order.size()<=7 else 80.0
+	var per_column := 4 if landscape else order.size()
 	for index in range(order.size()):
 		var column := index/per_column
 		var row := index%per_column
@@ -185,14 +187,14 @@ func build_upgrade(kind: int, at: Vector2, dimensions: Vector2, active: bool) ->
 	var locked := not maximum and not model.upgrade_available(kind)
 	var can_buy := not active and not locked and not maximum and int(model.profile["gold"])>=model.cost(kind)
 	var affordable := int(model.profile["gold"])>=model.cost(kind)
-	var short_names := ["Длина каната","Импульс","Крюки","Рюкзак","Магнит","Защита добычи","Сила броска"]
+	var short_names := ["Длина каната","Импульс","Крюки","Рюкзак","Магнит","Защита добычи","Сила броска","Замедление"]
 	var middle := (dimensions.y-4)*.5
-	symbol(frame,kind,Vector2(16,middle-20),Vector2(40,40),INK)
+	symbol(frame,19 if kind==GameModel.SLOWMO else kind,Vector2(16,middle-20),Vector2(40,40),INK)
 	text(frame,short_names[kind],Vector2(70,middle-32),Vector2(dimensions.x-240,24),17,INK,"strong")
-	var effects := ["%d м" % int(model.value("rope_lengths",0)*10),"+%d%%" % roundi((model.value("impulse_factors",1)-1)*100),GameModel.HOOK_NAMES[mini(level,4)-1],"%d %s" % [model.level(3),"слот" if model.level(3)==1 else "слота" if model.level(3)<5 else "слотов"],"при касании" if model.level(4)==1 else "%d м" % int(model.value("magnet_radii",4)*10),"%d%%" % int(model.value("recovery_percents",5)),"%d м/с" % int(model.value("throw_speeds",GameModel.THROW)*10)]
+	var effects := ["%d м" % int(model.value("rope_lengths",0)*10),"+%d%%" % roundi((model.value("impulse_factors",1)-1)*100),GameModel.HOOK_NAMES[mini(level,4)-1],"%d %s" % [model.level(3),"слот" if model.level(3)==1 else "слота" if model.level(3)<5 else "слотов"],"при касании" if model.level(4)==1 else "%d м" % int(model.value("magnet_radii",4)*10),"%d%%" % int(model.value("recovery_percents",5)),"%d м/с" % int(model.value("throw_speeds",GameModel.THROW)*10),seconds_text(model.slowmo_seconds())]
 	var current := text(frame,effects[kind],Vector2(70,middle-7),Vector2(dimensions.x-240,26),19,INK,"display")
 	if not maximum:
-		var next_values := ["%d м" % int(model.balance["rope_lengths"][mini(level,5)]*10),"+%d%%" % roundi((float(model.balance["impulse_factors"][mini(level,5)])-1)*100),GameModel.HOOK_NAMES[mini(level,3)],"%d %s" % [level+1,"слота" if level+1<5 else "слотов"],"%d м" % int(model.balance["magnet_radii"][mini(level,5)]*10),"%d%%" % int(model.balance["recovery_percents"][mini(level,5)]),"%d м/с" % int(model.balance["throw_speeds"][mini(level,5)]*10)]
+		var next_values := ["%d м" % int(model.balance["rope_lengths"][mini(level,5)]*10),"+%d%%" % roundi((float(model.balance["impulse_factors"][mini(level,5)])-1)*100),GameModel.HOOK_NAMES[mini(level,3)],"%d %s" % [level+1,"слота" if level+1<5 else "слотов"],"%d м" % int(model.balance["magnet_radii"][mini(level,5)]*10),"%d%%" % int(model.balance["recovery_percents"][mini(level,5)]),"%d м/с" % int(model.balance["throw_speeds"][mini(level,5)]*10),seconds_text(float(model.balance["slowmo_seconds"][mini(level,model.max_level(GameModel.SLOWMO)-1)]))]
 		var shown := current.get_theme_font("font").get_string_size(current.text,HORIZONTAL_ALIGNMENT_LEFT,-1,19).x
 		text(frame,"→ "+next_values[kind],Vector2(70+shown+8,middle-4),Vector2(maxf(40,dimensions.x-250-shown),24),15,INK_SOFT)
 	var meter := UpgradeMeter.new()
@@ -225,6 +227,9 @@ func build_upgrade(kind: int, at: Vector2, dimensions: Vector2, active: bool) ->
 		text(price,amount,Vector2(left+24,0),Vector2(width,22),16,INK if can_buy or affordable else DANGER,"display")
 	frame.tooltip_text = model.upgrade_text(kind)+("\nДалее: "+model.upgrade_text(kind,level+1) if not maximum else "\nМаксимальный уровень")
 	frame.mouse_filter = Control.MOUSE_FILTER_PASS
+
+static func seconds_text(seconds: float) -> String:
+	return (str(snappedf(seconds,.01))+" с").replace(".",",")
 
 func settings_switch(parent: Node, title_text: String, subtitle: String, at: Vector2, width: float, enabled: bool, callback: Callable) -> void:
 	text(parent,title_text,at,Vector2(width-120,24),16,INK,"strong")

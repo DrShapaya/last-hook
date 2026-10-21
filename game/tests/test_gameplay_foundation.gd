@@ -101,7 +101,13 @@ func run_tests() -> void:
 	game.run_seed = 58273
 	game._create_world(58273,0,126)
 	attach_first(game)
+	# v12 puts a permanent teaching grip before a new mechanic, so test the
+	# first detour whose entry is disposable.
 	var branch: Dictionary = game.world.layout.branches[0]
+	for candidate in game.world.layout.branches:
+		if game.world.main_route.has(candidate["entry"]) and not game.world.anchor_by_id(candidate["entry"])["permanent"]:
+			branch = candidate
+			break
 	var branch_route: Array[int] = []
 	for id in game.world.main_route:
 		branch_route.append(id)
@@ -166,7 +172,7 @@ func run_tests() -> void:
 	var real_file := FileAccess.get_file_as_string(real.save_path)
 	game.start_practice()
 	check(game.world.layout is PracticeLayout and game.world.main_route.size()==16,"training provides a fixed short route of sixteen primary grips")
-	check(game.model!=real and game.model.profile["levels"]==[1,1,1,1,1,1,1],"training uses base equipment in a separate model")
+	check(game.model!=real and game.model.profile["levels"]==[1,1,1,1,1,1,1,1],"training uses base equipment in a separate model")
 	var first: Vector2 = game.world.anchor_by_id(game.world.main_route[0])["pos"]
 	game.fire_hook(game.direction_to_target(first))
 	for frame in range(120):

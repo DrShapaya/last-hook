@@ -1,10 +1,13 @@
 class_name GameModel
 extends RefCounted
 
-const UPGRADE_NAMES = ["Макс. длина каната", "Импульс", "Крюки", "Рюкзак", "Магнит", "Сохранение добычи", "Сила броска"]
-const UPGRADE_COUNT := 7
+const UPGRADE_NAMES = ["Макс. длина каната", "Импульс", "Крюки", "Рюкзак", "Магнит", "Сохранение добычи", "Сила броска", "Замедление"]
+const UPGRADE_COUNT := 8
 const THROW := 6
-const BUILD_VERSION := "0.13.0"
+# Release slow motion. Its track has as many levels as balance.json lists
+# durations, so one entry means the upgrade is not on sale yet.
+const SLOWMO := 7
+const BUILD_VERSION := "0.13.2"
 const HOOK_NAMES = ["Одинарный", "Тройной", "2 одинарных", "2 тройных"]
 const PREVIOUS_UPGRADE_PRICES = [90, 300, 1000, 3200, 15500]
 const PREVIOUS_TIP_PRICES = [2400, 12000]
@@ -36,7 +39,7 @@ func _init(path: String = "") -> void:
 	load_profile()
 
 static func fresh_profile() -> Dictionary:
-	return {"version": 5, "gold": 0, "diamonds": 0, "levels": [1, 1, 1, 1, 1, 1, 1], "best": 0.0,
+	return {"version": 5, "gold": 0, "diamonds": 0, "levels": [1, 1, 1, 1, 1, 1, 1, 1], "best": 0.0,
 		"endless_best": 0.0, "reached_zones": 1, "summit_cleared": false, "locations": [0],
 		"cleared_locations": [], "runs": 0, "wins": 0, "last_settled": "", "active": {},
 		"sound": true, "vibration": true, "notifications": true, "graphics_quality": "balanced",
@@ -62,8 +65,11 @@ func load_profile() -> void:
 		if profile["levels"] is Array and profile["levels"].size()==6:
 			# Preserve the reach previously bought as part of rope length.
 			profile["levels"].append(profile["levels"][0])
+		if profile["levels"] is Array and profile["levels"].size()==7:
+			# Slow motion became a track of its own; it starts at the base level.
+			profile["levels"].append(1)
 		if not profile["levels"] is Array or profile["levels"].size()!=UPGRADE_COUNT:
-			profile["levels"] = [1,1,1,1,1,1,1]
+			profile["levels"] = [1,1,1,1,1,1,1,1]
 		var source_version := int(parsed["version"])
 		var old_hook_level := clampi(int(profile["levels"][2]),1,6)
 		if source_version<3:
@@ -144,7 +150,12 @@ func level(kind: int) -> int:
 	return int(profile["levels"][kind])
 
 func max_level(kind: int) -> int:
+	if kind==SLOWMO: return maxi(1,balance["slowmo_seconds"].size())
 	return 4 if kind==2 else 6
+
+func slowmo_seconds() -> float:
+	var durations: Array = balance["slowmo_seconds"]
+	return float(durations[clampi(level(SLOWMO)-1,0,durations.size()-1)])
 
 func hook_count() -> int:
 	return int(balance["hook_counts"][level(2)-1])
@@ -204,6 +215,7 @@ func upgrade_text(kind: int, at_level: int = -1) -> String:
 		3: return "%d слотов · любые находки" % (i+1)
 		4: return "сбор при касании" if i == 0 else "%d м притяжения" % roundi(float(balance["magnet_radii"][i])*10)
 		5: return "%d%% стоимости при поражении" % int(balance["recovery_percents"][i])
+		SLOWMO: return (str(snappedf(float(balance["slowmo_seconds"][mini(i,max_level(SLOWMO)-1)]),.01))+" с замедления после отцепления").replace(".",",")
 		_: return "%d м/с · скорость крюка" % roundi(float(balance["throw_speeds"][i])*10)
 
 func shot_range() -> float:
@@ -216,11 +228,11 @@ func learn_control(action: String) -> void:
 func recommended_upgrade() -> int:
 	if not profile["active"].is_empty(): return -1
 	var available: Array[int] = []
-	for kind in [0,THROW,3,1,2,5,4]:
+	for kind in [0,THROW,3,1,2,5,4,SLOWMO]:
 		if upgrade_available(kind) and cost(kind)<=int(profile["gold"]):
 			available.append(kind)
 	if available.is_empty(): return -1
-	var lowest := 7
+	var lowest := 99
 	var selected := -1
 	for kind in available:
 		if level(kind)<lowest:

@@ -46,7 +46,7 @@ func run_tests() -> void:
 	write_profile(path,old)
 	var migrated := GameModel.new(path)
 	check(migrated.profile["gold"]==1234+27962,"maximum existing kit returns the complete net price reduction")
-	check(migrated.profile["levels"]==[6,6,4,6,6,6,6] and migrated.profile["diamonds"]==17,"migration preserves all equipment and maps the old maximum hook to the new final stage")
+	check(migrated.profile["levels"]==[6,6,4,6,6,6,6,1] and migrated.profile["diamonds"]==17,"migration preserves all equipment and maps the old maximum hook to the new final stage")
 	var migrated_active: Dictionary = migrated.profile["active"].duplicate(true)
 	migrated_active["seed"] = int(migrated_active["seed"]) # JSON decodes numbers as floats.
 	check(migrated_active==old["active"],"economic migration preserves an active run including loot and spent grips")
@@ -64,7 +64,7 @@ func run_tests() -> void:
 	old["active"] = {}
 	write_profile(path,old)
 	var middle := GameModel.new(path)
-	check(middle.profile["gold"]==1234 and middle.profile["levels"]==old["levels"],"more expensive middle levels never create debt or remove purchased equipment")
+	check(middle.profile["gold"]==1234 and middle.profile["levels"]==old["levels"]+[1],"more expensive middle levels never create debt or remove purchased equipment")
 	old["levels"] = [1,1,1,1,1,1,1]
 	write_profile(path,old)
 	var starter := GameModel.new(path)

@@ -158,10 +158,10 @@ func run_tests() -> void:
 	legacy_file.store_string(JSON.stringify(legacy))
 	legacy_file.close()
 	var migrated := GameModel.new(legacy_path)
-	check(migrated.profile["levels"]==[4,3,2,5,2,6,4] and migrated.profile["gold"]==1789+1500+3015,"legacy saves preserve purchases and return the net price reduction on tips and maximum recovery")
+	check(migrated.profile["levels"]==[4,3,2,5,2,6,4,1] and migrated.profile["gold"]==1789+1500+3015,"legacy saves preserve purchases and return the net price reduction on tips and maximum recovery")
 	migrated.save()
 	var migrated_again := GameModel.new(legacy_path)
-	check(migrated_again.profile["levels"].size()==7 and migrated_again.level(6)==4,"migration is idempotent across subsequent loads")
+	check(migrated_again.profile["levels"].size()==8 and migrated_again.level(6)==4 and migrated_again.level(GameModel.SLOWMO)==1,"migration is idempotent across subsequent loads")
 	check(migrated_again.level(2)==2,"a purchased legacy grip retains a useful two-prong hook across reloads")
 	legacy["version"] = 2
 	legacy["levels"] = [6,6,6,6,6,6,6]
@@ -190,11 +190,11 @@ func run_tests() -> void:
 	model.profile = GameModel.fresh_profile()
 	model.profile["levels"][0] = 6
 	check(model.shot_range()==12 and model.value("throw_speeds",6)==16,"long rope immediately extends reach without changing throwing speed")
-	model.profile["levels"] = [1,1,1,1,1,1,6]
+	model.profile["levels"] = [1,1,1,1,1,1,6,1]
 	check(model.shot_range()==5.5 and model.value("rope_lengths",0)==5.5 and model.value("throw_speeds",6)==40,"stronger throw accelerates the projectile while respecting the short rope")
 	model.profile["levels"][0] = 6
 	check(model.shot_range()==12 and model.value("throw_speeds",6)==40,"long rope and strong throw combine independent reach and speed")
-	model.profile["levels"] = [1,1,1,1,1,1,1]
+	model.profile["levels"] = [1,1,1,1,1,1,1,1]
 	check(model.shot_range()==5.5 and model.value("throw_speeds",6)==16,"weak throw and short rope retain their separate base values")
 	model.learn_control("aim")
 	model.learn_control("aim")
@@ -226,6 +226,26 @@ func run_tests() -> void:
 	check(descending.fallen()==20,"successive lower catches preserve historical height telemetry")
 	descending.land(18)
 	check(descending.fallen()>20,"landing preserves historical fall telemetry without defining defeat")
+	# Release slow motion is a profile track read from balance.json.
+	var slowmo := GameModel.new(directory.path_join("slowmo-tests.json"))
+	slowmo.profile = GameModel.fresh_profile()
+	check(slowmo.max_level(GameModel.SLOWMO)==slowmo.balance["slowmo_seconds"].size() and is_equal_approx(slowmo.slowmo_seconds(),float(slowmo.balance["slowmo_seconds"][0])),"slow motion starts at the first duration listed in the balance")
+	if slowmo.max_level(GameModel.SLOWMO)==1:
+		slowmo.profile["gold"] = 100000
+		slowmo.profile["reached_zones"] = 6
+		check(slowmo.purchase(GameModel.SLOWMO)=="Уже максимальный уровень" and slowmo.profile["gold"]==100000 and slowmo.recommended_upgrade()!=GameModel.SLOWMO,"a single listed duration keeps slow motion off sale")
+	# A longer track (as balance.json may list later) is bought and saved like any upgrade.
+	slowmo.balance["slowmo_seconds"] = [.7,.85,1.0]
+	slowmo.profile["gold"] = 100000
+	slowmo.profile["reached_zones"] = 6
+	var slowmo_price := slowmo.cost(GameModel.SLOWMO)
+	slowmo.purchase(GameModel.SLOWMO)
+	check(slowmo.level(GameModel.SLOWMO)==2 and is_equal_approx(slowmo.slowmo_seconds(),.85) and slowmo.profile["gold"]==100000-slowmo_price,"buying slow motion raises its duration for the next release")
+	var slowmo_saved: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(slowmo.save_path))
+	check(int(slowmo_saved["levels"][GameModel.SLOWMO])==2,"purchased slow motion is written to the profile")
+	slowmo.purchase(GameModel.SLOWMO)
+	slowmo.purchase(GameModel.SLOWMO)
+	check(slowmo.level(GameModel.SLOWMO)==3 and slowmo.cost(GameModel.SLOWMO)==0,"slow motion stops at the last listed duration")
 	var report := {"checks":checks,"failures":failures,"passed":failures.is_empty(),"engine":Engine.get_version_info()["string"]}
 	var output := FileAccess.open(directory.path_join("rules-test-report.json"),FileAccess.WRITE)
 	output.store_string(JSON.stringify(report,"\t"))

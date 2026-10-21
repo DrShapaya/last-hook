@@ -179,7 +179,7 @@ func run_tests() -> void:
 	game.sim.vel = velocity
 	game.pointer_up(Vector2(300,320))
 	check(not game.sim.attached and not game.bolt_active and game.shots==shots_before and game.sim.vel==velocity,"primary lift only detaches and preserves actual velocity")
-	check(is_equal_approx(game.focus_remaining,game.RELEASE_SLOWMO_SECONDS) and game.hud.slowmo_indicator.visible==false,"manual release starts the short focus window without keeping the stick pressed")
+	check(is_equal_approx(game.focus_remaining,game.model.slowmo_seconds()) and game.hud.slowmo_indicator.visible==false,"manual release starts the short focus window without keeping the stick pressed")
 	game.hud.update_play()
 	check(game.hud.slowmo_indicator.visible and game.hud.slowmo_indicator.remaining>0,"focus window is visible in the HUD while it is active")
 	var focus_before: float = game.focus_remaining
@@ -328,6 +328,65 @@ func run_tests() -> void:
 	game.save_snapshot()
 	game.resume_run()
 	check(absf(game.camera_x-2.3)<.0001 and absf(game.sim.reel_velocity+.8)<.0001,"save and resume preserve framing and reel acceleration")
+	check(game.hud.pause_button.tooltip_text.is_empty(),"the in-run Pause button shows no caption over the game")
+	# Walking on a platform: a held horizontal stick walks, the hero stops at
+	# the edge, and lifting the finger afterwards throws nothing.
+	game.start_run(false)
+	game.world.obstacles.clear()
+	game.world.ledges.clear()
+	game.world.add_ledge(Vector2(0,30),4.0)
+	game.sim.pos = Vector2(0,30.15+SolidGeometry.BODY_HALF.y+.01)
+	game.sim.vel = Vector2.ZERO
+	game.sim.grounded = true
+	game.sim.launched = true
+	game.camera_y = 33
+	game._position_camera()
+	for frame in range(10): game._physics_process(1.0/60)
+	check(game.state=="play" and game.sim.grounded and absf(game.sim.vel.x)<.01,"the hero stands still on a platform without input")
+	game.pointer_down(Vector2(300,400),true)
+	var walk_begin: int = game.gesture_last_msec
+	game.pointer_move(Vector2(380,404),walk_begin+10)
+	game._update_touch_controls(walk_begin+200)
+	check(game.walk==0 and game.aim_stick_valid,"a short sideways hold on a platform still aims")
+	game._update_touch_controls(walk_begin+300)
+	check(game.walk>.9 and not game.aim_stick_valid,"holding right on a platform walks after the hold delay")
+	var walk_from: float = game.sim.pos.x
+	for frame in range(30): game._physics_process(1.0/60)
+	check(game.sim.grounded and game.sim.pos.x>walk_from+.5 and game.sim.vel.x>game.WALK_SPEED*.9 and game.sim.vel.x<=game.WALK_SPEED,"the hero walks along the platform at walking speed")
+	for frame in range(240): game._physics_process(1.0/60)
+	check(game.state=="play" and game.sim.grounded and game.sim.pos.x<2.3 and absf(game.sim.vel.x)<.01,"walking stops at the platform edge instead of stepping off")
+	var walk_shots: int = game.shots
+	game.pointer_up(Vector2(380,404))
+	check(game.shots==walk_shots and not game.bolt_active and game.walk==0,"lifting the finger after a walk throws no hook")
+	game.sim.grounded = false
+	game.pointer_down(Vector2(300,400),true)
+	walk_begin = game.gesture_last_msec
+	game.pointer_move(Vector2(220,404),walk_begin+10)
+	game._update_touch_controls(walk_begin+400)
+	check(game.walk==0,"a sideways hold in the air never walks")
+	game._cancel_primary()
+	game.sim.grounded = true
+	# Landing low lowers the view, but the danger edge stays where it was.
+	game.sim.pos = Vector2(0,30.15+SolidGeometry.BODY_HALF.y+.01)
+	game.sim.vel = Vector2.ZERO
+	game.camera_y = 36
+	game.camera_dip = 0
+	game._position_camera()
+	var edge_before: float = game.screen_bottom_y()
+	for frame in range(120): game._move_camera(1.0/60)
+	check(game.camera_dip>.3 and absf(game.camera_y-36)<.001,"the view sinks a little after landing below the framing")
+	check(absf(game.screen_bottom_y()-edge_before)<.001,"a lowered view does not move the danger edge")
+	game.hud.update_play()
+	check(game.hud.danger_edge.strength>0 and game.hud.danger_edge.edge_y<game.hud.root.size.y,"the danger edge is drawn when the view drops below it")
+	var dip_before: float = game.camera_dip
+	game.sim.grounded = false
+	game.sim.vel = Vector2(0,-8)
+	game.sim.pos.y -= 3
+	game._move_camera(.5)
+	check(game.camera_dip<=dip_before+.0001 and game.camera_y>=36,"a fall never drags the view down")
+	game.sim.pos.y = edge_before-1.0
+	game._physics_process(1.0/120)
+	check(game.state in ["revive","result"],"leaving below the danger edge still ends the attempt with a lowered view")
 	game.queue_free()
 	await process_frame
 	var report := FileAccess.open(directory.path_join("controls-test-report.json"),FileAccess.WRITE)

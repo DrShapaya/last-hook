@@ -7,96 +7,77 @@ var on_discard := Callable()
 var held_touch := -1
 var hold_time := 0.0
 var press_position := Vector2.ZERO
+# Presentation only: `reveal` hides an item while its pickup is still flying
+# in, `pop` is the landing bounce and `time` drives idle shimmer.
+var reveal := true
+var pop := 0.0
+var time := 0.0
+var value_font: Font
 const HOLD_SECONDS := .65
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	time = randf()*4
+
+func land() -> void:
+	reveal = true
+	pop = 1.0
+	queue_redraw()
 
 func _draw() -> void:
-	# Slate slot with the same chamfer and lip as the HUD; a filled slot gets
-	# a hold-yellow lip so the carried value reads at a glance.
+	var filled := not item.is_empty() and reveal
+	var unit := minf(size.x,size.y)/54.0
+	var accent := LootIcon.rarity_color(item) if filled else Color("121b22")
+	var squash := 1.0+.16*sin(pop*PI)*pop
+	draw_set_transform(size*.5,0,Vector2.ONE*squash)
+	var half := size*.5
+	# Slate slot with the HUD's chamfer; a filled slot takes its rarity colour
+	# as the lip and a soft glow rising from the floor of the cell.
 	var frame := StyleBoxFlat.new()
-	frame.bg_color = Color("24323d",.55 if item.is_empty() else .92)
-	frame.border_color = Color("121b22") if item.is_empty() else Color("f6c32f")
-	frame.border_width_bottom = 3 if item.is_empty() else 4
-	frame.set_corner_radius_all(9)
+	frame.bg_color = Color("24323d",.5 if not filled else .94)
+	frame.border_color = accent if filled else Color("121b22",.8)
+	frame.border_width_bottom = int(4*unit) if filled else int(3*unit)
+	frame.set_corner_radius_all(int(9*unit))
 	frame.corner_detail = 1
-	draw_style_box(frame,Rect2(Vector2.ZERO,size))
-	draw_set_transform(size*.5,0,Vector2.ONE*minf(size.x,size.y)/54)
-	if not item.is_empty():
-		var colors := [Color("e4b35e"),Color("f08f72"),Color("86c6a0"),Color("78d5d2"),Color("af9bdf"),Color("d7dcea")]
-		var tier := clampi(int(item["tier"]),0,5)
-		var color: Color = colors[tier]
-		# A compact contact shadow separates the icon from the slot surface.
-		_draw_contact_ellipse(Vector2(0,11),Vector2(15,5),Color("020814",.28))
-		draw_loot_icon(tier,color,str(item.get("kind","")))
-		if rare:
-			draw_circle(Vector2(17,-17),3,Color("fff0a8"))
-			draw_arc(Vector2.ZERO,21,-PI*.85,PI*.15,32,Color("fff0a8"),1.5,true)
-	if held_touch!=-1 and not item.is_empty():
-		draw_arc(Vector2.ZERO,24,-PI*.5,-PI*.5+TAU*clampf(hold_time/HOLD_SECONDS,0,1),48,Color("f19472"),3,true)
-
-func _draw_contact_ellipse(center: Vector2, radii: Vector2, color: Color) -> void:
-	var points := PackedVector2Array()
-	for index in range(24):
-		var angle := TAU*float(index)/24.0
-		points.append(center+Vector2(cos(angle)*radii.x,sin(angle)*radii.y))
-	draw_colored_polygon(points,color)
-
-func draw_loot_icon(tier: int, color: Color, kind: String = "") -> void:
-	var highlight := color.lightened(.28)
-	var shade := color.darkened(.28)
-	if kind=="crown":
-		var crown := PackedVector2Array([Vector2(-16,10),Vector2(-13,-11),Vector2(-5,-2),Vector2(0,-15),Vector2(6,-2),Vector2(14,-11),Vector2(16,10)])
-		draw_colored_polygon(crown,Color("ffd45c"))
-		draw_polyline(crown,Color("fff2a6"),2.2,true)
-		draw_line(Vector2(-15,10),Vector2(15,10),Color("b86d25"),3,true)
+	draw_style_box(frame,Rect2(-half,size))
+	if filled:
+		var glow := PackedVector2Array([Vector2(-half.x+4*unit,half.y-5*unit),Vector2(half.x-4*unit,half.y-5*unit),Vector2(half.x-10*unit,0),Vector2(-half.x+10*unit,0)])
+		draw_colored_polygon(glow,Color(accent,.16))
+	else:
+		# Empty cells show a faint socket so capacity reads at a glance.
+		var socket := PackedVector2Array([Vector2(0,-9),Vector2(9,0),Vector2(0,9),Vector2(-9,0)])
+		for index in range(4): socket[index] *= unit
+		draw_polyline(PackedVector2Array([socket[0],socket[1],socket[2],socket[3],socket[0]]),Color("efebe1",.16),1.2*unit,true)
+	if not filled:
 		return
-	if kind=="chalice":
-		draw_colored_polygon(PackedVector2Array([Vector2(-12,-12),Vector2(12,-12),Vector2(8,5),Vector2(3,10),Vector2(-3,10),Vector2(-8,5)]),Color("d8a94f"))
-		draw_line(Vector2(0,10),Vector2(0,16),Color("ffe4a0"),3,true)
-		draw_line(Vector2(-8,16),Vector2(8,16),Color("a96b2d"),3,true)
-		draw_arc(Vector2.ZERO,12,-PI,0,20,Color("fff2ab"),1.6,true)
-		return
-	match tier:
-		0: # Copper find: a readable coin with a stamped centre.
-			draw_circle(Vector2.ZERO,14,shade)
-			draw_circle(Vector2(0,-1),12,color)
-			draw_arc(Vector2(0,-1),12,-PI*.82,PI*.18,28,highlight,2,true)
-			draw_arc(Vector2.ZERO,7,-PI*.65,PI*.65,20,Color("fff0ad",.8),1.4,true)
-			draw_line(Vector2(-2,-6),Vector2(2,5),Color("fff0ad",.75),1.4,true)
-		1: # Amber: a warm faceted gem.
-			var gem := PackedVector2Array([Vector2(0,-16),Vector2(14,-6),Vector2(10,11),Vector2(0,16),Vector2(-11,9),Vector2(-14,-6)])
-			draw_colored_polygon(gem,shade)
-			draw_colored_polygon(PackedVector2Array([Vector2(0,-16),Vector2(14,-6),Vector2(0,2),Vector2(-14,-6)]),highlight)
-			draw_colored_polygon(PackedVector2Array([Vector2(-14,-6),Vector2(0,2),Vector2(-11,9)]),color)
-			draw_polyline(gem,Color("fff0c2",.68),1.2,true)
-		2: # Relic: a small wrapped artefact.
-			draw_colored_polygon(PackedVector2Array([Vector2(-11,-9),Vector2(9,-12),Vector2(13,8),Vector2(-8,13)]),shade)
-			draw_colored_polygon(PackedVector2Array([Vector2(-11,-9),Vector2(9,-12),Vector2(8,-3),Vector2(-10,1)]),color)
-			draw_line(Vector2(-7,1),Vector2(9,-2),Color("f3d27b"),3,true)
-			draw_line(Vector2(-5,6),Vector2(9,3),highlight,1.5,true)
-			draw_circle(Vector2(-1,-5),2.5,Color("f8e5a4"))
-		3: # Ice crystal: tall, cool and translucent.
-			var ice := PackedVector2Array([Vector2(-3,-17),Vector2(9,-7),Vector2(6,14),Vector2(0,17),Vector2(-8,5)])
-			draw_colored_polygon(ice,shade)
-			draw_colored_polygon(PackedVector2Array([Vector2(-3,-17),Vector2(9,-7),Vector2(0,3)]),highlight)
-			draw_colored_polygon(PackedVector2Array([Vector2(-3,-17),Vector2(0,3),Vector2(-8,5)]),Color("c9ffff",.72))
-			draw_polyline(ice,Color("e2ffff",.9),1.2,true)
-		4: # Obsidian: dark shard with a violet edge.
-			var obsidian := PackedVector2Array([Vector2(-3,-16),Vector2(12,-5),Vector2(7,13),Vector2(-5,10),Vector2(-12,-4)])
-			draw_colored_polygon(obsidian,Color("25243b"))
-			draw_colored_polygon(PackedVector2Array([Vector2(-3,-16),Vector2(12,-5),Vector2(2,-2)]),color)
-			draw_line(Vector2(-3,-16),Vector2(2,-2),Color("d5b9ff",.82),1.4,true)
-			draw_line(Vector2(2,-2),Vector2(7,13),Color("8065ad",.8),1.4,true)
-			draw_polyline(obsidian,Color("a88bdc",.7),1.2,true)
-		5: # Sky shard: a bright prism with an orbit ring.
-			var shard := PackedVector2Array([Vector2(0,-17),Vector2(11,-4),Vector2(6,13),Vector2(-7,10),Vector2(-12,-4)])
-			draw_colored_polygon(shard,shade)
-			draw_colored_polygon(PackedVector2Array([Vector2(0,-17),Vector2(11,-4),Vector2(0,2),Vector2(-12,-4)]),Color("f6e8b5"))
-			draw_colored_polygon(PackedVector2Array([Vector2(-12,-4),Vector2(0,2),Vector2(-7,10)]),color)
-			draw_polyline(shard,Color("fff6cf"),1.3,true)
-			draw_arc(Vector2.ZERO,20,-PI*.18,PI*.82,28,Color("ffe7a3",.8),1.2,true)
+	var hold := clampf(hold_time/HOLD_SECONDS,0,1) if held_touch!=-1 else 0.0
+	var shake := Vector2(sin(time*60)*2.2*hold*unit,0)
+	var icon_size := 40.0*unit*(1-.25*hold)
+	var icon_center := Vector2(0,-3*unit) if size.x>=48 else Vector2.ZERO
+	LootIcon.draw(self,item,size*.5+(icon_center+shake)*squash,icon_size*squash,time)
+	draw_set_transform(size*.5,0,Vector2.ONE*squash)
+	if rare:
+		# A diagonal light sweep crosses rare finds every few seconds.
+		var sweep := fposmod(time*.45,1.6)-.3
+		if sweep>=0 and sweep<=1:
+			var x := lerpf(-half.x,half.x,sweep)
+			var band := PackedVector2Array([Vector2(x-6*unit,-half.y+3*unit),Vector2(x+4*unit,-half.y+3*unit),Vector2(x-6*unit,half.y-6*unit),Vector2(x-16*unit,half.y-6*unit)])
+			draw_colored_polygon(band,Color("fff6d6",.22*sin(sweep*PI)))
+		var star := Vector2(half.x-9*unit,-half.y+9*unit)
+		var twinkle := (2.2+1.4*absf(sin(time*2.6)))*unit
+		draw_colored_polygon(PackedVector2Array([star+Vector2(0,-twinkle*1.8),star+Vector2(twinkle*.5,0),star+Vector2(0,twinkle*1.8),star+Vector2(-twinkle*.5,0)]),Color("fff1b8"))
+		draw_colored_polygon(PackedVector2Array([star+Vector2(-twinkle*1.8,0),star+Vector2(0,twinkle*.5),star+Vector2(twinkle*1.8,0),star+Vector2(0,-twinkle*.5)]),Color("fff1b8"))
+	if size.x>=48 and value_font!=null:
+		var value := str(int(item.get("value",0)))
+		var width := value_font.get_string_size(value,HORIZONTAL_ALIGNMENT_LEFT,-1,int(11*unit)).x
+		var tab := Rect2(Vector2(-width*.5-5*unit,half.y-17*unit),Vector2(width+10*unit,13*unit))
+		draw_rect(tab,Color("121b22",.85))
+		draw_string(value_font,Vector2(-width*.5,half.y-6.5*unit),value,HORIZONTAL_ALIGNMENT_LEFT,-1,int(11*unit),Color("ffd15c"))
+	if hold>0:
+		draw_arc(Vector2.ZERO,24*unit,-PI*.5,-PI*.5+TAU*hold,48,Color("ff7a5c"),3.5*unit,true)
+		var cross := 6*unit*hold
+		draw_line(Vector2(-cross,-cross),Vector2(cross,cross),Color("ff7a5c",hold),2.5*unit,true)
+		draw_line(Vector2(-cross,cross),Vector2(cross,-cross),Color("ff7a5c",hold),2.5*unit,true)
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
@@ -132,6 +113,11 @@ func _cancel_hold() -> void:
 	queue_redraw()
 
 func _process(delta: float) -> void:
+	time += delta
+	if pop>0:
+		pop = maxf(0,pop-delta*3.2)
+	if not item.is_empty() and reveal:
+		queue_redraw()
 	if held_touch==-1:
 		return
 	hold_time += delta

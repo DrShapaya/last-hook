@@ -1,11 +1,36 @@
 class_name LegacyMountainVisuals
 extends MountainVisuals
 
+# Locations on generator v4 keep their side cliffs, but grips, shelves and
+# hazards come from the shared MountainVisuals builder with the location's
+# profile: no separate rectangular grip system remains. The mount is a flat
+# stone plane at the depth the old boxes stood on.
+const MOUNT_Z := 1.7
+
+func wall_depth(_point: Vector2) -> float:
+	return MOUNT_Z
+
+func surface_normal(_point: Vector2) -> Vector3:
+	return Vector3.BACK
+
+func open_at(_point: Vector2) -> bool:
+	# The legacy face has no stone above its grips: sky everywhere between cliffs.
+	return true
+
+func socket_margin() -> float:
+	# No wall surrounds these grips, so a wide nest would read as a disc
+	# hanging in the sky: keep only a thin collar of stone round the root.
+	return .08
+
+func zone_color(height: float) -> Color:
+	return profile_at(height).rock_palette["base"]
+
 func build_chunk(index: int, parent: Node3D) -> void:
 	for slice in range(6):
 		var sample := index*6+slice
 		var y := sample*4.0
 		var random := layout.rng(sample,32)
+		var palette: Dictionary = profile_at(y).rock_palette
 		for side in [-1,1]:
 			var a := layout.outer_edge(y,side)
 			var b := layout.outer_edge(y+4,side)
@@ -16,31 +41,10 @@ func build_chunk(index: int, parent: Node3D) -> void:
 			for vertex_index in [0,2,1,0,3,2]: surface.add_vertex(vertices[vertex_index])
 			var mesh := MeshInstance3D.new()
 			mesh.mesh = surface.commit()
-			var color := Color("263c52").lightened(random.randf_range(0,.1))
+			var color := (palette["cool"] as Color).darkened(.35).lightened(random.randf_range(0,.1))
 			mesh.material_override = world.mat("legacy_cliff_%s" % color.to_html(),color)
 			mesh.material_override.cull_mode = BaseMaterial3D.CULL_DISABLED
 			mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 			parent.add_child(mesh)
-			world.box("Пласт скалы",Vector3(side*random.randf_range(5.5,6.5),y+random.randf_range(.5,3.5),-.8),Vector3(random.randf_range(1,2),random.randf_range(.35,1.2),.3),world.mat("legacy_facet_%d" % (sample%3),Color("38526b").lightened((sample%3)*.035)),parent)
-		world.box("Дальний хребет",Vector3(random.randf_range(-2,2),y+2,-5),Vector3(random.randf_range(2,5),4.1,.1),world.mat("legacy_distant",Color("1a2b3e")),parent)
-
-func build_anchor(object: Dictionary, parent: Node3D) -> void:
-	var p: Vector2 = object["pos"]
-	var d: Vector2 = object["dimensions"]
-	var kind: int = object["kind"]
-	var holder := Node3D.new()
-	parent.add_child(holder)
-	holder.position = Vector3(p.x,p.y,2)
-	object["visual"] = holder
-	world.box("Прямоугольник",holder.position,Vector3(d.x,d.y,.35),world.mat("legacy_kind_%d" % kind,MountainWorld.COLORS[kind]),holder)
-	world.box("Верхняя грань",holder.position+Vector3(0,d.y*.5-.04,.2),Vector3(d.x,.08,.05),world.mat("legacy_highlight_%d" % kind,MountainWorld.COLORS[kind].lightened(.22)),holder)
-
-func build_obstacle(object: Dictionary, parent: Node3D) -> void:
-	var p: Vector2 = object["pos"]
-	var d: Vector2 = object["dimensions"]
-	object["visual"] = world.box("Препятствие",Vector3(p.x,p.y,2),Vector3(d.x,d.y,.5),world.mat("legacy_obstacle",Color("d75c67")),parent)
-
-func build_ledge(object: Dictionary, parent: Node3D) -> void:
-	var start := float(object["top"])<1
-	var center := Vector3((object["left"]+object["right"])*.5,object["top"]-(.3 if start else .15),1.8)
-	world.box("Площадка",center,Vector3(object["right"]-object["left"],.6 if start else .3,.5 if start else .4),world.mat("legacy_ledge",Color("52667c") if start else Color("6c8099")),parent)
+			world.box("Пласт скалы",Vector3(side*random.randf_range(5.5,6.5),y+random.randf_range(.5,3.5),-.8),Vector3(random.randf_range(1,2),random.randf_range(.35,1.2),.3),world.mat("legacy_facet_%s_%d" % [profile_at(y).id,sample%3],(palette["cool"] as Color).darkened(.2).lightened((sample%3)*.035)),parent)
+		world.box("Дальний хребет",Vector3(random.randf_range(-2,2),y+2,-5),Vector3(random.randf_range(2,5),4.1,.1),world.mat("legacy_distant_%s" % profile_at(y).id,(palette["cool"] as Color).darkened(.5)),parent)

@@ -207,7 +207,7 @@ func run_tests() -> void:
 	game.world.layout.bins.clear()
 	var shot_start: Vector2 = game.sim.pos
 	game.world.add_anchor(shot_start+Vector2(0,7),0)
-	game.model.profile["levels"] = [1,1,1,1,1,1,1]
+	game.model.profile["levels"] = [1,1,1,1,1,1,1,1]
 	game.fire_hook(Vector2(0,1))
 	game._update_bolt(.1)
 	game.sim.pos += Vector2(0,2)
@@ -285,6 +285,17 @@ func run_tests() -> void:
 	slot._gui_input(slot_touch)
 	slot._process(.7)
 	check(game.model.bag.size()==1 and game.model.bag_value()==40,"holding a specific cell discards that item, rather than automatically choosing the cheapest")
+	var arriving_item := {"id":-8,"tier":4,"kind":"idol","value":300}
+	game.model.bag.append(arriving_item)
+	game.hud.refresh_bag()
+	game.hud.animate_pickup(arriving_item,game.sim.pos)
+	var arriving: BagSlot = game.hud.bag_panel.get_child(1)
+	var flyer: PlayGauges.PickupFlyer = null
+	for node in game.hud.content.get_children():
+		if node is PlayGauges.PickupFlyer: flyer = node
+	check(flyer!=null and not arriving.reveal,"a collected find flies toward its cell before the cell shows it")
+	if flyer!=null: flyer._process(1.0)
+	check(arriving.reveal and arriving.pop>0 and game.model.bag_value()==340,"the find lands in its cell with a bounce and the bag keeps its value")
 	game.model.profile["levels"][3] = 1
 	game.state = "play"
 	game.model.bag = [{"id":-7,"tier":0,"value":200}]
@@ -414,7 +425,7 @@ func run_tests() -> void:
 	game.anchor_id = 0
 	game.release_hook()
 	check(permanent["permanent"] and not permanent["broken"] and permanent["visual"].visible,"rare permanent grip survives detaching and can be reused")
-	for legacy_version in [6,7,8,9,10]:
+	for legacy_version in [6,7,8,9,10,11]:
 		game.model.profile = GameModel.fresh_profile()
 		game.start_run(false)
 		game.run_seed = 58273
@@ -435,7 +446,7 @@ func run_tests() -> void:
 		check(game.model.profile["active"]["generation_version"]==legacy_version,"resaving an old attempt preserves its generator version")
 		game.finish_run(false)
 	game.start_run(false)
-	check(game.world.generation_version==11,"new attempts use massif generation while old attempts keep their geometry")
+	check(game.world.generation_version==MountainWorld.GENERATION_VERSION,"new attempts use massif generation while old attempts keep their geometry")
 	game.model.profile["learned_controls"] = ["aim"]
 	game.sim.pos = game.world.anchors[0]["pos"]+Vector2(0,-3)
 	game.sim.attach(game.world.anchors[0]["pos"],5.5)

@@ -27,6 +27,10 @@ var sparse_route := true
 var safe_routes := false
 var rescue_anchors: Dictionary = {}
 var branches: Array[Dictionary] = []
+# v12: grip types come from the scenario of each movement phrase (see
+# EncounterLayout), never from a per-row random roll.
+var scenario_routes := false
+static var _base_kit: Dictionary = {}
 
 func setup(world_seed: int, biome: int) -> void:
 	seed_value = world_seed
@@ -73,8 +77,10 @@ func outside(point: Vector2, margin: float = .65) -> bool:
 
 func _add_anchor(point: Vector2, kind: int, dimensions: Vector2, primary: bool = false) -> int:
 	var id := anchors.size()
-	var object := {"id":id,"pos":point,"kind":kind,"shape":"polygon","dimensions":dimensions,"polygon":grip_polygon(dimensions),"broken":false,"primary":primary}
-	object["permanent"] = location!=0 or (kind in [0,2] and rng(id,91).randf()<.08)
+	var object := {"id":id,"pos":point,"kind":kind,"shape":"polygon","dimensions":dimensions,"polygon":grip_polygon(dimensions),"broken":false,"primary":primary,"role":"main" if primary else "auxiliary"}
+	# A timer root is never permanent: the clock, not the release, ends it.
+	object["permanent"] = (location!=0 and kind!=GripSpec.ROOT) or (GripSpec.network_kind(kind) and rng(id,91).randf()<.08)
+	if kind==GripSpec.ICE: object["slide_dir"] = slide_direction_at(point)
 	anchors.append(object)
 	var key := int(floor(point.y/CHUNK_HEIGHT))
 	if not bins.has(key):
@@ -106,6 +112,7 @@ func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 		var last: Vector2 = anchors[main_route[-1]]["pos"]
 		var id := _add_anchor(Vector2(last.x,summit+.9),0,Vector2(2,.65),true)
 		anchors[id]["permanent"] = true
+		anchors[id]["role"] = "rest"
 		edges.append(Vector2i(main_route[-1],id))
 		main_route.append(id)
 		ledges.append({"left":last.x-1.6,"right":last.x+1.6,"top":summit-.4})
@@ -115,9 +122,16 @@ func _generate_row(index: int) -> void:
 	var random := rng(index,3)
 	var point := main_point(index)
 	var first_id := anchors.size()
-	var kind := 2 if index>1 and random.randf()<.2 else 0
+	var kind := _main_kind(index,random)
 	var id := _add_anchor(point,kind,Vector2(random.randf_range(1.6,2.1),random.randf_range(.55,.75)),true)
 	anchors[id]["permanent"] = index==0 or index%9==8
+	if index==0: anchors[id]["role"] = "tutorial"
+	elif index%9==8: anchors[id]["role"] = "recovery"
+	if kind==GripSpec.SPRING:
+		# The bough throws towards the next main grip; the base kit still
+		# reaches that grip without the impulse.
+		anchors[id]["exit_dir"] = (main_point(index+1)-point).normalized()
+	_main_created(index,id)
 	if not main_route.is_empty():
 		edges.append(Vector2i(main_route[-1],id))
 	main_route.append(id)
@@ -134,17 +148,17 @@ func _generate_row(index: int) -> void:
 		if not safe: continue
 		var supported := false
 		for other in anchors:
-			if other["kind"] in [0,2] and not other.get("reserve",false) and transition_clear(other["pos"],candidate):
+			if GripSpec.in_network(other) and transition_clear(other["pos"],candidate):
 				supported = true
 				break
 		if not supported: continue
-		_add_anchor(candidate,2 if random.randf()<.17 else 0,Vector2(random.randf_range(1.05,1.8),random.randf_range(.45,.7)))
+		_add_anchor(candidate,_auxiliary_kind(random),Vector2(random.randf_range(1.05,1.8),random.randf_range(.45,.7)))
 	for new_id in range(first_id,anchors.size()):
 		var new_pos: Vector2 = anchors[new_id]["pos"]
 		for other_id in nearby_ids(new_pos.y-4.2,new_pos.y+4.2):
 			if other_id>=new_id:
 				continue
-			if anchors[other_id]["kind"] not in [0,2] or anchors[other_id].get("reserve",false): continue
+			if not GripSpec.in_network(anchors[other_id]): continue
 			var other_pos: Vector2 = anchors[other_id]["pos"]
 			if new_pos.distance_to(other_pos)<=LINK_REACH and transition_clear(other_pos,new_pos):
 				var edge := Vector2i(other_id,new_id)
@@ -162,7 +176,7 @@ func _generate_row(index: int) -> void:
 			for other_id in range(new_id):
 				var other: Dictionary = anchors[other_id]
 				var distance: float = new_pos.distance_to(other["pos"])
-				if other["kind"] in [0,2] and not other.get("reserve",false) and distance<best_distance and transition_clear(other["pos"],new_pos):
+				if GripSpec.in_network(other) and distance<best_distance and transition_clear(other["pos"],new_pos):
 					closest = other_id
 					best_distance = distance
 			if closest>=0:
@@ -178,7 +192,9 @@ func _generate_row(index: int) -> void:
 		ledges.append({"left":point.x-1.3,"right":point.x+1.3,"top":point.y-2.5})
 	var zone := clampi(int(point.y/20),0,5)
 	if index%2==0: _add_find(point+Vector2(-.25,-2.05),zone,false)
-	if (index%4==3 if sparse_route else index%3==2):
+	if scenario_routes:
+		_scenario_branch(index,point,id,zone)
+	elif (index%4==3 if sparse_route else index%3==2):
 		var side := -1 if random.randf()<.5 else 1
 		if absf(point.x+side*3.8)>16: side = -side
 		var bonus := point+Vector2(side*3.8,.55)
@@ -189,10 +205,12 @@ func _generate_row(index: int) -> void:
 			# Every loot detour rejoins ahead, after its entry has been consumed.
 			if (not finite or exit.y<summit-.8) and transition_clear(point,bonus) and transition_clear(bonus,exit) and bonus.distance_to(exit)<5.25:
 				var branch_id := _add_anchor(bonus,1 if zone<3 else 3,Vector2(1.3,.6))
+				anchors[branch_id]["role"] = "branch"
 				branches.append({"entry":id,"anchor":branch_id,"exit_row":index+1,"exit_pos":exit})
 				_add_find(bonus+Vector2(0,-2.05),zone,true)
 		else:
-			_add_anchor(bonus,1 if zone<3 else 3 if zone<5 else 4,Vector2(1.3,.6))
+			var bonus_id := _add_anchor(bonus,1 if zone<3 else 3 if zone<5 else 4,Vector2(1.3,.6))
+			anchors[bonus_id]["role"] = "branch"
 			_add_find(bonus+Vector2(0,-2.05),zone,true)
 	if index>2:
 		for attempt in range(3):
@@ -203,9 +221,54 @@ func _generate_row(index: int) -> void:
 		# Separate, dormant hardware: normal grips are never restored by revival.
 		var reserve := _add_anchor(point+Vector2(0,-.2),0,anchors[id]["dimensions"])
 		anchors[reserve]["reserve"] = true
+		anchors[reserve]["role"] = "recovery"
 		anchors[reserve]["permanent"] = false
 		anchors[reserve]["broken"] = true
 		rescue_anchors[id] = reserve
+
+# --- Type assignment hooks ------------------------------------------------------
+# Older generators keep their random rolls so saved attempts regenerate
+# exactly. Scenario routes still consume each roll, which keeps grip sizes and
+# auxiliary positions identical to v11, but ignore it for the type.
+
+func _main_kind(index: int, random: RandomNumberGenerator) -> int:
+	var roll := random.randf() if index>1 else 1.0
+	return GripSpec.SPRING if roll<.2 else GripSpec.STONE
+
+func _auxiliary_kind(random: RandomNumberGenerator) -> int:
+	var roll := random.randf()
+	if scenario_routes: return GripSpec.STONE
+	return GripSpec.SPRING if roll<.17 else GripSpec.STONE
+
+func _main_created(_index: int, _id: int) -> void:
+	pass
+
+func _scenario_branch(_index: int, _point: Vector2, _entry: int, _zone: int) -> void:
+	pass
+
+# Base kit from balance.json: the shortest rope, slowest throw and gravity.
+static func base_kit() -> Dictionary:
+	if _base_kit.is_empty():
+		var balance: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://data/balance.json"))
+		_base_kit = {"rope":float(balance["rope_lengths"][0]),"throw":float(balance["throw_speeds"][0]),"gravity":float(balance["gravity"])}
+	return _base_kit
+
+# Time to leave a grip for a target with the base kit: at most half a swing
+# to face the target, then the throw itself.
+static func exit_seconds(from: Vector2, to: Vector2) -> float:
+	var kit := base_kit()
+	return PI*sqrt(float(kit["rope"])/float(kit["gravity"]))+from.distance_to(to)/float(kit["throw"])
+
+func slide_direction_at(_point: Vector2) -> Vector2:
+	return Vector2.DOWN
+
+# Directed exit check from a grip, after its own effect: a root must be left
+# before its clock ends, ice must reach the target from every slide position.
+func exit_reachable(object: Dictionary, target: Vector2, reach: float = LINK_REACH) -> bool:
+	for contact in GripSpec.slide_samples(object):
+		if contact.distance_to(target)>=reach or not transition_clear(contact,target): return false
+		if GripSpec.timed(object) and exit_seconds(contact,target)>GripSpec.ROOT_SECONDS: return false
+	return true
 
 func auxiliary_point(_index: int, column: int, point: Vector2, random: RandomNumberGenerator) -> Vector2:
 	var candidate := Vector2(-15.6+column*10.4+random.randf_range(-.35,.35),point.y+random.randf_range(-.6,.6))
@@ -286,11 +349,11 @@ func stable_network_connected(links: Array[Vector2i]) -> bool:
 		var id := queue[cursor]
 		cursor += 1
 		for neighbour in adjacency.get(id,[]):
-			if not reached.has(neighbour) and anchors[neighbour]["kind"] in [0,2] and not anchors[neighbour].get("reserve",false):
+			if not reached.has(neighbour) and GripSpec.in_network(anchors[neighbour]):
 				reached[neighbour] = true
 				queue.append(neighbour)
 	for object in anchors:
-		if object["kind"] in [0,2] and not object.get("reserve",false) and not reached.has(object["id"]):
+		if GripSpec.in_network(object) and not reached.has(object["id"]):
 			return false
 	return true
 

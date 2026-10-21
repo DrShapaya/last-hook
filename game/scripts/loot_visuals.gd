@@ -238,8 +238,8 @@ static func _relic(world: MountainWorld, holder: Node3D, shadows: bool) -> void:
 const PEDESTALS := {"coin":[.34,.12,-.47],"amber":[.30,.11,-.40],"crown":[.44,.17,-.40],"chalice":[.44,.17,-.40],"idol":[.40,.14,-.42],"relic":[.40,.14,-.40]}
 
 static func _pedestal(world: MountainWorld, holder: Node3D, wall_local_z: float, id: int, shadows: bool, kind: String, quality: String) -> void:
-	if not world.visuals is MassifVisuals: return
-	var visuals := world.visuals as MassifVisuals
+	if world.visuals==null: return
+	var visuals: MountainVisuals = world.visuals
 	var size: Array = PEDESTALS.get(kind,[.32,.11,-.42])
 	var random := RandomNumberGenerator.new()
 	random.seed = id*271+5

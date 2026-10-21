@@ -139,8 +139,17 @@ func outer_edge(y: float, side: int) -> float:
 func _add_anchor(point: Vector2, kind: int, dimensions: Vector2, primary: bool = false) -> int:
 	var id := super._add_anchor(point,kind,dimensions,primary)
 	if not primary:
-		anchors[id]["permanent"] = kind in [0,2] and rng(id,391).randf()<.035
+		anchors[id]["permanent"] = GripSpec.network_kind(kind) and rng(id,391).randf()<.035
 	return id
+
+func slide_direction_at(point: Vector2) -> Vector2:
+	# Ice slides down the local face: gravity projected on the surface plane
+	# z=f(x,y) gives (fx*fy, -(1+fx^2)). The carved body alone decides it, so
+	# the direction never depends on grips generated later.
+	var clearance := body_field(point)
+	var fx := (surface_depth(point+Vector2(.25,0),clearance)-surface_depth(point-Vector2(.25,0),clearance))/.5
+	var fy := (surface_depth(point+Vector2(0,.25),clearance)-surface_depth(point-Vector2(0,.25),clearance))/.5
+	return Vector2(fx*fy,-(1.0+fx*fx)).normalized()
 
 func auxiliary_point(_index: int, column: int, point: Vector2, random: RandomNumberGenerator) -> Vector2:
 	var jitter := random.randf_range(-.25,.25)

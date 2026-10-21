@@ -6,7 +6,7 @@ const SIZE := 1.18
 const GRID := 40
 const GRIP_UV := Vector2(.780,.270)
 const ARM_PIVOT := Vector2(.666,.495)
-const ANIMATION_NAMES := ["idle","throw","swing","flight","fall","land"]
+const ANIMATION_NAMES := ["idle","throw","swing","flight","fall","land","walk"]
 
 var surface: MeshInstance3D
 var material: ShaderMaterial
@@ -20,6 +20,7 @@ var squash := 0.0
 var turn := 0.0
 var lean := 0.0
 var impact := 0.0
+var stride := 0.0 # Walk cycle advanced by distance, so steps match the ground.
 var previous_grounded := true
 var previous_attached := false
 
@@ -72,7 +73,7 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	# Hysteresis keeps tiny velocity changes near the swing apex from flipping art.
 	if tether and absf(direction.x)>1.0:
 		facing = signf(direction.x)
-	elif not tether and absf(sim.vel.x)>1.5:
+	elif not tether and absf(sim.vel.x)>(.4 if sim.grounded and not sim.attached else 1.5):
 		facing = signf(sim.vel.x)
 	var turn_target := 0.0 if facing>0 else PI
 	turn = lerpf(turn,turn_target,1-exp(-dt*13))
@@ -87,10 +88,12 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	elif tether:
 		state = "throw"
 	elif sim.grounded:
-		state = "land" if impact>.006 else "idle"
+		state = "land" if impact>.006 else "walk" if absf(sim.vel.x)>.35 else "idle"
 	else:
 		state = "fall" if sim.vel.y<-.6 else "flight"
 	var speed := clampf(sim.vel.length()/9,0,1)
+	if state=="walk": stride += absf(sim.vel.x)*dt*3.4
+	var step_bob := 0.0
 	var cycle := sin(phase*3.6)
 	var desired := Vector4(-.07,.015*cycle,0,.012*sin(phase*1.9))
 	var desired_lean := clampf(-sim.vel.x*.025,-.22,.22)
@@ -108,6 +111,14 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 			desired_lean += .04*sin(phase*2.2)
 		"land":
 			desired.z = impact*.8
+		"walk":
+			# Legs alternate with the stride, the free arm swings against them
+			# and the body bobs once per step.
+			var gait := sin(stride)
+			var pace := clampf(absf(sim.vel.x)/2.6,0,1)
+			desired = Vector4(-.07-.07*gait*pace,.17*gait*pace,.02*pace,.014*absf(gait))
+			desired_lean += -signf(sim.vel.x)*.05*pace
+			step_bob = .022*absf(sin(stride))*pace
 	var blend := 1-exp(-dt*10)
 	pose = pose.lerp(desired,blend)
 	lean = lerpf(lean,desired_lean,1-exp(-dt*8))
@@ -116,7 +127,7 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	breath = .004*sin(phase*1.9)
 	squash = lerpf(squash,impact,1-exp(-dt*18))
 	scale = Vector3(1+squash,1-squash,1)
-	position.y = breath
+	position.y = breath+step_bob
 	material.set_shader_parameter("pose",pose)
 	material.set_shader_parameter("pack_sway",pack_sway)
 	material.set_shader_parameter("breath",breath)

@@ -20,6 +20,8 @@ var summit_height := 120.0
 var anchor_id := -1
 var anchor_time := 0.0
 var anchor_contact := Vector2.ZERO
+# Speed of the held contact over the stone (ice only), carried into a release.
+var anchor_slide_velocity := Vector2.ZERO
 var safe_contact := Vector2.ZERO
 var safe_anchor_id := -1
 var safe_position := Vector2(0,START_Y)
@@ -477,7 +479,7 @@ func resume_run() -> void:
 	if snapshot.is_empty():
 		return
 	var saved_version := int(snapshot.get("generation_version",0))
-	var compatible_old := saved_version in [6,7,8,9,10,11] and int(snapshot.get("location",0))==0
+	var compatible_old := saved_version in [6,7,8,9,10,11,12] and int(snapshot.get("location",0))==0
 	if not compatible_old and saved_version!=MountainWorld.generation_version_for(int(snapshot.get("location",0))):
 		# Old contact IDs describe another route: settle its earned rewards once.
 		model.bag = snapshot.get("bag",[]).duplicate(true)
@@ -521,6 +523,7 @@ func resume_run() -> void:
 	model.picked = snapshot["picked"].duplicate()
 	for point in world.anchors:
 		point["broken"] = not snapshot.get("active_reserves",[]).has(point["id"]) if point.get("reserve",false) else snapshot["broken"].has(point["id"])
+		GripSpec.restore(point,int(point["id"])==anchor_id)
 	for find in world.finds:
 		find["picked"] = model.picked.has(find["item"]["id"])
 	if anchor_id>=0:
@@ -869,9 +872,11 @@ func release_hook(keep_primary: bool = false, reason: String = "manual") -> void
 		return
 	var factor := model.value("impulse_factors",1)
 	var point := world.anchor_by_id(anchor_id)
-	# A spring adds its exit impulse before the hand-off; other types keep
-	# the swing velocity exactly.
-	if not point.is_empty(): sim.vel = GripSpec.release_velocity(point,sim.vel)
+	# The type's effect belongs to the attached -> acted transition, so it is
+	# applied once per catch: a spring adds its exit impulse, ice hands over
+	# the slide, other types keep the swing velocity exactly.
+	if GripSpec.act(point): sim.vel = GripSpec.release_velocity(point,sim.vel,anchor_slide_velocity)
+	anchor_slide_velocity = Vector2.ZERO
 	world.release_anchor_load(anchor_id)
 	world.consume_anchor(anchor_id)
 	if anchor_id==safe_anchor_id and not point.get("permanent",true):
@@ -914,13 +919,17 @@ func _physics_process(delta: float) -> void:
 		anchor_time += step
 		var point := world.anchor_by_id(anchor_id)
 		if not point.is_empty():
+			# The held grip is always `attached`, including grips set by hand.
+			if GripSpec.state(point)=="available": GripSpec.attach(point)
 			if GripSpec.expired(point,anchor_time):
-				point["broken"] = true
+				world.break_anchor(anchor_id)
 				release_hook(true,"root_break")
 				toast("Корень сломался — успей зацепиться!",2.5,"release")
 			elif GripSpec.kind_of(point)==GripSpec.ICE:
 				# Ice slips the hook along its surface but never past the stone.
+				var before_slide := sim.anchor
 				sim.anchor = world.anchor_contact_after(point,anchor_contact,anchor_time)
+				anchor_slide_velocity = (sim.anchor-before_slide)/step if step>0 else Vector2.ZERO
 	var was_grounded := sim.grounded
 	if was_grounded and not sim.attached:
 		var walk_input := clampf(walk+(keyboard_pump if not pressed or not touch_gesture else 0.0),-1,1) if can_walk() else 0.0
@@ -1046,6 +1055,8 @@ func _catch_contact(hit: Dictionary, contact: Vector2) -> void:
 	catches += 1
 	anchor_id = hit["id"]
 	anchor_time = 0
+	anchor_slide_velocity = Vector2.ZERO
+	GripSpec.attach(hit)
 	focus_remaining = 0.0
 	if hint_context=="release": hint_timer = 0
 	if pressed: _recenter_climb_control()
@@ -1228,6 +1239,7 @@ func revive(currency: String) -> void:
 			anchor_contact = safe_contact
 			sim.attach(safe_contact,model.value("rope_lengths",0))
 			anchor_id = safe_anchor_id
+			GripSpec.attach(point)
 	anchor_time = 0
 	state = "play"
 	sim.flight_peak = sim.pos.y

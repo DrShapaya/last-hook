@@ -149,7 +149,11 @@ func slide_direction_at(point: Vector2) -> Vector2:
 	var clearance := body_field(point)
 	var fx := (surface_depth(point+Vector2(.25,0),clearance)-surface_depth(point-Vector2(.25,0),clearance))/.5
 	var fy := (surface_depth(point+Vector2(0,.25),clearance)-surface_depth(point-Vector2(0,.25),clearance))/.5
-	return Vector2(fx*fy,-(1.0+fx*fx)).normalized()
+	var downslope := Vector2(fx*fy,-(1.0+fx*fx)).normalized()
+	if not calibrated_routes: return downslope
+	# v13 slides across the grip, towards the side the face falls away.
+	var side := signf(downslope.x) if absf(downslope.x)>.05 else (-signf(point.x) if absf(point.x)>.05 else 1.0)
+	return GripSpec.lateral_slide(side)
 
 func auxiliary_point(_index: int, column: int, point: Vector2, random: RandomNumberGenerator) -> Vector2:
 	var jitter := random.randf_range(-.25,.25)

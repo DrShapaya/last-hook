@@ -458,6 +458,12 @@ func _grip_details(object: Dictionary, holder: Node3D, family: String, profile: 
 		"wet_slab", "salt_glass", "clear_ice", "polished_tile", "cloud_glass":
 			if family=="clear_ice" or (family=="wet_slab" and float(profile.weathering_rules["snow"])>.5): _icicles(holder,bottom,width,id)
 			_slide_track(holder,GripSpec.slide_direction(object),top,height,stone)
+			# A dry slide reads through dust: pale streaks blown along the slope.
+			if float(profile.weathering_rules["dust"])>.5:
+				var along := GripSpec.slide_direction(object)
+				for offset in [-.12,.12]:
+					var start := Vector2(offset*width,top-height*.3)
+					_crack(holder,PackedVector2Array([start,start+along*width*.3,start+along*width*.55]),.018,.99,profile.rock_palette["warm"])
 		"quartz_cluster", "amber_geode", "ice_cluster", "seam_mineral", "glow_quartz":
 			var shards := Node3D.new()
 			shards.position = Vector3(width*.30,top-.18,.40)

@@ -425,7 +425,7 @@ func run_tests() -> void:
 	game.anchor_id = 0
 	game.release_hook()
 	check(permanent["permanent"] and not permanent["broken"] and permanent["visual"].visible,"rare permanent grip survives detaching and can be reused")
-	for legacy_version in [6,7,8,9,10,11]:
+	for legacy_version in [6,7,8,9,10,11,12]:
 		game.model.profile = GameModel.fresh_profile()
 		game.start_run(false)
 		game.run_seed = 58273

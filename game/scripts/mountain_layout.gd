@@ -30,6 +30,9 @@ var branches: Array[Dictionary] = []
 # v12: grip types come from the scenario of each movement phrase (see
 # EncounterLayout), never from a per-row random roll.
 var scenario_routes := false
+# v13: ice slides across its grip, auxiliary grips include springs, and a
+# phrase may repeat a known risk on a second detour (see EncounterLayout).
+var calibrated_routes := false
 static var _base_kit: Dictionary = {}
 
 func setup(world_seed: int, biome: int) -> void:
@@ -141,6 +144,7 @@ func _generate_row(index: int) -> void:
 		if candidate.distance_to(point)<1.45:
 			continue
 		if not branch_allowed(candidate,index): continue
+		if calibrated_routes and _reserved(candidate,index): continue
 		var safe := true
 		for obstacle in obstacles:
 			if blocked(candidate+Vector2(0,-2),candidate,obstacle,Vector2(.8,.7)):
@@ -152,7 +156,10 @@ func _generate_row(index: int) -> void:
 				supported = true
 				break
 		if not supported: continue
-		_add_anchor(candidate,_auxiliary_kind(random),Vector2(random.randf_range(1.05,1.8),random.randf_range(.45,.7)))
+		var auxiliary_kind := _auxiliary_kind(random)
+		if auxiliary_kind==GripSpec.SPRING and calibrated_routes and not spring_lane_clear(candidate,auxiliary_exit(candidate)): auxiliary_kind = GripSpec.STONE
+		var auxiliary := _add_anchor(candidate,auxiliary_kind,Vector2(random.randf_range(1.05,1.8),random.randf_range(.45,.7)))
+		if auxiliary_kind==GripSpec.SPRING and calibrated_routes: anchors[auxiliary]["exit_dir"] = auxiliary_exit(candidate)
 	for new_id in range(first_id,anchors.size()):
 		var new_pos: Vector2 = anchors[new_id]["pos"]
 		for other_id in nearby_ids(new_pos.y-4.2,new_pos.y+4.2):
@@ -173,12 +180,17 @@ func _generate_row(index: int) -> void:
 		if not has_connection:
 			var closest := -1
 			var best_distance := INF
+			var bridge_clear := false
 			for other_id in range(new_id):
 				var other: Dictionary = anchors[other_id]
 				var distance: float = new_pos.distance_to(other["pos"])
-				if GripSpec.in_network(other) and distance<best_distance and transition_clear(other["pos"],new_pos):
+				if not GripSpec.in_network(other) or not transition_clear(other["pos"],new_pos): continue
+				# v13 prefers a bridge that keeps clear of branch grips.
+				var clear := not calibrated_routes or bridge_spacious(other["pos"],new_pos)
+				if (clear and not bridge_clear) or (clear==bridge_clear and distance<best_distance):
 					closest = other_id
 					best_distance = distance
+					bridge_clear = clear
 			if closest>=0:
 				var start: Vector2 = anchors[closest]["pos"]
 				var steps := maxi(1,int(ceil(best_distance/3.8)))
@@ -206,7 +218,7 @@ func _generate_row(index: int) -> void:
 			if (not finite or exit.y<summit-.8) and transition_clear(point,bonus) and transition_clear(bonus,exit) and bonus.distance_to(exit)<5.25:
 				var branch_id := _add_anchor(bonus,1 if zone<3 else 3,Vector2(1.3,.6))
 				anchors[branch_id]["role"] = "branch"
-				branches.append({"entry":id,"anchor":branch_id,"exit_row":index+1,"exit_pos":exit})
+				record_branch(id,branch_id,index+1,exit)
 				_add_find(bonus+Vector2(0,-2.05),zone,true)
 		else:
 			var bonus_id := _add_anchor(bonus,1 if zone<3 else 3 if zone<5 else 4,Vector2(1.3,.6))
@@ -235,16 +247,44 @@ func _main_kind(index: int, random: RandomNumberGenerator) -> int:
 	var roll := random.randf() if index>1 else 1.0
 	return GripSpec.SPRING if roll<.2 else GripSpec.STONE
 
+# Intermediate repair grips between two points stay out of the space of
+# optional branch and reward grips.
+func bridge_spacious(start: Vector2, end: Vector2) -> bool:
+	var steps := maxi(1,int(ceil(start.distance_to(end)/3.8)))
+	for step in range(1,steps):
+		var point := start.lerp(end,float(step)/steps)
+		for id in nearby_ids(point.y-2,point.y+2):
+			if GripSpec.role(anchors[id]) in ["branch","reward"] and anchors[id]["pos"].distance_to(point)<RouteGraph.GRIP_SPACING: return false
+	return true
+
 func _auxiliary_kind(random: RandomNumberGenerator) -> int:
 	var roll := random.randf()
+	if calibrated_routes: return GripSpec.SPRING if roll<.15 else GripSpec.STONE
 	if scenario_routes: return GripSpec.STONE
 	return GripSpec.SPRING if roll<.17 else GripSpec.STONE
+
+# An auxiliary bough throws up and in, towards the route.
+func auxiliary_exit(point: Vector2) -> Vector2:
+	return Vector2(-signf(point.x)*.5,1).normalized()
+
+# The spring's throw neither rises into rock nor points at the fall zone.
+func spring_lane_clear(point: Vector2, direction: Vector2, extra: Dictionary = {}) -> bool:
+	return direction.y>.2 and not outside(point+direction*GripSpec.SPRING_LANE,0) and transition_clear(point,point+direction*GripSpec.SPRING_LANE,extra)
 
 func _main_created(_index: int, _id: int) -> void:
 	pass
 
 func _scenario_branch(_index: int, _point: Vector2, _entry: int, _zone: int) -> void:
 	pass
+
+# Spots a scenario branch of this row will want; auxiliary grips leave them free.
+func branch_spots(_index: int) -> Array[Vector2]:
+	return []
+
+func _reserved(point: Vector2, index: int) -> bool:
+	for spot in branch_spots(index):
+		if spot.distance_to(point)<RouteGraph.GRIP_SPACING+.2: return true
+	return false
 
 # Base kit from balance.json: the shortest rope, slowest throw and gravity.
 static func base_kit() -> Dictionary:
@@ -259,8 +299,25 @@ static func exit_seconds(from: Vector2, to: Vector2) -> float:
 	var kit := base_kit()
 	return PI*sqrt(float(kit["rope"])/float(kit["gravity"]))+from.distance_to(to)/float(kit["throw"])
 
-func slide_direction_at(_point: Vector2) -> Vector2:
-	return Vector2.DOWN
+func slide_direction_at(point: Vector2) -> Vector2:
+	if not calibrated_routes: return Vector2.DOWN
+	return GripSpec.lateral_slide(-signf(point.x) if absf(point.x)>.05 else 1.0)
+
+# Directed record of an optional branch. Exits are stored as main rows (their
+# grips may not exist yet) or reward grips; `hazard_state` is what the branch
+# grip does to the player before an exit: a running clock, a slide, a throw
+# or a choice. A timed or sliding branch has only a risky exit.
+func record_branch(entry: int, grip: int, exit_row: int, exit_pos: Vector2, scenario: String = "", reward: int = -1) -> Dictionary:
+	var hazard: String = {GripSpec.ROOT:"timer",GripSpec.ICE:"slide",GripSpec.SPRING:"impulse",GripSpec.CRYSTAL:"choice"}.get(GripSpec.kind_of(anchors[grip]),"none")
+	var exits: Array = [{"row":exit_row,"pos":exit_pos,"kind":"main"}]
+	if reward>=0: exits.append({"anchor":reward,"pos":anchors[reward]["pos"],"kind":"reward"})
+	var risky := hazard in ["timer","slide"]
+	var record := {"entry":entry,"entry_consumed":not anchors[entry]["permanent"],"anchor":grip,"candidate_exits":exits,
+		"safe_exit":-1 if risky else exit_row,"risky_exit":exit_row if risky else -1,"reward_exit":reward,
+		"exit_row":exit_row,"exit_pos":exit_pos,"hazard_state":hazard}
+	if not scenario.is_empty(): record["scenario"] = scenario
+	branches.append(record)
+	return record
 
 # Directed exit check from a grip, after its own effect: a root must be left
 # before its clock ends, ice must reach the target from every slide position.

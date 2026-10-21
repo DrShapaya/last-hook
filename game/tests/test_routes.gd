@@ -50,11 +50,34 @@ func run_tests() -> void:
 	var across := Vector2(3,-3)
 	check(GripSpec.release_velocity(spring,across)==across and GripSpec.release_velocity(stone,along)==along,"releasing against the exit or from another type adds no impulse")
 	check(GripSpec.spring_load(spring,Vector2(5,0))>0 and GripSpec.spring_load(spring,Vector2(5,0))<1,"partial loading gives a partial bonus")
-	# Ice: the same 1.2 m and .18 m/s, now along a local direction.
+	# Ice: starts at .18 m/s, accelerates, never past 1.2 m, along a local direction.
 	var slanted := {"kind":3,"slide_dir":Vector2(.3,-1),"pos":Vector2(2,5)}
-	check(GripSpec.slide_offset(slanted,100).length()<=GripSpec.ICE_SLIDE_MAX+.0001 and absf(GripSpec.slide_offset(slanted,1).length()-.18)<.0001 and GripSpec.slide_offset(slanted,1).x>0,"ice slides at the old rate and limit along its own downslope")
+	check(GripSpec.slide_offset(slanted,100).length()<=GripSpec.ICE_SLIDE_MAX+.0001 and absf(GripSpec.slide_distance(slanted,1)-(.18+.5*GripSpec.ICE_SLIDE_ACCEL))<.0001 and GripSpec.slide_offset(slanted,1).x>0,"ice accelerates from the old rate up to the old limit along its own downslope")
+	check(GripSpec.slide_distance(slanted,.5)<GripSpec.slide_distance(slanted,1)-GripSpec.slide_distance(slanted,.5),"the slide speeds up the longer the hero holds on")
+	check(GripSpec.release_velocity(slanted,Vector2(1,2),Vector2(.8,-.2))==Vector2(1.8,1.8) and GripSpec.release_velocity(stone,Vector2(1,2),Vector2(.8,-.2))==Vector2(1,2),"releasing a sliding ice contact carries the slide into the flight; no other type does")
+	check(GripSpec.lateral_slide(-1).x<0 and GripSpec.lateral_slide(1).x>0 and GripSpec.lateral_slide(1).y<0,"v13 ice slides across its grip and slightly downhill")
 	check(GripSpec.slide_samples(slanted).size()==3 and GripSpec.slide_samples(stone).size()==1,"route checks sample every slide position of ice and one contact elsewhere")
 	check(GripSpec.choice_exits({"kind":4,"choice_exits":[3,4]})==[3,4] and GripSpec.choice_exits({"kind":0,"choice_exits":[3]}).is_empty(),"only crystals carry choice exits; the crystal never changes physics")
+	# State contract: available -> attached -> acted -> consumed | available.
+	var held := {"id":4,"kind":2,"permanent":false,"broken":false}
+	check(GripSpec.state(held)=="available" and GripSpec.state(held,4)=="targeted" and GripSpec.state(held,5)=="available","a free grip is available, and targeted only while aimed at")
+	check(GripSpec.attach(held) and not GripSpec.attach(held) and GripSpec.state(held)=="attached","a second hit on a held grip changes nothing")
+	check(GripSpec.act(held) and not GripSpec.act(held) and GripSpec.state(held)=="acted","the release effect fires once per catch")
+	check(GripSpec.settle(held) and not GripSpec.settle(held) and held["broken"] and GripSpec.state(held)=="consumed","a disposable grip is consumed exactly once")
+	check(not GripSpec.attach(held) and not GripSpec.act(held),"a consumed grip can be neither caught nor acted on")
+	var anchor_ring := {"id":5,"kind":0,"permanent":true,"broken":false}
+	GripSpec.attach(anchor_ring)
+	GripSpec.act(anchor_ring)
+	check(not GripSpec.settle(anchor_ring) and GripSpec.state(anchor_ring)=="available" and GripSpec.attach(anchor_ring),"a permanent grip is not consumed by a release and can be caught again")
+	var fixed_root := {"id":6,"kind":1,"permanent":true,"broken":false}
+	GripSpec.attach(fixed_root)
+	check(GripSpec.expire(fixed_root) and not GripSpec.expire(fixed_root) and not GripSpec.act(fixed_root),"a root clock ends the grip whatever its lifetime, once, and leaves no release effect")
+	var resumed := {"id":7,"kind":3,"permanent":false,"broken":false}
+	GripSpec.restore(resumed,true)
+	check(GripSpec.state(resumed)=="attached" and GripSpec.act(resumed),"a grip held at save time is attached again after loading")
+	var spent := {"id":8,"kind":0,"permanent":false,"broken":true}
+	GripSpec.restore(spent,false)
+	check(GripSpec.state(spent)=="consumed" and not GripSpec.attach(spent),"a consumed grip stays consumed after loading")
 
 	# --- World integration ----------------------------------------------------
 	var timed_world := make_world(58273,0,1,140)
@@ -75,6 +98,17 @@ func run_tests() -> void:
 	var slid := ice_world.anchor_contact_after(ice,contact,100)
 	var outline := ice_world.anchor_outline(ice)
 	check(slid!=contact and (Geometry2D.is_point_in_polygon(slid,outline) or ice_world.anchor_surface_point(ice,slid)==slid),"held ice moves the hook but keeps it on the drawn grip")
+	# From below, the hook walks along the underside instead of sticking.
+	var under := ice_world.anchor_surface_point(ice,Vector2(.05,19.5),Vector2.UP)
+	var walk_ok := true
+	var previous_contact := under
+	var travelled := 0.0
+	for frame in range(1,361):
+		var now := ice_world.anchor_contact_after(ice,under,frame/120.0)
+		walk_ok = walk_ok and now.distance_to(previous_contact)<.05 and now.y<=previous_contact.y+.0001
+		travelled += now.distance_to(previous_contact)
+		previous_contact = now
+	check(walk_ok and travelled>.4,"ice walks the hook continuously along the stone, never uphill (%.2f m in 3 s)" % travelled)
 	check(ice_world.anchor_contact_after({"kind":0,"pos":Vector2(0,20)},contact,100)==contact,"other types never move the contact")
 	ice_world.free()
 
@@ -88,11 +122,21 @@ func run_tests() -> void:
 	check(signature(first)==signature(again),"the same seed recreates every scenario, type, role and choice exit")
 	again.free()
 	partial.free()
+	# Saved v12 attempts regenerate exactly as before the v13 calibration.
+	var v12_parts: Array = []
+	for seed_number in range(25):
+		var old := make_world(seed_number,12)
+		for a in old.anchors: v12_parts.append([a["id"],a["pos"],a["kind"],a["permanent"],GripSpec.role(a),a.get("choice_exits",[]),a.get("exit_dir",Vector2.ZERO)])
+		for f in old.finds: v12_parts.append([f["pos"],f["item"]["value"]])
+		v12_parts.append(old.route_edges.size())
+		v12_parts.append(old.obstacles.size())
+		old.free()
+	check(str(v12_parts).md5_text()=="1f6ad2a03c2b291e3a9cb95b1d8752ed","v12 attempts regenerate unchanged under v13")
 	var v11 := make_world(58273,11)
 	var same_route := v11.main_route.size()==first.main_route.size()
 	for row in range(mini(v11.main_route.size(),first.main_route.size())):
 		same_route = same_route and v11.anchors[v11.main_route[row]]["pos"]==first.anchors[first.main_route[row]]["pos"]
-	check(first.layout.scenario_routes and not v11.layout.scenario_routes and same_route,"v12 keeps the v11 main route geometry and only reassigns types; v11 saves keep their generator")
+	check(first.layout.scenario_routes and first.layout.calibrated_routes and not v11.layout.scenario_routes and same_route,"v13 keeps the v11 main route geometry and only reassigns types; v11 saves keep their generator")
 	v11.free()
 	first.free()
 	var problems: Array[String] = []
@@ -108,6 +152,10 @@ func run_tests() -> void:
 	var new_per_phrase := true
 	var streak_ok := true
 	var intervals := {}
+	var records_ok := true
+	var repeats := 0
+	var auxiliary_springs := 0
+	var lateral_ice := true
 	for seed_number in range(100):
 		var world := make_world(seed_number)
 		var layout: EncounterLayout = world.layout
@@ -134,6 +182,13 @@ func run_tests() -> void:
 				var exits := GripSpec.choice_exits(anchor)
 				choice_ok = choice_ok and exits.size()==2 and main.has(int(exits[1])) and GripSpec.role(world.anchors[int(exits[0])])=="reward"
 		permanent_ok = permanent_ok and float(permanent)/ordinary<.22
+		for branch in layout.branches:
+			records_ok = records_ok and branch.has_all(["entry","entry_consumed","candidate_exits","safe_exit","risky_exit","reward_exit","exit_row","hazard_state"])
+			records_ok = records_ok and (branch["reward_exit"]>=0)==(branch["hazard_state"]=="choice")
+			if branch.get("repeat",false): repeats += 1
+		for anchor in world.anchors:
+			if GripSpec.kind_of(anchor)==GripSpec.SPRING and GripSpec.role(anchor)=="auxiliary": auxiliary_springs += 1
+			if GripSpec.kind_of(anchor)==GripSpec.ICE: lateral_ice = lateral_ice and absf(GripSpec.slide_direction(anchor).x)>.9
 		ledges_ok = ledges_ok and world.ledges.size()<=7
 		var last := 0
 		var streak := 0
@@ -161,6 +216,9 @@ func run_tests() -> void:
 	check(permanent_ok and ledges_ok,"permanent grips stay under 22 percent and rest ledges at most seven")
 	check(streak_ok and intervals.size()>3,"recovery breaks long disposable series without a fixed interval (%s)" % str(intervals.keys()))
 	check(new_per_phrase,"a phrase introduces at most one new mechanic")
+	check(records_ok,"every branch stores entry, consumed entry, candidate exits, safe/risky/reward exit, exit row and hazard")
+	check(repeats>50 and auxiliary_springs>200,"v13 repeats known risks on second detours (%d) and puts springs among auxiliary grips (%d)" % [repeats,auxiliary_springs])
+	check(lateral_ice,"v13 ice slides across its grip")
 	check(int(stats.get("risk",0))>100 and int(stats.get("energy",0))>100 and int(stats.get("slide",0))>40 and int(stats.get("choice",0))>40,"every scenario is actually generated: %s" % str(stats))
 	print("ROUTE_TESTS %d checks, %d failures" % [checks,failures.size()])
 	quit(0 if failures.is_empty() else 1)

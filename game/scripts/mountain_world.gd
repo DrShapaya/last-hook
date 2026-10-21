@@ -1,7 +1,7 @@
 class_name MountainWorld
 extends Node3D
 
-const GENERATION_VERSION := 12
+const GENERATION_VERSION := 13
 # A timed root holds this long before it breaks (see GripSpec).
 const FRAGILE_SECONDS := GripSpec.ROOT_SECONDS
 const COLORS := [Color("e3b95e"),Color("e8624d"),Color("70c995"),Color("78d8e5"),Color("a994df"),Color("f1d27b")]
@@ -46,6 +46,8 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	layout.safe_routes = generation_version>=9
 	# v12 assigns grip types from the movement phrase's scenario.
 	layout.scenario_routes = generation_version>=12
+	# v13 calibrates the type mix and slides ice across its grip.
+	layout.calibrated_routes = generation_version>=13
 	if location!=0: layout = LegacyMountainLayout.new()
 	layout.setup(world_seed,world_location)
 	anchors = layout.anchors
@@ -218,17 +220,49 @@ func build_anchor(object: Dictionary, chunk: Node3D) -> void:
 	if GripSpec.timed(object) and is_instance_valid(object.get("visual")):
 		_add_timer_dial(object)
 
-# Contact after holding for `held` seconds: ice moves the hook along its own
-# downslope, clamped to the drawn stone; every other type keeps the contact.
+# Contact after holding for `held` seconds: ice walks the hook along the drawn
+# contour in its slide direction, never uphill, and stops in the lowest corner
+# it reaches; every other type keeps the contact. The walk is continuous, so
+# the hook can neither jump across a thin grip nor leave the stone.
 func anchor_contact_after(object: Dictionary, contact: Vector2, held: float) -> Vector2:
-	if GripSpec.kind_of(object)!=GripSpec.ICE: return contact
-	return anchor_surface_point(object,contact+GripSpec.slide_offset(object,held))
+	var remaining := GripSpec.slide_distance(object,held)
+	if remaining<=0: return contact
+	var outline := anchor_outline(object)
+	if outline.size()<3: return contact
+	var direction := GripSpec.slide_direction(object)
+	var count := outline.size()
+	var point := anchor_surface_point(object,contact)
+	var segment := 0
+	var best := INF
+	for index in range(count):
+		var closest := Geometry2D.get_closest_point_to_segment(point,outline[index],outline[(index+1)%count])
+		if closest.distance_squared_to(point)<best:
+			best = closest.distance_squared_to(point)
+			segment = index
+	# Walk towards whichever end of the segment lies down the slide.
+	var a := outline[segment]
+	var b := outline[(segment+1)%count]
+	var step := 1 if (b-a).dot(direction)>=(a-b).dot(direction) else -1
+	var target := (segment+1)%count if step>0 else segment
+	for guard in range(count+1):
+		var leg := outline[target]-point
+		if leg.length_squared()<.000001:
+			target = posmod(target+step,count)
+			continue
+		var heading := leg.normalized()
+		if heading.dot(direction)<=0 or heading.y>.05: break
+		if leg.length()>=remaining: return point+heading*remaining
+		remaining -= leg.length()
+		point = outline[target]
+		target = posmod(target+step,count)
+	return point
 
 # Visible reaction of the held grip: a spring bends towards the load and a
 # choice crystal lights its two exits. Purely visual.
 func update_anchor_load(id: int, rope: Vector2, velocity: Vector2) -> void:
 	var object := anchor_by_id(id)
 	if object.is_empty(): return
+	_light_status(object,true)
 	var holder = object.get("visual")
 	if GripSpec.kind_of(object)==GripSpec.SPRING and is_instance_valid(holder):
 		var bend: Node3D = (holder as Node3D).get_node_or_null("Изгиб")
@@ -242,6 +276,7 @@ func update_anchor_load(id: int, rope: Vector2, velocity: Vector2) -> void:
 func release_anchor_load(id: int) -> void:
 	var object := anchor_by_id(id)
 	if object.is_empty(): return
+	_light_status(object,false)
 	var holder = object.get("visual")
 	if GripSpec.kind_of(object)==GripSpec.SPRING and is_instance_valid(holder):
 		var bend: Node3D = (holder as Node3D).get_node_or_null("Изгиб")
@@ -250,6 +285,27 @@ func release_anchor_load(id: int) -> void:
 			tween.tween_property(bend,"rotation:z",0.0,.18).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
 			tween.parallel().tween_property(bend,"scale:y",1.0,.18).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
 	for exit_id in GripSpec.choice_exits(object): _highlight_exit(int(exit_id),false)
+
+# The status strip shows the grip state: the shared dim strip at rest, its
+# own brighter copy while the grip is held, and the timer's alarm colour in a
+# root's last moments. Returns the lit material while held.
+func _light_status(object: Dictionary, held: bool) -> StandardMaterial3D:
+	var holder = object.get("visual")
+	var strip: MeshInstance3D = null
+	if is_instance_valid(holder): strip = (holder as Node3D).find_child("Полоса состояния",true,false) as MeshInstance3D
+	if not held or strip==null:
+		if strip!=null and object.has("status_rest"): strip.material_override = object["status_rest"]
+		object.erase("status_rest")
+		object.erase("status_lit")
+		return null
+	# A rebuilt chunk brings back the shared material; light a fresh copy.
+	if strip.material_override!=object.get("status_lit"):
+		object["status_rest"] = strip.material_override
+		var lit := (strip.material_override as StandardMaterial3D).duplicate() as StandardMaterial3D
+		lit.emission_energy_multiplier = 1.5
+		strip.material_override = lit
+		object["status_lit"] = lit
+	return object["status_lit"]
 
 func _highlight_exit(id: int, on: bool) -> void:
 	var object := anchor_by_id(id)
@@ -323,6 +379,12 @@ func update_anchor_timer(id: int, seconds_left: float) -> void:
 	material.set_shader_parameter("remaining",shown/GripSpec.ROOT_SECONDS)
 	material.set_shader_parameter("ring",(style["ring"] as Color).lerp(style["alarm"],clampf(1.0-shown/1.2,0,1)))
 	(dial["label"] as Label3D).text = _timer_text(shown)
+	# Pre-break state: past the warning the held root's strip turns to alarm.
+	var lit := _light_status(object,true)
+	if lit!=null:
+		var alarm := clampf((GripSpec.ROOT_SECONDS-shown-GripSpec.ROOT_WARNING)/(GripSpec.ROOT_SECONDS-GripSpec.ROOT_WARNING),0,1)
+		lit.emission = MountainWorld.COLORS[GripSpec.ROOT].lerp(style["alarm"],alarm)
+		lit.albedo_color = lit.emission
 
 func sphere(node_name: String, where: Vector3, dimensions: Vector3, material: Material, parent: Node3D = null) -> MeshInstance3D:
 	var instance := MeshInstance3D.new()
@@ -670,12 +732,25 @@ func activate_rescue_anchors(ids: Array) -> void:
 		var object := anchor_by_id(int(id))
 		if not object.get("reserve",false): continue
 		object["broken"] = false
+		GripSpec.restore(object,false)
 		if is_instance_valid(object.get("visual")): object["visual"].visible = true
 
-func consume_anchor(id: int) -> void:
+# Release of a held grip: a disposable grip is consumed once, a permanent one
+# becomes available again. Returns true when the grip was consumed now.
+func consume_anchor(id: int) -> bool:
 	var object := anchor_by_id(id)
-	if object.is_empty() or object.get("permanent",true): return
-	object["broken"] = true
+	if not GripSpec.settle(object): return false
+	_crumble(object)
+	return true
+
+# A root whose clock ran out breaks whatever its lifetime.
+func break_anchor(id: int) -> bool:
+	var object := anchor_by_id(id)
+	if not GripSpec.expire(object): return false
+	_crumble(object)
+	return true
+
+func _crumble(object: Dictionary) -> void:
 	if is_instance_valid(object.get("visual")):
 		object["visual"].visible = false
 		if visuals_enabled:

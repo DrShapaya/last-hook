@@ -21,8 +21,15 @@ const ROOT_WARNING := 2.1
 # share of speed along its exit direction, weighted by how well the swing
 # loads the bough in that direction.
 const SPRING_BONUS := .13
+# Ice: the contact starts at the old .18 m/s and accelerates down the grip's
+# surface, never further than 1.2 m and never off the drawn stone. Releasing
+# while it slides carries that motion into the flight.
 const ICE_SLIDE_RATE := .18
+const ICE_SLIDE_ACCEL := .9
 const ICE_SLIDE_MAX := 1.2
+const ICE_CARRY := 1.0
+# Distance the spring's throw must keep clear of rock, in its exit direction.
+const SPRING_LANE := 2.4
 
 static func kind_of(object: Dictionary) -> int:
 	return clampi(int(object.get("kind",STONE)),STONE,CRYSTAL)
@@ -65,9 +72,17 @@ static func slide_direction(object: Dictionary) -> Vector2:
 	var direction: Vector2 = object.get("slide_dir",Vector2.DOWN)
 	return direction.normalized() if direction.length_squared()>.0001 else Vector2.DOWN
 
+# v13 ice slides across its grip towards one side, slightly downhill, so the
+# hook really travels over the stone instead of pressing into its underside.
+static func lateral_slide(side: float) -> Vector2:
+	return Vector2(1.0 if side>=0 else -1.0,-.35).normalized()
+
+static func slide_distance(object: Dictionary, held: float) -> float:
+	if kind_of(object)!=ICE or held<=0: return 0.0
+	return minf(ICE_SLIDE_MAX,held*ICE_SLIDE_RATE+.5*ICE_SLIDE_ACCEL*held*held)
+
 static func slide_offset(object: Dictionary, held: float) -> Vector2:
-	if kind_of(object)!=ICE: return Vector2.ZERO
-	return slide_direction(object)*minf(ICE_SLIDE_MAX,held*ICE_SLIDE_RATE)
+	return slide_direction(object)*slide_distance(object,held)
 
 # Every contact position an ice grip can reach, for route validation.
 static func slide_samples(object: Dictionary, count: int = 3) -> Array[Vector2]:
@@ -86,13 +101,64 @@ static func spring_load(object: Dictionary, velocity: Vector2) -> float:
 	if kind_of(object)!=SPRING or velocity.length_squared()<.0001: return 0.0
 	return clampf(velocity.normalized().dot(exit_direction(object)),0,1)
 
-static func release_velocity(object: Dictionary, velocity: Vector2) -> Vector2:
+static func release_velocity(object: Dictionary, velocity: Vector2, slide_velocity: Vector2 = Vector2.ZERO) -> Vector2:
+	if kind_of(object)==ICE: return velocity+slide_velocity*ICE_CARRY
 	var load := spring_load(object,velocity)
 	if load<=0: return velocity
 	return velocity+exit_direction(object)*velocity.length()*SPRING_BONUS*load
 
 static func choice_exits(object: Dictionary) -> Array:
 	return object.get("choice_exits",[]) if kind_of(object)==CRYSTAL else []
+
+# --- State contract -----------------------------------------------------------
+# Every type walks the same states:
+#   available -> (targeted) -> attached -> acted -> consumed | available
+# `consumed` is the stored `broken` flag, so saves and the hook cast keep
+# reading one field. `targeted` is derived from the aim and never stored.
+# Each transition returns true only when it really happens, so a repeated
+# release, a second hit or a resumed run never applies an effect twice.
+const STATES := ["available","targeted","attached","acted","consumed"]
+
+static func state(object: Dictionary, aimed_id: int = -1) -> String:
+	if object.get("broken",false): return "consumed"
+	var stored := str(object.get("grip_state","available"))
+	if stored=="available" and aimed_id>=0 and int(object.get("id",-1))==aimed_id: return "targeted"
+	return stored
+
+static func attach(object: Dictionary) -> bool:
+	if object.is_empty() or object.get("broken",false) or object.get("grip_state","available")=="attached": return false
+	object["grip_state"] = "attached"
+	return true
+
+# Release: the type's effect (the spring impulse) belongs to this transition.
+static func act(object: Dictionary) -> bool:
+	if object.is_empty() or object.get("broken",false) or object.get("grip_state","available")!="attached": return false
+	object["grip_state"] = "acted"
+	return true
+
+# After acting a disposable grip is consumed; a permanent one is free again.
+static func settle(object: Dictionary) -> bool:
+	if object.is_empty() or object.get("broken",false): return false
+	if object.get("permanent",true) and not timed(object):
+		object["grip_state"] = "available"
+		return false
+	object["grip_state"] = "consumed"
+	object["broken"] = true
+	return true
+
+# A root clock ends the grip whatever its lifetime and wherever it is held.
+static func expire(object: Dictionary) -> bool:
+	if object.is_empty() or object.get("broken",false): return false
+	object["grip_state"] = "consumed"
+	object["broken"] = true
+	return true
+
+# A reserve woken by a revival, or a held grip restored from a save.
+static func restore(object: Dictionary, held: bool) -> void:
+	if object.get("broken",false):
+		object["grip_state"] = "consumed"
+	else:
+		object["grip_state"] = "attached" if held else "available"
 
 static func network_safe_point(object: Dictionary) -> bool:
 	# Catching a permanent stable main grip records the revival point.

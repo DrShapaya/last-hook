@@ -137,18 +137,27 @@ func _scenario_branch(index: int, point: Vector2, entry: int, zone: int) -> void
 	# Branch scenarios leave from the phrase's first main grip and rejoin at
 	# the next one, after the entry has been consumed.
 	var plan := scenario_for_row(index)
-	if plan.is_empty() or (index-2)%3!=0 or plan["template"] not in ["risk","slide","choice"]: return
+	if plan.is_empty() or plan["template"] not in ["risk","slide","choice"]: return
+	# v13: once a timed or sliding rule is known, the phrase repeats it on its
+	# middle beat as a second detour - the rule appears alone, then repeated,
+	# and only later in a combination.
+	var repeat: bool = calibrated_routes and (index-2)%3==1 and plan["template"] in ["risk","slide"] and not plan["new"] and plan.get("placed",false)
+	if (index-2)%3!=0 and not repeat: return
 	var exit := main_point(index+1)
 	if finite and exit.y>=summit-.8: return
 	var kinds: Array[int] = [int(plan["mechanic"])]
 	# A crystal needs two verified exits; without them the fork becomes a
 	# plain timed detour rather than an unexplained crystal.
-	if plan["template"]=="choice" and introduced.has(GripSpec.ROOT): kinds.append(GripSpec.ROOT)
+	if plan["template"]=="choice" and introduced.has(GripSpec.ROOT) and not repeat: kinds.append(GripSpec.ROOT)
 	var toward := int(signf(exit.x-point.x)) if absf(exit.x-point.x)>.1 else 1
 	for kind in kinds:
-		for side in [toward,-toward]:
-			var bonus := point+Vector2(side*3.8,.55)
+		# v13 tries a wider spot on each side before giving the phrase up.
+		var spans: Array = [3.8*toward,-3.8*toward,4.4*toward,-4.4*toward] if calibrated_routes else [3.8*toward,-3.8*toward]
+		for span in spans:
+			var side := int(signf(span))
+			var bonus := point+Vector2(span,.55)
 			if outside(bonus,0) or not transition_clear(point,bonus): continue
+			if calibrated_routes and crowded(bonus): continue
 			var probe := {"pos":bonus,"kind":kind,"slide_dir":slide_direction_at(bonus)}
 			if not exit_reachable(probe,exit): continue
 			var reward := Vector2.INF
@@ -157,21 +166,41 @@ func _scenario_branch(index: int, point: Vector2, entry: int, zone: int) -> void
 				if not reward.is_finite(): continue
 			var branch_id := _add_anchor(bonus,kind,Vector2(1.3,.6))
 			anchors[branch_id]["role"] = "branch"
-			branches.append({"entry":entry,"anchor":branch_id,"exit_row":index+1,"exit_pos":exit,"scenario":plan["template"]})
 			if kind==GripSpec.CRYSTAL:
 				var reward_id := _add_anchor(reward,GripSpec.STONE,Vector2(1.3,.6))
 				anchors[reward_id]["role"] = "reward"
 				anchors[reward_id]["permanent"] = false
 				anchors[branch_id]["choice_exits"] = [reward_id]
 				pending_choice[index+1] = branch_id
-				branches.append({"entry":branch_id,"anchor":reward_id,"exit_row":index+2,"exit_pos":main_point(index+2),"scenario":"choice","choice":true})
+				record_branch(entry,branch_id,index+1,exit,plan["template"],reward_id)
+				record_branch(branch_id,reward_id,index+2,main_point(index+2),"choice")["choice"] = true
 				_add_find(reward+Vector2(0,-2.05),zone,true)
 			else:
-				_add_find(bonus+Vector2(0,-2.05),zone,true)
+				record_branch(entry,branch_id,index+1,exit,plan["template"])["repeat"] = repeat
+				# A repeated detour is practice, not a second relic.
+				_add_find(bonus+Vector2(0,-2.05),zone,not repeat)
 			plan["placed"] = true
 			plan["kind"] = kind
 			introduced[kind] = introduced.get(kind,plan["block"])
 			return
+
+func branch_spots(index: int) -> Array[Vector2]:
+	var result: Array[Vector2] = []
+	var plan := scenario_for_row(index)
+	if plan.is_empty() or plan["template"] not in ["risk","slide","choice"] or (index-2)%3>1: return result
+	var point := main_point(index)
+	var exit := main_point(index+1)
+	var toward := signf(exit.x-point.x) if absf(exit.x-point.x)>.1 else 1.0
+	result.append(point+Vector2(3.8*toward,.55))
+	if plan["template"]=="choice": result.append(exit+Vector2(3.8*toward,.55))
+	return result
+
+# A branch grip needs its own space: a hook aimed at it must not catch a
+# neighbour instead.
+func crowded(point: Vector2) -> bool:
+	for id in nearby_ids(point.y-2,point.y+2):
+		if not anchors[id].get("reserve",false) and anchors[id]["pos"].distance_to(point)<RouteGraph.GRIP_SPACING: return true
+	return false
 
 func _choice_reward(index: int, crystal: Vector2, side: int) -> Vector2:
 	# The second exit of a crystal: the loot spot one row higher on the same
@@ -181,6 +210,7 @@ func _choice_reward(index: int, crystal: Vector2, side: int) -> Vector2:
 	var reward := main_point(index+1)+Vector2(side*3.8,.55)
 	if outside(reward,0) or reward.distance_to(crystal)>=LINK_REACH or reward.distance_to(after)>=LINK_REACH: return Vector2.INF
 	if reward.distance_to(main_point(index+1))<1.45: return Vector2.INF
+	if calibrated_routes and crowded(reward): return Vector2.INF
 	if not transition_clear(crystal,reward) or not transition_clear(reward,after): return Vector2.INF
 	return reward
 
@@ -198,6 +228,8 @@ func _generate_row(index: int) -> void:
 		anchors[main_route[-1]]["permanent"] = true
 		anchors[main_route[-1]]["role"] = "rest"
 		disposable_streak = 0
+		for branch in branches:
+			if branch["entry"]==main_route[-1]: branch["entry_consumed"] = false
 	if index>=2 and (index-2)%3==0:
 		var block := (index-2)/3
 		var encounter := {"row":index,"kind":kind,"name":NAMES[kind],"entry":main_route[-1],"obstacles":[]}
@@ -260,6 +292,14 @@ func _try_obstacle(candidate: Dictionary, index: int) -> bool:
 	for branch in branches:
 		if not transition_clear(anchors[branch["entry"]]["pos"],anchors[branch["anchor"]]["pos"],candidate): return false
 		if not transition_clear(anchors[branch["anchor"]]["pos"],branch["exit_pos"],candidate): return false
+	if calibrated_routes:
+		# Exits are protected from every contact the branch grip can slide to.
+		for branch in branches:
+			for contact in GripSpec.slide_samples(anchors[branch["anchor"]]):
+				if not transition_clear(contact,branch["exit_pos"],candidate): return false
+		for id in nearby_ids(p.y-6,p.y+6):
+			var spring: Dictionary = anchors[id]
+			if GripSpec.kind_of(spring)==GripSpec.SPRING and not transition_clear(spring["pos"],spring["pos"]+GripSpec.exit_direction(spring)*GripSpec.SPRING_LANE,candidate): return false
 	var kept: Array[Vector2i] = []
 	for edge in edges:
 		if transition_clear(anchors[edge.x]["pos"],anchors[edge.y]["pos"],candidate): kept.append(edge)

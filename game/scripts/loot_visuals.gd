@@ -240,6 +240,8 @@ const PEDESTALS := {"coin":[.34,.12,-.47],"amber":[.30,.11,-.40],"crown":[.44,.1
 static func _pedestal(world: MountainWorld, holder: Node3D, wall_local_z: float, id: int, shadows: bool, kind: String, quality: String) -> void:
 	if world.visuals==null: return
 	var visuals: MountainVisuals = world.visuals
+	# The rock-mass mountain builds a shelf of the face under every find.
+	if visuals.provides_find_shelves(): return
 	var size: Array = PEDESTALS.get(kind,[.32,.11,-.42])
 	var random := RandomNumberGenerator.new()
 	random.seed = id*271+5

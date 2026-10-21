@@ -55,8 +55,10 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	ledges = layout.ledges
 	visuals = MountainVisuals.new(self,layout)
 	if layout is MassifLayout: visuals = MassifVisuals.new(self,layout)
-	if location!=0: visuals = LegacyMountainVisuals.new(self,layout)
-	if visuals_enabled and location==0: _build_sky()
+	# Locations on generator v4 and the practice route have no landforms of
+	# their own; they get the same rock-mass mountain round their route line.
+	if location!=0 or practice: visuals = LegacyMountainVisuals.new(self,layout)
+	if visuals_enabled: _build_sky()
 
 func set_visual_quality(quality: String) -> void:
 	var selected := quality if quality in ["high","balanced","battery"] else "balanced"
@@ -497,11 +499,14 @@ func _build_find(find: Dictionary, parent: Node3D) -> void:
 	var holder := Node3D.new()
 	parent.add_child(holder)
 	var point: Vector2 = find["pos"]
-	holder.position = Vector3(point.x,point.y,2.2)
+	# Finds stand well in front of deep stone, so the hero never passes behind
+	# them; the pedestal reaches back to the wall through the same mount.
+	var mount := visuals.mount_find(find)
+	var wall_z := mount.wall_z()
+	holder.position = mount.holder_position()
 	holder.scale = Vector3.ONE*1.22
 	find["visual"] = holder
-	var wall_z := visuals.wall_depth(point)
-	holder.position.z = clampf(wall_z+.75,1.7,2.4)
+	find["mount"] = mount
 	# Contact offsets are in holder space; the holder is uniformly scaled.
 	LootVisuals.build(self,find,holder,visual_quality,(wall_z-holder.position.z)/holder.scale.x)
 	var price := Label3D.new()
@@ -554,6 +559,8 @@ func _release_chunk(key: int) -> void:
 		if int(floor(object["pos"].y/24))==key: object["visual"] = null
 	for object in finds:
 		if int(floor(object["pos"].y/24))==key: object["visual"] = null
+	for object in ledges:
+		if int(floor(float(object["top"])/24))==key: object["visual"] = null
 	var chunk: Node3D = chunks[key]
 	remove_child(chunk)
 	chunk.queue_free()
@@ -566,8 +573,10 @@ func update_visibility(center_y: float, center_x: float = 0) -> void:
 	_update_far_layers()
 	var first := maxi(0,int(floor((center_y-32)/24)))
 	var ready_chunk := int(floor((layout.main_point(layout.row).y-2)/24))-1
-	if location!=0: ready_chunk = int(ceil(generated_height/24))
-	if layout.finite and layout.main_point(layout.row).y>=layout.summit-.8:
+	# The massif of a chunk reads the objects of its neighbours, so a chunk is
+	# built only once the generator has passed it.
+	if location!=0: ready_chunk = int(floor((generated_height-2)/24))-1
+	if layout.finite and (layout.summit_added or (location==0 and layout.main_point(layout.row).y>=layout.summit-.8)):
 		ready_chunk = int(floor(layout.summit/24))
 	var last := mini(ready_chunk,int(floor((center_y+32)/24)))
 	for key in chunks.keys():
@@ -671,9 +680,13 @@ func consume_anchor(id: int) -> void:
 		object["visual"].visible = false
 		if visuals_enabled:
 			var p: Vector2 = object["pos"]
+			# The whole holder goes: shell, socket, skirt and contact shade. The
+			# chips fall from the grip's own depth, not from a fixed plane.
+			var mount: SurfaceMount = object.get("mount")
+			var z := mount.holder_position().z+.3 if mount!=null else 2.5
 			for index in range(4):
 				var crumb := profile_at(p.y).material_color(GripSpec.kind_of(object))
-				var chip := box("Осколок",Vector3(p.x+(index-1.5)*.22,p.y,2.5),Vector3(.16,.13,.15),mat("crumb_%s" % crumb.to_html(),crumb))
+				var chip := box("Осколок",Vector3(p.x+(index-1.5)*.22,p.y,z),Vector3(.16,.13,.15),mat("crumb_%s" % crumb.to_html(),crumb))
 				var tween := create_tween().set_parallel(true)
 				tween.tween_property(chip,"position",chip.position+Vector3((index-1.5)*.35,-1.4,0),.36).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 				tween.tween_property(chip,"scale",Vector3.ZERO,.36)

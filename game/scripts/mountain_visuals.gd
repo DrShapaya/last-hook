@@ -73,13 +73,36 @@ func support_root_of(_object: Dictionary) -> Vector2:
 func socket_margin() -> float:
 	return .35
 
+# How far a grip's stone leans from the host rock to its type's material.
+func grip_tint() -> float:
+	return .55
+
+# How dark the socket ring around an object is, as a share of the profile's.
+func socket_shade() -> float:
+	return 1.0
+
+# Mountains that build a shelf of the face under every find skip pedestals.
+func provides_find_shelves() -> bool:
+	return false
+
+# Mount of a find: it stands well in front of deep stone, so the hero never
+# passes behind it; a pedestal reaches back to the wall.
+func mount_find(find: Dictionary) -> SurfaceMount:
+	var point: Vector2 = find["pos"]
+	var wall_z := wall_depth(point)
+	return mount_at(point,Vector2(.9,.7),{},clampf(wall_z+.75,1.7,2.4)-wall_z)
+
 # Styles with occlusion baked into the stone need no separate contact decal.
 func baked_contact() -> bool:
 	return false
 
-func mount_at(point: Vector2, footprint: Vector2, object: Dictionary = {}) -> SurfaceMount:
+func mount_at(point: Vector2, footprint: Vector2, object: Dictionary = {}, standoff: float = GRIP_STANDOFF) -> SurfaceMount:
+	# The only place a mount is made: from a layout point that was already
+	# verified by the generator. Nothing here may move that point.
 	var mount := SurfaceMount.new()
 	var z := wall_depth(point)
+	mount.layout_point = point
+	mount.standoff = standoff
 	mount.position = Vector3(point.x,point.y,z)
 	mount.normal = surface_normal(point)
 	var along := Vector3.RIGHT-mount.normal*mount.normal.x
@@ -97,6 +120,8 @@ func mount_at(point: Vector2, footprint: Vector2, object: Dictionary = {}) -> Su
 	mount.curvature = clampf((4.0*z-around)/(h*h)*.1,-1,1)
 	mount.profile = profile_at(point.y)
 	mount.biome_material = mount.profile.material_name(GripSpec.STONE)
+	mount.surface_color = zone_color(point.y)
+	mount.chip_color = mount.surface_color.lerp(mount.profile.rock_palette["warm"],.35).lightened(.08)
 	return mount
 
 func sample_point(x: int, y: int) -> Vector2:
@@ -212,18 +237,20 @@ func build_anchor(object: Dictionary, parent: Node3D) -> void:
 	var kind := GripSpec.kind_of(object)
 	var id := int(object.get("id",0))
 	var dimensions: Vector2 = object["dimensions"]
-	var mount := mount_at(p,dimensions,object)
+	var mount := mount_at(p,dimensions,object,GRIP_STANDOFF)
 	var profile := mount.profile
 	var family := profile.family(kind)
 	var holder := Node3D.new()
 	holder.name = "Зацеп_%d" % id
 	parent.add_child(holder)
-	holder.position = Vector3(p.x,p.y,mount.wall_z()+GRIP_STANDOFF)
+	holder.position = mount.holder_position()
 	holder.rotation = mount.tilt()
 	object["visual"] = holder
 	object["mount"] = mount
 	var rock := zone_color(p.y)
-	var stone := rock.lerp(profile.material_color(kind),.72)
+	# The type's material over the host rock: lighter than the wall so the
+	# grip separates, but still a stone of the same mountain, not a plate.
+	var stone := rock.lerp(profile.material_color(kind),grip_tint()).darkened(.08)
 	var style := posmod(id*7+kind,5)
 	var outline := _grip_outline(object_polygon(object),id)
 	if family in ROUND_FAMILIES: outline = _rounded(outline,2)
@@ -232,7 +259,7 @@ func build_anchor(object: Dictionary, parent: Node3D) -> void:
 	# Hook contacts snap to this drawn silhouette, not to the wider assist polygon.
 	object["surface"] = outline
 	var material := _grip_material(profile,kind)
-	var wall := mount.wall_z()-holder.position.z
+	var wall := mount.wall_local()
 	var back := clampf(wall-.25,-2.8,-.45)
 	var top := _polygon_top(outline)
 	var bottom := -_polygon_top(_mirror_y(outline))
@@ -243,9 +270,9 @@ func build_anchor(object: Dictionary, parent: Node3D) -> void:
 	var top_tint := Color(0,0,0,0)
 	if family=="bough" or (kind==GripSpec.STONE and float(weather["moss"])>.5 and style==4): top_tint = profile.vegetation_set["leaf"]
 	if family in ["frosted","frozen_branch","ice_crust"]: top_tint = Color("eef4f6")
-	var rim_dark := stone.darkened(.82)
+	# A soft shade line, not a frame: the grip separates by its own volume.
+	var rim_dark := stone.darkened(.28)
 	_socket(holder,outline,mount,wall,rock)
-	_skirt(holder,outline,.30,wall-.06,rock,.14,.30)
 	# Springs carry their shell on a pivot that bends under load.
 	var shell_parent := holder
 	if family in SPRING_FAMILIES:
@@ -265,20 +292,22 @@ func build_anchor(object: Dictionary, parent: Node3D) -> void:
 		_outcrop(shell_parent,outline,back,.32,.76,height*.32,height*.34,squeeze,stone,material,top_tint)
 	# A dark contour with a sunlit upper lip, drawn inside the outline: the
 	# silhouette separates from the rock behind without growing the grip.
-	_contour(shell_parent,outline,.07,.98,rim_dark,stone.lightened(float(profile.light_and_shadow_tuning["rim"])))
+	_contour(shell_parent,outline,.055,.98,rim_dark,stone.lightened(float(profile.light_and_shadow_tuning["rim"])))
 	_grip_details(object,shell_parent,family,profile,stone,top,bottom,width,height,front_top,wall,style)
 	if GripSpec.lifetime(object)=="permanent": _hardware(holder,profile,width,height,front_top,wall)
-	elif kind!=GripSpec.ROOT: _chips(holder,stone,bottom,width,wall,id)
 	if not baked_contact(): _contact_shade(holder,Vector2(width,height)+Vector2(.9,.8),wall+.03,float(profile.light_and_shadow_tuning["contact"]))
-	# Short status strip on the top edge of the front face.
+	# Short status strip inset in the front face just under the top bevel:
+	# inside the silhouette, on the shell's own centre line.
 	var strip_color: Color = MountainWorld.COLORS[kind]
 	var strip_material: StandardMaterial3D = world.mat("grip_strip_%d" % kind,strip_color,false)
 	strip_material.emission_enabled = true
 	strip_material.emission = strip_color
 	strip_material.emission_energy_multiplier = .45
-	var strip: MeshInstance3D = world.box("Полоса состояния",holder.position,Vector3(width*.34,.09,.05),strip_material,holder)
-	strip.position = Vector3(-.04,front_top+height*.13,.62)
-	strip.rotation.x = -.7
+	var middle := 0.0
+	for point in outline: middle += point.x
+	middle /= maxf(1,outline.size())
+	var strip: MeshInstance3D = world.box("Полоса состояния",holder.position,Vector3(minf(width*.4,.7),.075,.03),strip_material,shell_parent)
+	strip.position = Vector3(middle*.7,top-height*.40,.86)
 	strip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 func _grip_material(profile: GripBiomeProfile, kind: int) -> Material:
@@ -322,7 +351,7 @@ func _socket(holder: Node3D, outline: PackedVector2Array, mount: SurfaceMount, w
 	center /= maxf(1,outline.size())
 	var random := RandomNumberGenerator.new()
 	random.seed = int(absf(mount.position.x*733.0+mount.position.y*977.0))+11
-	var socket := float(mount.profile.light_and_shadow_tuning["socket"])
+	var socket := float(mount.profile.light_and_shadow_tuning["socket"])*socket_shade()
 	var points := PackedVector3Array()
 	var colors := PackedColorArray()
 	var inner := PackedVector2Array()
@@ -544,25 +573,25 @@ func build_obstacle(object: Dictionary, parent: Node3D) -> void:
 	var holder := Node3D.new()
 	parent.add_child(holder)
 	var p: Vector2 = object["pos"]
-	var mount := mount_at(p,object["dimensions"])
+	var mount := mount_at(p,object["dimensions"],{},OBSTACLE_STANDOFF)
 	# Hazards are set into the rock like any other block: a low profile on its
 	# mount, a dark seam all round, rubble at the foot. Danger reads from the
 	# red-brown stone, ember-lit cracks and a warm glint on upper edges only.
-	holder.position = Vector3(p.x,p.y,mount.wall_z()+OBSTACLE_STANDOFF)
+	holder.position = mount.holder_position()
 	object["visual"] = holder
+	object["mount"] = mount
 	var polygon := PackedVector2Array()
 	for point in SolidGeometry.polygon(object): polygon.append(point-p)
 	var variant := int(object.get("variant",0))
 	var tints := [Color("7a5040"),Color("6e4a44"),Color("7c5640")]
 	var color: Color = zone_color(p.y).darkened(.30).lerp(tints[variant%3],.45)
 	var refined := _refine_polygon(polygon)
-	var wall := mount.wall_z()-holder.position.z
+	var wall := mount.wall_local()
 	var top := _polygon_top(polygon)
 	var bottom := -_polygon_top(_mirror_y(polygon))
 	var height := top-bottom
 	_socket(holder,refined,mount,wall,zone_color(p.y))
 	_outcrop(holder,refined,clampf(wall-.3,-2.4,-.5),.18,.56,height*.20,height*.24,.84,color,obstacle_material)
-	_skirt(holder,refined,.17,wall-.06,zone_color(p.y).darkened(.05),.18,.32)
 	var random := RandomNumberGenerator.new()
 	random.seed = int(absf(p.x*733.0+p.y*977.0))+variant
 	var width := _polygon_width(polygon)
@@ -575,11 +604,6 @@ func build_obstacle(object: Dictionary, parent: Node3D) -> void:
 		if quality!="battery": _crack(holder,path,.012,.62,Color("e07040"),"obstacle_ember")
 	_edge_glint(holder,refined,.03,.58,Color("e0925f"))
 	if not baked_contact(): _contact_shade(holder,Vector2(width,height)+Vector2(1.0,.9),wall+.03,float(mount.profile.light_and_shadow_tuning["contact"]))
-	for side in [-1.0,1.0]:
-		var rubble := Node3D.new()
-		rubble.position = Vector3(side*width*.32,bottom-.05,wall+.15)
-		holder.add_child(rubble)
-		_build_pebbles(rubble,random,color.lightened(.05),quality=="high")
 
 func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	# A rest ledge is a shelf of the mountain: its top bevel is exactly the
@@ -598,19 +622,26 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 		polygon = PackedVector2Array([Vector2(-width*.50,0),Vector2(-width*.12,.07),Vector2(width*.46,0),Vector2(width*.50,-.22),Vector2(width*.28,-.5),Vector2(-width*.42,-.38)])
 	else: # wedge anchored into the mountain
 		polygon = PackedVector2Array([Vector2(-width*.50,0),Vector2(width*.50,.04),Vector2(width*.39,-.30),Vector2(width*.08,-.58),Vector2(-width*.47,-.35)])
-	var mount := mount_at(center-Vector2(0,.3),Vector2(width,.6))
+	# The stone is sampled under the lip, where the shelf enters the wall; the
+	# holder stays on the layout's walking line.
+	var mount := mount_at(center-Vector2(0,.3),Vector2(width,.6),{},LEDGE_STANDOFF)
+	mount.layout_point = center
 	var holder := Node3D.new()
 	holder.name = "Площадка отдыха_%d" % int(roundf(top*10))
 	parent.add_child(holder)
-	holder.position = Vector3(center.x,center.y,mount.wall_z()+LEDGE_STANDOFF)
-	var rock := zone_color(top).lerp(mount.profile.rock_palette["warm"],.4)
-	var wall := mount.wall_z()-holder.position.z
+	holder.position = mount.holder_position()
+	object["visual"] = holder
+	object["mount"] = mount
+	var rock := zone_color(top).lerp(mount.profile.rock_palette["warm"],.2).darkened(.04)
+	var wall := mount.wall_local()
 	_socket(holder,polygon,mount,wall,zone_color(top))
 	_outcrop(holder,polygon,clampf(wall-.3,-2.2,-.5),.30,.62,.16,.20,.84,rock,stone_material)
-	_skirt(holder,polygon,.29,wall-.06,zone_color(top),.14,.38)
-	# Bright walking surface over a dark underside, so the shelf reads against
-	# the rock and the sky behind it.
-	_contour(holder,polygon,.09,.84,Color("23272b"),Color("efe6c8"))
+	# A deep skirt under the shelf is its underside: it falls back into the
+	# wall in cool shade, so the shelf has visible thickness from the front.
+	_skirt(holder,polygon,.29,wall-.06,zone_color(top),.16,.55)
+	# Light walking surface over a shaded front edge, so the landing reads
+	# against the rock and the sky behind it.
+	_contour(holder,polygon,.09,.84,rock.darkened(.5),rock.lightened(.32))
 	if not baked_contact(): _contact_shade(holder,Vector2(width+1.0,1.4),wall+.03,float(mount.profile.light_and_shadow_tuning["contact"]))
 	var lip := RandomNumberGenerator.new()
 	lip.seed = int(absf(center.x*997.0+top*131.0))
@@ -636,8 +667,9 @@ func _build_grass(holder: Node3D, random: RandomNumberGenerator, shadows: bool, 
 	var dry := bool(plants.get("dry",false))
 	var points := PackedVector3Array()
 	var colors := PackedColorArray()
-	# Cushion: a low faceted mound pressed into the stone.
-	var soil: Color = plants["soil"]
+	# Cushion: a low faceted mound of soil and grit in the crack, close to the
+	# host rock's tone so it reads as filled crevice, not a hole.
+	var soil: Color = (plants["soil"] as Color).lerp(used.rock_palette["base"],.45)
 	var corners := 7
 	var cushion := PackedVector3Array()
 	for corner in range(corners):
@@ -646,7 +678,7 @@ func _build_grass(holder: Node3D, random: RandomNumberGenerator, shadows: bool, 
 	var crown := Vector3(0,.03,.07)
 	for corner in range(corners):
 		points.append_array(PackedVector3Array([crown,cushion[corner],cushion[(corner+1)%corners]]))
-		colors.append(soil.darkened(.1 if corner%2==0 else .2))
+		colors.append(soil.darkened(.04 if corner%2==0 else .12))
 	var leaves := random.randi_range(3,5)
 	var stems := random.randi_range(4,6)
 	var fine := random.randi_range(6,10) if detail else 0
@@ -674,6 +706,73 @@ func _build_grass(holder: Node3D, random: RandomNumberGenerator, shadows: bool, 
 		colors.append(tone.lerp(tip_tone,.6))
 	_flat_surface(holder,"Трава",points,colors,_vertex_material("decor_grass_v5"),shadows)
 
+func _build_cactus(holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, shadows: bool) -> void:
+	# Desert rim plant: a ribbed trunk with one or two raised arms, rooted in
+	# a small mound of sand and grit.
+	var plants: Dictionary = profile.vegetation_set
+	var body: Color = (plants["leaf"] as Color).lerp(Color("5f7a3a"),.6)
+	var points := PackedVector3Array()
+	var colors := PackedColorArray()
+	var height := random.randf_range(.9,1.3)
+	_column(points,colors,Vector3(0,-.05,.12),Vector3.UP,.13,.10,height,body)
+	for arm in range(random.randi_range(1,2)):
+		var side := -1.0 if (arm==0)==(random.randf()<.5) else 1.0
+		var at := random.randf_range(.3,.55)*height
+		var elbow := Vector3(side*.26,at+.05,.12)
+		_column(points,colors,Vector3(side*.06,at,.12),Vector3(side,.25,0).normalized(),.07,.07,.22,body.darkened(.05))
+		_column(points,colors,elbow,Vector3.UP,.075,.06,random.randf_range(.25,.4),body)
+	_flat_surface(holder,"Кактус",points,colors,_vertex_material("decor_plant"),shadows)
+	var mound := Node3D.new()
+	mound.name = "Песчаный холмик"
+	mound.scale = Vector3.ONE*.7
+	holder.add_child(mound)
+	_build_pebbles(mound,random,(plants["soil"] as Color).lerp(profile.rock_palette["warm"],.5),false)
+
+func _column(points: PackedVector3Array, colors: PackedColorArray, base: Vector3, axis: Vector3, bottom: float, top: float, length: float, color: Color) -> void:
+	# A six-sided faceted column with a pointed cap, lit from the upper left.
+	var side := Vector3(axis.y,-axis.x,0).normalized()
+	var tip := base+axis*length
+	for corner in range(6):
+		var a0 := TAU*corner/6.0
+		var a1 := TAU*(corner+1)/6.0
+		var d0 := side*cos(a0)+Vector3.BACK*sin(a0)
+		var d1 := side*cos(a1)+Vector3.BACK*sin(a1)
+		var facing := -(cos(a0)+cos(a1))*.4
+		var face := color.lightened(.14*facing) if facing>0 else color.darkened(-.2*facing)
+		points.append_array(PackedVector3Array([base+d0*bottom,tip+d0*top,tip+d1*top,base+d0*bottom,tip+d1*top,base+d1*bottom]))
+		colors.append(face)
+		colors.append(face.darkened(.03))
+		points.append_array(PackedVector3Array([tip+d0*top,tip+axis*top*.8,tip+d1*top]))
+		colors.append(face.lightened(.08))
+
+func _build_snow_cap(holder: Node3D, random: RandomNumberGenerator, rim: float) -> void:
+	# Where nothing grows, an upper rim keeps a cornice of old snow: a lens
+	# lying on the stone with a brighter lip and a soft blue underside.
+	var outline := PackedVector2Array()
+	var width := random.randf_range(.7,1.1)*rim
+	for corner in range(8):
+		var angle := TAU*corner/8.0
+		outline.append(Vector2(cos(angle)*width,sin(angle)*.16+(.05 if sin(angle)>0 else -.02)))
+	var snow := _outcrop(holder,outline,-.12,.02,.16,.08,.05,.8,Color("e9f1f4"),_vertex_material("decor_snow"))
+	snow.name = "Снежный карниз"
+	snow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+func _build_roots(holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, rim: float) -> void:
+	# Under a forest overhang, roots of the plants above hang out of the
+	# crack: thin tapering strands with a tuft of moss where they emerge.
+	var color: Color = (profile.vegetation_set["root"] as Color).lerp(Color("5a4630"),.6)
+	for strand in range(random.randi_range(2,4)):
+		var x := random.randf_range(-.45,.45)*rim
+		var path := PackedVector2Array([Vector2(x,.05)])
+		for step in range(random.randi_range(2,4)):
+			path.append(path[-1]+Vector2(random.randf_range(-.1,.1),-random.randf_range(.18,.32)))
+		_crack(holder,path,.028,.06,color.darkened(random.randf_range(0,.15)))
+	var moss := Node3D.new()
+	moss.position = Vector3(0,.06,0)
+	moss.scale = Vector3(1,-.5,1)*.6
+	holder.add_child(moss)
+	_build_grass(moss,random,false,rim,profile,false)
+
 func _build_crystal(holder: Node3D, random: RandomNumberGenerator, shadows: bool, count: int = 4, profile: GripBiomeProfile = null) -> void:
 	# A mineral grown from a crack: a dark cup at the root, the tallest
 	# crystal sunk deepest, 2-5 side crystals of their own height and lean,
@@ -683,9 +782,16 @@ func _build_crystal(holder: Node3D, random: RandomNumberGenerator, shadows: bool
 	var body: Color = palette["body"]
 	var lit: Color = palette["lit"]
 	var pale: Color = palette["pale"]
+	# Collar of the host rock the cluster breaks out of.
+	var host: Color = used.rock_palette["base"]
+	var collar := PackedVector2Array()
+	for corner in range(7):
+		var angle := TAU*corner/7.0+random.randf_range(-.2,.2)
+		collar.append(Vector2(cos(angle)*.62,sin(angle)*.24-.08))
+	_outcrop(holder,collar,-.18,.0,.16,.08,.08,.7,host.lightened(.04),stone_material).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var points := PackedVector3Array()
 	var colors := PackedColorArray()
-	var cup := Color("2a2622")
+	var cup := host.darkened(.55)
 	var rim := 7
 	for corner in range(rim):
 		var a0 := TAU*corner/rim
@@ -986,7 +1092,8 @@ func _skirt(parent: Node3D, outline: PackedVector2Array, z_rim: float, z_wall: f
 		var j := (i+1)%outline.size()
 		var facing := ((outline[i]+outline[j])*.5-center).normalized()
 		var light := facing.dot(Vector2(-.6,.8))
-		var tone := color.lightened(.08*light) if light>0 else color.darkened(-.10*light)
+		# The lower part is the object's underside: clearly darker than the face.
+		var tone := color.lightened(.08*light) if light>0 else color.darkened(-.24*light)
 		tone = tone.lightened((facet_hash(i,outline.size(),color.g*17.0)-.5)*.06)
 		points.append_array(PackedVector3Array([Vector3(outline[i].x,outline[i].y,z_rim),Vector3(outer[j].x,outer[j].y,z_wall),Vector3(outline[j].x,outline[j].y,z_rim)]))
 		colors.append(tone)

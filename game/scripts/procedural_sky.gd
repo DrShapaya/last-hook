@@ -27,6 +27,9 @@ func setup(world_seed: int, volumetric: bool = false) -> void:
 		shader.code = "shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled, depth_draw_never, fog_disabled; uniform vec3 top_color : source_color = vec3(.353,.663,.941); uniform vec3 bottom_color : source_color = vec3(.55,.77,.96); void fragment(){ ALBEDO=mix(top_color,bottom_color,smoothstep(.0,1.0,UV.y)); }"
 		flat.shader = shader
 		material_override = flat
+		# The flat sky renders no texture: release the unused viewport, or
+		# every world leaks one at exit.
+		sky_viewport.free()
 		return
 	volumetric_sky = true
 	sky_viewport.name = "Небо_640"

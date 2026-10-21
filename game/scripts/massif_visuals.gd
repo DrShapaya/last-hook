@@ -1,714 +1,642 @@
 class_name MassifVisuals
 extends MountainVisuals
 
-# Grips stand in front of the wall, never past this plane (gameplay is XY).
+# The climbing face as a pile of rock masses (RockMassSpec). Each 24 m band
+# lays out its masses from the seed and the gameplay objects in it:
+#   trunk     blocks stacked along the route line
+#   body      larger blocks behind them, the mountain's depth
+#   fill      slabs that keep the route corridor on stone
+#   seat      a block for a grip, find or hazard no other mass carries
+#   shelf     ledges and find shelves, built out of the face
+#   island    side clusters and pillars, with sky between them and the trunk
+#   overhang  a block jutting out over open space, deep underside
+#   arch      two pillars and a lintel round a real opening
+#   rubble    small blocks at the feet of big ones, away from objects
+# Every mounted object asks surface_query() for the frontmost mass at its
+# gameplay point; nothing here moves a gameplay coordinate.
+
+# Grips stand in front of the stone, never past this plane (gameplay is XY).
 const GRIP_Z := 2.35
-const FACET_SIZE := 1.3
-const FAR_FACET_SIZE := 3.2
-# Render-only boulder massif: the climbing face is a union of convex,
-# faceted boulders laid around the route and every gameplay object.
-const BOULDER_BAND := 24.0
-const BOULDER_BIN := 4.0
+const BAND := 24.0
+const BIN := 4.0
 const ROUTE_CLEAR := 2.4
-const WALL_BACK := -2.2
-const WALL_FRONT := 1.95
-const RIM_LIP := .3
-const RIM_FALL := 1.5
-const STACK_SHARE := .3
+const FIND_CLEARANCE := 1.05
+const FRONT_LIMIT := 1.95
 # Distant parallax layers: depth, share of camera motion and haze.
-const FAR_LAYERS := [{"z":-9.0,"follow":.42,"haze":.66,"cell":1.5},{"z":-15.0,"follow":.68,"haze":.80,"cell":2.0}]
+const FAR_LAYERS := [{"z":-9.0,"follow":.42,"haze":.62,"cell":1.5},{"z":-15.0,"follow":.68,"haze":.78,"cell":2.0}]
+# Bevel width / lift per landform: Vector3(top, side, bottom).
+const SHAPES := {
+	"buttress":[Vector3(.5,.32,.72),Vector3(.85,.8,1.0)],
+	"slab":[Vector3(.46,.3,.58),Vector3(.75,.7,.85)],
+	"pillar":[Vector3(.42,.45,.5),Vector3(.9,.95,.9)],
+	"island":[Vector3(.55,.45,.85),Vector3(.95,.9,1.1)],
+	"overhang":[Vector3(.5,.5,1.35),Vector3(.8,.95,1.7)],
+	"arch":[Vector3(.45,.45,.6),Vector3(.85,.95,1.1)],
+	"seat":[Vector3(.42,.34,.5),Vector3(.75,.65,.75)],
+	"shelf":[Vector3(.4,.26,.32),Vector3(.9,.7,.6)],
+	"rubble":[Vector3(.2,.18,.22),Vector3(.32,.3,.3)],
+}
 var massif: MassifLayout
 var rock_material := ShaderMaterial.new()
-var flank_material := ShaderMaterial.new()
 var far_materials: Array[ShaderMaterial] = []
-# 0 is the climbing massif, 1 and 2 are the distant layers.
-var layer := 0
-var positions: Dictionary = {}
-var normals: Dictionary = {}
-var eval_cache: Dictionary = {}
-var form_cache: Dictionary = {}
-var facet_depths: Dictionary = {}
-var facet_cells: Dictionary = {}
-var facet_tones: Dictionary = {}
-var route_cache: Dictionary = {}
-var band_boulders: Dictionary = {}
-var band_islands: Dictionary = {}
-var boulder_bins: Dictionary = {}
-var boulder_signature := Vector3i(-1,-1,-1)
-var emitted_vertices := 0
 var far_shader: Shader
+var band_masses: Dictionary = {}
+var band_islands: Dictionary = {}
+var mass_bins: Dictionary = {}
+var masses_by_id: Dictionary = {}
+var find_shelves: Dictionary = {}
+var query_cache: Dictionary = {}
+var route_cache: Dictionary = {}
+var mass_signature := Vector4i(-1,-1,-1,-1)
+# Openings of the arches: body and fill masses keep out of them.
+var arch_openings: Array[Rect2] = []
 
 func _init(owner_world: Node3D, source: MountainLayout) -> void:
 	super._init(owner_world,source)
 	massif = source as MassifLayout
 	rock_material.shader = preload("res://shaders/massif_rock.gdshader")
 	rock_material.set_shader_parameter("facet_strength",1.0)
-	flank_material.shader = rock_material.shader
-	flank_material.set_shader_parameter("facet_strength",1.0)
-	flank_material.set_shader_parameter("detail_strength",.7)
-	# Distant cliffs: one flat facet light, no shadow lookups, mixed into
-	# the sky colour. Cheap enough for every preset, including phones.
+	_apply_rock_profile(rock_material,profile_at(0))
+	# Distant ranges: one flat facet light, no shadow lookups, mixed into the
+	# sky colour. Cheap enough for every preset, including phones.
 	far_shader = Shader.new()
-	far_shader.code = "shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled; uniform vec3 haze : source_color = vec3(.42,.68,.92); uniform float haze_amount = .7; varying vec3 world_pos; void vertex(){ world_pos=(MODEL_MATRIX*vec4(VERTEX,1.0)).xyz; } void fragment(){ vec3 n=normalize(cross(dFdx(world_pos),dFdy(world_pos))); if(n.z<0.0){ n=-n; } float l=dot(n,normalize(vec3(-.55,.62,.56))); vec3 c=COLOR.rgb*mix(.80,1.10,smoothstep(-.2,.9,l)); ALBEDO=mix(c,haze,haze_amount); }"
+	far_shader.code = "shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled; uniform vec3 haze : source_color = vec3(.55,.74,.92); uniform float haze_amount = .7; varying vec3 world_pos; void vertex(){ world_pos=(MODEL_MATRIX*vec4(VERTEX,1.0)).xyz; } void fragment(){ vec3 n=normalize(cross(dFdx(world_pos),dFdy(world_pos))); if(n.z<0.0){ n=-n; } float l=dot(n,normalize(vec3(-.55,.62,.56))); vec3 c=COLOR.rgb*mix(.78,1.12,smoothstep(-.2,.9,l)); ALBEDO=mix(c,haze,haze_amount); }"
 	for settings in FAR_LAYERS:
 		var material := ShaderMaterial.new()
 		material.shader = far_shader
 		material.set_shader_parameter("haze_amount",settings["haze"])
 		far_materials.append(material)
 
+func _apply_rock_profile(material: ShaderMaterial, profile: GripBiomeProfile) -> void:
+	var rock: Dictionary = profile.rock_material
+	material.set_shader_parameter("roughness_value",float(rock["roughness"]))
+	material.set_shader_parameter("detail_strength",float(rock["normal_strength"]))
+	material.set_shader_parameter("strata_scale",float(rock["strata_scale"]))
+
 func far_layer_count() -> int:
 	return 1 if quality=="battery" else FAR_LAYERS.size()
 
-func zone_color(height: float) -> Color:
-	# Warm, light limestone, slowly cooling towards the summit.
-	var palette := [Color("6b6b61"),Color("6d6d63"),Color("6f6f66"),Color("6a6f72"),Color("6e6c67"),Color("7e8285")]
-	var t := clampf(height/20,0,5)
-	var index := mini(int(t),4)
-	return palette[index].lerp(palette[index+1],smoothstep(0,1,t-index))
+# --- Layout hooks ---------------------------------------------------------------
+# The massif only needs the route line, the landform of a region and an
+# optional support root, so any layout can carry it.
 
-func _use_layer(value: int) -> void:
-	# Every cache is per layer: the distant layers live in their own plane.
-	if value==layer: return
-	layer = value
-	positions.clear()
-	normals.clear()
-	eval_cache.clear()
-	form_cache.clear()
-	facet_depths.clear()
-	facet_cells.clear()
-	facet_tones.clear()
+func route_x_at(y: float) -> float:
+	return massif.route_x(y)
 
-func vertex(point: Vector2) -> Vector3:
-	if not positions.has(point): positions[point] = Vector3(point.x,point.y,_depth(point))
-	return positions[point]
+func region_form(region: int) -> Dictionary:
+	return massif.landform(region)
 
-func _depth(point: Vector2) -> float:
-	# The stone is piecewise planar over large, slightly warped triangles: every
-	# fine contour vertex inside one facet lies on the same plane, so the
-	# shader's flat normal gives the broad low-poly planes of the reference
-	# while the dense grid keeps the silhouette and seams exact.
-	var cell := _facet_cell(point)
-	var keys: Array = cell["keys"]
-	var weights: Vector3 = cell["weights"]
-	return _facet_depth(keys[0])*weights.x+_facet_depth(keys[1])*weights.y+_facet_depth(keys[2])*weights.z
+func region_of(y: float) -> int:
+	return int(floor(y/MassifLayout.REGION_HEIGHT))
 
-func _facet_size() -> float:
-	return FACET_SIZE if layer==0 else FAR_FACET_SIZE
-
-func _lattice_point(key: Vector2i) -> Vector2:
-	# Jittered triangular lattice. The jitter stays below the inradius of a
-	# lattice triangle, so the triangulation never folds: facets are irregular
-	# but every fine vertex inside one lies exactly on its plane.
-	var size := _facet_size()
-	var jitter := Vector2(facet_hash(key.x,key.y,41.0+layer),facet_hash(key.x,key.y,73.0+layer))-Vector2(.5,.5)
-	return Vector2(key.x*size+key.y*size*.5,key.y*size*.8660254)+jitter*size*.38
-
-static func _barycentric(p: Vector2, a: Vector2, b: Vector2, c: Vector2) -> Vector3:
-	var v0 := b-a
-	var v1 := c-a
-	var v2 := p-a
-	var d := v0.x*v1.y-v1.x*v0.y
-	var u := (v2.x*v1.y-v1.x*v2.y)/d
-	var v := (v0.x*v2.y-v2.x*v0.y)/d
-	return Vector3(1.0-u-v,u,v)
-
-func _facet_keys(i: int, j: int, upper: int) -> Array:
-	if upper==0: return [Vector2i(i,j),Vector2i(i+1,j),Vector2i(i,j+1)]
-	return [Vector2i(i+1,j+1),Vector2i(i,j+1),Vector2i(i+1,j)]
-
-func _facet_cell(point: Vector2) -> Dictionary:
-	if facet_cells.has(point): return facet_cells[point]
-	var size := _facet_size()
-	var b := point.y/(size*.8660254)
-	var a := (point.x-b*size*.5)/size
-	var i0 := int(floor(a))
-	var j0 := int(floor(b))
-	var first := 0 if (a-i0)+(b-j0)<1.0 else 1
-	var cell := {}
-	var best := -INF
-	# The regular cell is the usual answer; jitter can move a point into a
-	# neighbouring triangle, so test those next.
-	for candidate in [Vector3i(i0,j0,first),Vector3i(i0,j0,1-first),Vector3i(i0-1,j0,1),Vector3i(i0,j0-1,1),Vector3i(i0+1,j0,0),Vector3i(i0,j0+1,0),Vector3i(i0-1,j0+1,1),Vector3i(i0+1,j0-1,0),Vector3i(i0-1,j0,0),Vector3i(i0,j0-1,0),Vector3i(i0+1,j0,1),Vector3i(i0,j0+1,1),Vector3i(i0+1,j0-1,1),Vector3i(i0-1,j0+1,0)]:
-		var keys := _facet_keys(candidate.x,candidate.y,candidate.z)
-		var weights := _barycentric(point,_lattice_point(keys[0]),_lattice_point(keys[1]),_lattice_point(keys[2]))
-		var lowest := minf(weights.x,minf(weights.y,weights.z))
-		if lowest>best:
-			best = lowest
-			cell = {"keys":keys,"weights":weights,"id":candidate}
-		if lowest>=-.00001: break
-	facet_cells[point] = cell
-	return cell
-
-func _facet_depth(key: Vector2i) -> float:
-	if facet_depths.has(key): return facet_depths[key]
-	var sample := _evaluate(_lattice_point(key))
-	# A per-vertex lift breaks each dome into tilted facets of varied light.
-	var lift := (facet_hash(key.x,key.y,float(layer)*3.0)-.5)*(.6 if layer>0 else .22)*clampf(sample.x/.8,0,1)
-	var depth := clampf(sample.y+lift,WALL_BACK,WALL_FRONT) if layer==0 else sample.y+lift
-	facet_depths[key] = depth
-	return depth
-
-# --- Boulders -----------------------------------------------------------------
+func landmark_zone(point: Vector2) -> int:
+	return clampi(int(point.y/20.0),0,5)
 
 func _route_x(y: float) -> float:
 	var key := int(round(y*8.0))
-	if not route_cache.has(key): route_cache[key] = massif.route_x(key/8.0)
+	if not route_cache.has(key): route_cache[key] = route_x_at(key/8.0)
 	return route_cache[key]
 
-func _make_boulder(center: Vector2, radius: float, height: float, random: RandomNumberGenerator, sides_low: int = 6, sides_high: int = 10) -> Dictionary:
-	# A convex hull of 6-10 jittered corners: broken, polygonal silhouettes
-	# like the boulders of the reference, never a smooth implicit blob.
-	var sides := random.randi_range(sides_low,sides_high)
-	var turn := random.randf()*TAU
-	var stretch := Vector2(random.randf_range(.95,1.12),random.randf_range(.84,1.02))
-	var points := PackedVector2Array()
-	for i in range(sides):
-		var angle := turn+TAU*(i+random.randf_range(-.26,.26))/sides
-		points.append(center+Vector2(cos(angle)*stretch.x,sin(angle)*stretch.y)*radius*random.randf_range(.86,1.0))
-	return _boulder_from(Geometry2D.convex_hull(points),center,height,random.randf())
+func zone_color(height: float) -> Color:
+	# Base rock of the zone's profile, blended across zone borders.
+	var t := clampf(height/20.0,0,5.0)
+	var index := mini(int(t),4)
+	var here: Color = GripBiomeProfile.for_place(layout.location,index*20.0+1).rock_material["base_color"]
+	var next: Color = GripBiomeProfile.for_place(layout.location,(index+1)*20.0+1).rock_material["base_color"]
+	return here.lerp(next,smoothstep(.7,1.0,t-index))
 
-func _boulder_from(hull: PackedVector2Array, center: Vector2, height: float, tone: float) -> Dictionary:
-	var points := _dedupe(hull)
-	var edge_normals := PackedVector2Array()
-	var offsets := PackedFloat32Array()
-	var reach := 0.0
-	var inner := INF
-	for i in range(points.size()):
-		var a := points[i]
-		var b := points[(i+1)%points.size()]
-		var n := Vector2(-(b-a).y,(b-a).x).normalized()
-		if n.dot(center-a)<0: n = -n
-		edge_normals.append(n)
-		offsets.append(n.dot(a))
-		reach = maxf(reach,center.distance_to(a))
-		inner = minf(inner,n.dot(center)-n.dot(a))
-	return {"c":center,"points":points,"n":edge_normals,"o":offsets,"reach":reach,"inner":maxf(.5,inner),"h":height,"tone":tone}
+# --- Masses ---------------------------------------------------------------------
 
-func _scaled_boulder(boulder: Dictionary, factor: float) -> Dictionary:
-	var center: Vector2 = boulder["c"]
-	var points := PackedVector2Array()
-	for point in boulder["points"]: points.append(center+(point-center)*factor)
-	return _boulder_from(points,center,boulder["h"],boulder["tone"])
-
-static func boulder_inside(boulder: Dictionary, point: Vector2) -> float:
-	# Signed distance to a convex polygon: positive inside, straight edges.
-	var edge_normals: PackedVector2Array = boulder["n"]
-	var offsets: PackedFloat32Array = boulder["o"]
-	var result := INF
-	for i in range(edge_normals.size()):
-		result = minf(result,edge_normals[i].dot(point)-offsets[i])
-	return result
-
-func _refresh_boulders() -> void:
-	var signature := Vector3i(layout.anchors.size(),layout.finds.size(),layout.obstacles.size())
-	if signature==boulder_signature: return
-	boulder_signature = signature
-	band_boulders.clear()
+func _refresh_masses() -> void:
+	# Bands depend on the gameplay objects in them; rebuild when any are added.
+	var signature := Vector4i(layout.anchors.size(),layout.finds.size(),layout.obstacles.size(),layout.ledges.size())
+	if signature==mass_signature: return
+	mass_signature = signature
+	band_masses.clear()
 	band_islands.clear()
-	boulder_bins.clear()
-	mount_signature = Vector4i(-1,-1,-1,-1)
-	eval_cache.clear()
-	form_cache.clear()
-	facet_depths.clear()
+	mass_bins.clear()
+	masses_by_id.clear()
+	find_shelves.clear()
+	arch_openings.clear()
+	query_cache.clear()
 
-func _covered(list: Array, point: Vector2, radius: float) -> bool:
-	for boulder in list:
-		if boulder_inside(boulder,point)>=radius: return true
+func _add_mass(list: Array, band: int, role: String, landform: String, contour: PackedVector2Array, z_rim: float, random: RandomNumberGenerator, z_back: float = -3.4, inner_direction: Vector2 = Vector2.ZERO, lifts_override: Vector3 = Vector3.ZERO, host: RockMassSpec = null) -> RockMassSpec:
+	var mass := RockMassSpec.new()
+	mass.id = band*1000+list.size()
+	mass.band = band
+	mass.role = role
+	mass.landform = landform
+	mass.seed_stream = 947
+	mass.outer_contour = contour
+	mass.z_rim = z_rim
+	mass.z_back = minf(z_back,z_rim-.6)
+	mass.inner_direction = inner_direction
+	# A lobe, seat or shelf of a host joins its body: same group, same tone.
+	mass.group = host.group if host!=null else mass.id
+	mass.tone = host.tone if host!=null else random.randf()
+	var center := Vector2.ZERO
+	for point in contour: center += point
+	center /= maxf(1,contour.size())
+	mass.region = region_of(center.y)
+	mass.material_profile = profile_at(center.y).id
+	var shape: Array = SHAPES.get(landform,SHAPES["buttress"])
+	var lifts: Vector3 = shape[1] if lifts_override==Vector3.ZERO else lifts_override
+	var size := Rect2(contour[0],Vector2.ZERO)
+	for point in contour: size = size.expand(point)
+	var span := sqrt(size.size.x*size.size.y)
+	# Sculpted front: facets of about a metre over a low tilted dome, smaller
+	# on small pieces. Big hosts get the larger dome.
+	mass.facet_size = clampf(span*.17,.55,1.3)
+	mass.dome = clampf(span*.11,.08,.85) if landform not in ["shelf","rubble"] else .08
+	mass.slope = Vector2(random.randf_range(-.05,.05),random.randf_range(-.06,.03))
+	mass.z_limit = FRONT_LIMIT
+	# Front of a mass never reaches the plane of the grips and the hero.
+	var room := FRONT_LIMIT-z_rim
+	var largest := maxf(lifts.x,maxf(lifts.y,lifts.z))*1.15+mass.dome
+	if largest>room and room>.2:
+		lifts *= room/largest
+		mass.dome *= room/largest
+	if not mass.build(shape[0],lifts,0,0.0,random): return null
+	list.append(mass)
+	return mass
+
+func _block(list: Array, band: int, role: String, landform: String, center: Vector2, size: Vector2, z_rim: float, random: RandomNumberGenerator, z_back: float = -3.4, host: RockMassSpec = null, turn_range: float = .34) -> RockMassSpec:
+	var turn := random.randf_range(-turn_range,turn_range)
+	var contour := RockMassSpec.block_contour(center,size,random,turn)
+	if role in ["body","island","rubble","lobe"]:
+		# Nothing fills an arch opening: the sky shows through it.
+		var box := Rect2(contour[0],Vector2.ZERO)
+		for point in contour: box = box.expand(point)
+		for opening in arch_openings:
+			if opening.grow(-.2).intersects(box): return null
+	return _add_mass(list,band,role,landform,contour,z_rim,random,z_back,Vector2.ZERO,Vector3.ZERO,host)
+
+func _host(list: Array, band: int, role: String, center: Vector2, size: Vector2, z_rim: float, random: RandomNumberGenerator, z_back: float = -3.4) -> RockMassSpec:
+	# A large host mass: one tilted body and one or two lobes fused to it at
+	# slightly different depth, so the outline breaks into shoulders and
+	# notches instead of one convex block.
+	var body := _block(list,band,role,"buttress",center,size,z_rim,random,z_back,null,.45)
+	if body==null: return null
+	for lobe in range(2 if random.randf()<.3 else 1):
+		var angle := random.randf()*TAU
+		var at := center+Vector2(cos(angle)*size.x*.42,sin(angle)*size.y*.4)
+		var lobe_size := size*random.randf_range(.42,.62)
+		lobe_size = lobe_size.max(Vector2(2.2,2.0))
+		_block(list,band,"lobe","buttress",at,lobe_size,z_rim+random.randf_range(-.3,.15),random,z_back,body,.3)
+	return body
+
+func _covering(list: Array, point: Vector2, margin: float) -> RockMassSpec:
+	for mass in list:
+		if mass.inside(point)>=margin: return mass
+	return null
+
+func _front_z(list: Array, point: Vector2, fallback: float) -> float:
+	var best := -INF
+	for mass in list:
+		var hit: Dictionary = mass.surface_at(point)
+		if not hit.is_empty(): best = maxf(best,float(hit["z"]))
+	return best if best>-INF else fallback
+
+func _objects_near(point: Vector2, reach: float) -> bool:
+	for id in layout.nearby_ids(point.y-reach-1,point.y+reach+1):
+		if layout.anchors[id]["pos"].distance_to(point)<reach+.6: return true
+	for find in layout.finds:
+		if find["pos"].distance_to(point)<reach+.6: return true
+	for obstacle in layout.obstacles:
+		if obstacle["pos"].distance_to(point)<reach+1.0: return true
+	for ledge in layout.ledges:
+		if point.x>float(ledge["left"])-reach and point.x<float(ledge["right"])+reach and absf(point.y-float(ledge["top"])+.5)<reach+.6: return true
 	return false
 
-func _cover_object(list: Array, point: Vector2, radius: float, random: RandomNumberGenerator) -> void:
-	# A boulder for a gameplay object: the object sits off-centre on it and its
-	# whole protected disc stays on stone.
-	if _covered(list,point,radius+.15): return
-	var offset := Vector2.from_angle(random.randf()*TAU)*random.randf_range(.15,.45)
-	var size := maxf(random.randf_range(1.9,2.4),(radius+offset.length()+.15)/.8)
-	var boulder := _make_boulder(point+offset,minf(size,4.5),size*random.randf_range(.68,.8),random)
-	for attempt in range(4):
-		if boulder_inside(boulder,point)>=radius+.1: break
-		boulder = _scaled_boulder(boulder,1.14)
-	list.append(boulder)
+func _seat(list: Array, band: int, point: Vector2, half: Vector2, random: RandomNumberGenerator) -> void:
+	# A gameplay object always lies on stone, its whole outline with a small
+	# margin. When no mass carries it, the nearest host grows a shoulder out
+	# to it: a lobe of the same body reaching from the host over the object,
+	# never a pedestal block of its own.
+	if _carried(list,point,half): return
+	var host: RockMassSpec = null
+	var best := INF
+	for mass in list:
+		if mass.role in ["find_shelf","ledge_shelf","rubble"]: continue
+		var distance: float = -mass.inside(point)
+		if distance<best:
+			best = distance
+			host = mass
+	var anchor_to := host.centroid() if host!=null else Vector2(_route_x(point.y),point.y)
+	var reach := (anchor_to-point).abs()
+	var size := Vector2(clampf(maxf(half.x*2.0+1.8,reach.x*.9),3.2,8.0),clampf(maxf(half.y*2.0+1.6,reach.y*.9),2.8,7.0))
+	var center := point.lerp(anchor_to,.4)
+	var z := host.z_rim+random.randf_range(-.15,.1) if host!=null else -1.6
+	for attempt in range(6):
+		var mass := _block(list,band,"seat","buttress",center,size,clampf(z,-2.0,-.6),random,-3.4,host,.2)
+		if mass!=null and _carried([mass],point,half): return
+		if mass!=null: list.erase(mass)
+		center = center.lerp(point,.45)
+		size *= 1.12
+
+func _carried(list: Array, point: Vector2, half: Vector2) -> bool:
+	# Every corner of the object's box is on one mass, .15 m inside.
+	for mass in list:
+		var ok := true
+		for corner in [Vector2(-half.x,-half.y),Vector2(half.x,-half.y),Vector2(half.x,half.y),Vector2(-half.x,half.y),Vector2.ZERO]:
+			if mass.inside(point+corner)<.15:
+				ok = false
+				break
+		if ok: return true
+	return false
+
+func _shelf(list: Array, band: int, role: String, left: float, right: float, top: float, depth: float, front: float, random: RandomNumberGenerator) -> RockMassSpec:
+	# A step of the mountain: its flat top edge is the walking line, the front
+	# stands out of the host face, the sides drop almost straight and the
+	# underside breaks off in a few uneven chamfers. The bottom stays at least
+	# two thirds as wide as the top, so the shelf never ends in a wedge.
+	var width := right-left
+	var left_drop := random.randf_range(.05,.18)*width
+	var right_drop := random.randf_range(.05,.18)*width
+	var contour := PackedVector2Array([Vector2(left,top),Vector2(right,top),
+		Vector2(right+random.randf_range(-.05,.08),top-depth*random.randf_range(.3,.45)),
+		Vector2(right-right_drop,top-depth*random.randf_range(.8,.95)),
+		Vector2(lerpf(left,right,random.randf_range(.4,.6)),top-depth),
+		Vector2(left+left_drop,top-depth*random.randf_range(.8,.95)),
+		Vector2(left-random.randf_range(-.05,.08),top-depth*random.randf_range(.3,.45))])
+	var middle := Vector2((left+right)*.5,top-depth*.6)
+	var host_z := _front_z(list,middle,-1.4)
+	var host: RockMassSpec = null
+	for mass in list:
+		var hit: Dictionary = mass.surface_at(middle)
+		if not hit.is_empty() and is_equal_approx(float(hit["z"]),host_z): host = mass
+	# The shelf starts inside its host's face and steps out of it.
+	var z_rim := clampf(host_z-.25,-1.9,front-.5)
+	var lift := front-z_rim
+	return _add_mass(list,band,role,"shelf",Geometry2D.convex_hull(contour).slice(0,-1),z_rim,random,-3.4,Vector2.ZERO,Vector3(lift,lift*.8,lift*.7),host)
 
 func front_band(band: int) -> Array:
-	# Boulders whose centres lie in one 24 m band. Each band depends only on
-	# the seed and the gameplay objects in it, so build order never matters.
-	_refresh_boulders()
-	var key := Vector2i(0,band)
-	if band_boulders.has(key): return band_boulders[key]
+	# Masses whose layout belongs to one 24 m band. A band depends only on the
+	# seed and the gameplay objects in it, so build order never matters.
+	_refresh_masses()
+	if band_masses.has(band): return band_masses[band]
 	var list: Array = []
 	var random := layout.rng(band,947)
-	var low := band*BOULDER_BAND
-	var high := low+BOULDER_BAND
-	var top := massif.summit+1.5 if massif.finite else INF
-	# Pairs of mid-sized boulders flank the climbing route, so the corridor
-	# is covered by several separate masses rather than one wide block.
-	var y := low+random.randf_range(0,1.2)
+	var low := band*BAND
+	var high := low+BAND
+	var top := layout.summit+1.5 if layout.finite else INF
+	var region := region_of(low+12.0)
+	var form := region_form(region)
+	var kind := int(form.get("kind",0))
+	# Trunk: a few large host masses along the route, alternating sides and
+	# depths, each fused from a tilted body and its lobes.
+	var y := low+random.randf_range(-1.0,1.5)
+	var side := -1.0 if random.randf()<.5 else 1.0
 	while y<high:
 		if y>-3.0 and y<top:
-			var route := _route_x(y)
-			var shift := random.randf_range(-.5,.5)
-			for side in [-1.0,1.0]:
-				var center := Vector2(route+shift+side*random.randf_range(1.0,1.6),y+random.randf_range(-.6,.6))
-				var radius := random.randf_range(2.0,2.6)
-				list.append(_make_boulder(center,radius,radius*random.randf_range(.68,.8),random))
-		y += random.randf_range(2.3,2.9)
+			var size := Vector2(random.randf_range(5.5,9.0),random.randf_range(4.6,7.0))
+			var center := Vector2(_route_x(y)+side*random.randf_range(.4,2.2),y)
+			_host(list,band,"trunk",center,size,random.randf_range(-1.75,-1.0),random)
+			side = -side
+		y += random.randf_range(4.4,6.0)
+	# Landform set pieces of the region, before the blocks that must keep
+	# out of an arch opening.
+	var piece_y := clampf(float(form.get("y",low+12.0)),low+3.0,high-6.0)
+	if piece_y<top-6.0 and piece_y>4.0:
+		var flank := float(form.get("side",1))
+		if kind==1: _overhang(list,band,piece_y,flank,random)
+		elif kind in [3,5]: _arch(list,band,piece_y,flank,random)
+	# Body: larger, deeper blocks behind the trunk give the mountain depth.
+	y = low+random.randf_range(0,3.0)
+	while y<high:
+		if y>-3.0 and y<top-1.0:
+			for flank in [-1.0,1.0]:
+				if random.randf()<.35:
+					var center := Vector2(_route_x(y)+flank*random.randf_range(3.8,5.2),y+random.randf_range(-1.0,1.0))
+					var size := Vector2(random.randf_range(6.5,9.0),random.randf_range(5.0,7.0))
+					var box := Rect2(center-size*.6,size*1.2)
+					var blocked := false
+					for opening in arch_openings: blocked = blocked or opening.grow(.5).intersects(box)
+					if not blocked: _host(list,band,"body",center,size,random.randf_range(-3.3,-3.0),random,-4.6)
+		y += random.randf_range(6.0,8.0)
+	# Fill: the route corridor stays on stone.
+	for step in range(int(BAND*2)):
+		var at := low+step*.5
+		if at<-2.0 or at>top-1.0: continue
+		for offset in [-ROUTE_CLEAR+.1,0.0,ROUTE_CLEAR-.1]:
+			var point := Vector2(_route_x(at)+offset,at)
+			if _covering(list,point,.05)!=null: continue
+			for attempt in range(3):
+				var mass := _block(list,band,"fill","slab",point+Vector2(-offset*.35,.6),Vector2(random.randf_range(3.2,4.0),random.randf_range(2.6,3.2))*(1.0+attempt*.2),random.randf_range(-2.1,-1.7),random)
+				if mass!=null and mass.inside(point)>=.05: break
+				if mass!=null: list.erase(mass)
+	# Seats for every gameplay object, then shelves for ledges and finds.
 	for anchor in layout.anchors:
 		var p: Vector2 = anchor["pos"]
-		if p.y>=low and p.y<high: _cover_object(list,p,grip_clearance(anchor),random)
-	for find in layout.finds:
-		var p: Vector2 = find["pos"]
-		if p.y>=low and p.y<high: _cover_object(list,p,FIND_CLEARANCE,random)
+		if p.y>=low and p.y<high: _seat(list,band,p,anchor["dimensions"]*.5,random)
 	for obstacle in layout.obstacles:
 		var p: Vector2 = obstacle["pos"]
-		if p.y>=low and p.y<high: _cover_object(list,p,minf(maxf(obstacle["dimensions"].x,obstacle["dimensions"].y)*.6+1.0,3.9),random)
-	# A few smaller boulders lean against the masses and break up the outline.
-	var anchors_count := list.size()
-	for extra in range(3 if anchors_count>0 else 0):
-		var parent: Dictionary = list[random.randi_range(0,anchors_count-1)]
-		var direction := Vector2.from_angle(random.randf()*TAU)
-		var center: Vector2 = parent["c"]+direction*float(parent["reach"])*random.randf_range(.75,1.0)
-		if center.y<-2.0 or center.y>top: continue
-		var radius := random.randf_range(1.3,1.9)
-		list.append(_make_boulder(center,radius,radius*random.randf_range(.7,.85),random,6,8))
-	# Side islands: separate clusters of boulders well off the route give the
-	# mountain its broken macro silhouette, with open sky between them and
-	# the climbing trunk. Ridges and ravines keep one, other landforms two.
-	var form: Dictionary = massif.landform(int(floor((low+12.0)/MassifLayout.REGION_HEIGHT)))
+		if p.y>=low and p.y<high: _seat(list,band,p,obstacle["dimensions"]*.5+Vector2(.3,.3),random)
+	for ledge in layout.ledges:
+		var top_y := float(ledge["top"])
+		if top_y<low or top_y>=high: continue
+		var middle := Vector2((float(ledge["left"])+float(ledge["right"]))*.5,top_y-.7)
+		_seat(list,band,middle,Vector2((float(ledge["right"])-float(ledge["left"]))*.4,.5),random)
+		_shelf(list,band,"ledge_shelf",float(ledge["left"])-.12,float(ledge["right"])+.12,top_y,random.randf_range(1.5,1.9),minf(_front_z(list,middle,-1.0)+1.0,FRONT_LIMIT),random)
+	for find in layout.finds:
+		var p: Vector2 = find["pos"]
+		if p.y<low or p.y>=high: continue
+		_seat(list,band,p,Vector2(.6,.6),random)
+		# A small natural ledge of the host face carries the find: wide,
+		# lopsided and standing out only a little, so it continues the relief.
+		var front := minf(_front_z(list,p,-1.0)+.45,FRONT_LIMIT)
+		var shelf := _shelf(list,band,"find_shelf",p.x-random.randf_range(.8,1.3),p.x+random.randf_range(.8,1.3),p.y-.4,random.randf_range(.9,1.2),front,random)
+		if shelf!=null: find_shelves[p] = shelf
+	# Side islands: separate clusters off the route, sky between them.
 	var islands: Array = []
-	for cluster in range(1 if int(form["kind"]) in [2,3] else 2):
-		var cy := low+random.randf_range(3.0,21.0)
-		var side := -1.0 if (cluster==0)==(random.randf()<.5) else 1.0
+	for cluster in range(1 if kind in [2,3] else 2):
+		var cy := low+random.randf_range(3.0,20.0)
+		var flank := -1.0 if (cluster==0)==(random.randf()<.5) else 1.0
 		if cy<3.0 or cy>top-3.0: continue
-		var cx := _route_x(cy)+side*random.randf_range(7.5,11.5)
+		var cx := _route_x(cy)+flank*random.randf_range(7.5,10.5)
 		var members: Array = []
-		for member in range(random.randi_range(3,5)):
-			var center := Vector2(cx,cy)+Vector2(random.randf_range(-2.6,2.6),random.randf_range(-2.0,2.0))
-			var radius := random.randf_range(1.5,2.6)
-			var boulder := _make_boulder(center,radius,radius*random.randf_range(.68,.8),random)
-			members.append(boulder)
-			list.append(boulder)
+		var core := _block(list,band,"island","island",Vector2(cx,cy),Vector2(random.randf_range(4.2,6.2),random.randf_range(3.4,5.0)),random.randf_range(-2.4,-1.6),random,-3.4,null,.4)
+		if core!=null:
+			members.append(core)
+			for member in range(random.randi_range(1,2)):
+				var pillar := random.randf()<.4
+				var size := Vector2(random.randf_range(1.8,2.6),random.randf_range(3.8,5.4)) if pillar else Vector2(random.randf_range(2.4,3.6),random.randf_range(2.0,3.0))
+				var center := Vector2(cx,cy)+Vector2(random.randf_range(-2.6,2.6),random.randf_range(-2.0,2.2))
+				var mass := _block(list,band,"island","pillar" if pillar else "island",center,size,core.z_rim+random.randf_range(-.3,.25),random,-3.4,core,.3)
+				if mass!=null: members.append(mass)
 		islands.append(members)
 	band_islands[band] = islands
-	band_boulders[key] = list
-	_register(list,0)
+	# Rubble at the feet of big blocks, away from every gameplay object.
+	var bases := list.duplicate()
+	for count in range(random.randi_range(2,4) if not bases.is_empty() else 0):
+		var parent: RockMassSpec = bases[random.randi_range(0,bases.size()-1)]
+		if parent.landform in ["shelf","rubble"]: continue
+		var foot := Vector2(INF,INF)
+		for point in parent.outer_contour:
+			if point.y<foot.y: foot = point
+		var at := foot+Vector2(random.randf_range(-.6,.6),random.randf_range(.1,.5))
+		if at.y<low or at.y>=high or _objects_near(at,1.2): continue
+		_block(list,band,"rubble","rubble",at,Vector2(random.randf_range(.9,1.6),random.randf_range(.7,1.2)),_front_z(list,at,-1.4)-.15,random)
+	band_masses[band] = list
+	for mass in list: _register(mass)
+	_link_neighbors(list)
 	return list
 
-func far_band(far: int, band: int) -> Array:
-	var key := Vector2i(far,band)
-	if band_boulders.has(key): return band_boulders[key]
-	var list: Array = []
-	var random := layout.rng(band*7+far,951)
-	var count := random.randi_range(4,6)
-	for index in range(count):
-		var x := lerpf(-44.0,44.0,(index+random.randf_range(.1,.9))/count)
-		var y := band*BOULDER_BAND+random.randf_range(0,BOULDER_BAND)
-		var radius := random.randf_range(4.0,7.5)*(1.0+.25*(far-1))
-		list.append(_make_boulder(Vector2(x,y),radius,radius*random.randf_range(.35,.5),random,7,10))
-	band_boulders[key] = list
-	_register(list,far)
-	return list
+func _overhang(list: Array, band: int, y: float, flank: float, random: RandomNumberGenerator) -> void:
+	# A block thrown out of the face over open space: its broad underside and
+	# its shadow fall on the masses below.
+	var center := Vector2(_route_x(y)+flank*random.randf_range(3.8,5.0),y)
+	if _objects_near(center,1.6): center.x += flank*1.6
+	if _objects_near(center,1.6): return
+	var contour := RockMassSpec.block_contour(center,Vector2(random.randf_range(5.0,6.2),random.randf_range(2.4,3.0)),random,random.randf_range(-.1,.1),.3)
+	_add_mass(list,band,"overhang","overhang",contour,random.randf_range(-.7,-.3),random)
 
-func _register(list: Array, owner_layer: int) -> void:
-	for boulder in list:
-		var center: Vector2 = boulder["c"]
-		var reach: float = boulder["reach"]
-		for bin in range(int(floor((center.y-reach)/BOULDER_BIN)),int(floor((center.y+reach)/BOULDER_BIN))+1):
-			var bin_key := Vector2i(owner_layer,bin)
-			if not boulder_bins.has(bin_key): boulder_bins[bin_key] = []
-			boulder_bins[bin_key].append(boulder)
+func _arch(list: Array, band: int, y: float, flank: float, random: RandomNumberGenerator) -> void:
+	# Two pillars and a lintel round an opening onto the sky. The pillars'
+	# inner faces and the lintel's underside are the arch's inner surface.
+	# The arch looks for a free spot beside the route: both sides, several
+	# distances and heights, never over a gameplay object.
+	var gap := random.randf_range(1.8,2.6)
+	var pillar := random.randf_range(2.1,2.7)
+	var height := random.randf_range(4.0,5.0)
+	var low := band*BAND
+	for attempt in range(12):
+		var side := flank if attempt%2==0 else -flank
+		var at_y := clampf(y+random.randf_range(-6.0,6.0) if attempt>0 else y,low+1.0,low+BAND-height-2.0)
+		# Close enough that the inner pillar leans on the body of the mountain.
+		var x := _route_x(at_y)+side*random.randf_range(5.6,7.6)
+		var span := Rect2(x-gap*.5-pillar,at_y-2.0,gap+pillar*2.0,height+4.1)
+		var free := true
+		for probe_x in range(5):
+			for probe_y in range(5):
+				var probe := span.position+span.size*Vector2(probe_x/4.0,probe_y/4.0)
+				if _objects_near(probe,.3): free = false
+		if not free: continue
+		# A window through the rock: a sill below, two pillars, a lintel
+		# above; every face turned to the opening is the arch's inner wall.
+		var z := random.randf_range(-1.4,-1.0)
+		var outer := gap+pillar*2.0
+		# All four pieces are one body (one group): no crease between them.
+		var sill := RockMassSpec.block_contour(Vector2(x,at_y-.9),Vector2(outer+.8,2.2),random,random.randf_range(-.05,.05),.25)
+		var body := _add_mass(list,band,"arch","arch",sill,z+.1,random,-3.6,Vector2.UP)
+		for pillar_side in [-1.0,1.0]:
+			var center := Vector2(x+pillar_side*(gap*.5+pillar*.5),at_y+height*.5)
+			var contour := RockMassSpec.block_contour(center,Vector2(pillar,height+1.0),random,0.0,.2)
+			_add_mass(list,band,"arch","arch",contour,z,random,-3.6,Vector2(-pillar_side,0),Vector3.ZERO,body)
+		var lintel := RockMassSpec.block_contour(Vector2(x,at_y+height+.9),Vector2(outer+.6,2.4),random,random.randf_range(-.06,.06),.25)
+		_add_mass(list,band,"arch","arch",lintel,z+.15,random,-3.6,Vector2.DOWN,Vector3.ZERO,body)
+		arch_openings.append(Rect2(x-gap*.5,at_y,gap,height))
+		return
 
-func _boulders_near(point: Vector2) -> Array:
-	var band := int(floor(point.y/BOULDER_BAND))
-	for neighbour in [band-1,band,band+1]:
-		if layer==0: front_band(neighbour)
-		else: far_band(layer,neighbour)
-	return boulder_bins.get(Vector2i(layer,int(floor(point.y/BOULDER_BIN))),[])
+func _register(mass: RockMassSpec) -> void:
+	masses_by_id[mass.id] = mass
+	for bin in range(int(floor(mass.bounds.position.y/BIN)),int(floor(mass.bounds.end.y/BIN))+1):
+		if not mass_bins.has(bin): mass_bins[bin] = []
+		mass_bins[bin].append(mass)
 
-func _evaluate(point: Vector2) -> Vector4:
-	# x: stone field (>=0 is stone), y: surface depth, z: crease shade, w: tone.
-	if eval_cache.has(point): return eval_cache[point]
-	var field := -INF
-	var total := 0.0
+func _link_neighbors(list: Array) -> void:
+	for mass in list:
+		for other in list:
+			if other!=mass and mass.bounds.grow(.2).intersects(other.bounds): mass.neighbors.append(other.id)
+
+func _masses_near(point: Vector2) -> Array:
+	var band := int(floor(point.y/BAND))
+	for neighbour in [band-1,band,band+1]: front_band(neighbour)
+	return mass_bins.get(int(floor(point.y/BIN)),[])
+
+# --- Surface query ----------------------------------------------------------------
+
+func surface_query(point: Vector2) -> RockSurfaceHit:
+	# The frontmost mass at a gameplay point and the face seen there.
+	if query_cache.has(point): return query_cache[point]
+	var hit := RockSurfaceHit.new()
 	var best := -INF
-	var tone := .5
-	var form := 0.0
-	var rims: Array[Vector2] = []
-	for boulder in _boulders_near(point):
-		var center: Vector2 = boulder["c"]
-		var reach: float = boulder["reach"]
-		var distance_squared := point.distance_squared_to(center)
-		if distance_squared>(reach+1.0)*(reach+1.0):
-			field = maxf(field,reach-sqrt(distance_squared))
-			continue
-		var inside := boulder_inside(boulder,point)
-		field = maxf(field,inside)
-		if inside<=-RIM_FALL: continue
-		var height: float = boulder["h"]
-		if inside<=0:
-			# Just outside, the rim lip fades out, so silhouette facets slope
-			# back gently instead of dropping straight to the back plane.
-			total += height*RIM_LIP*(1.0+inside/RIM_FALL)
-			continue
-		# Boulders stack: each one is a convex dome with a low lip, laid over
-		# whatever is behind it, so overlapping masses keep their own outline.
-		# The crown leans to the lower right, so the upper-left slopes face
-		# the sun and the underside drops into shade.
-		var t := clampf(inside/float(boulder["inner"]),0,1)
-		var lean := (point-center).dot(Vector2(.5,-.6))/reach
-		var dome := height*(RIM_LIP+(1.0-RIM_LIP)*(1.0-pow(1.0-t,2.2)))*(1.0+.14*lean)
-		total += dome
-		if dome>best:
-			best = dome
-			tone = boulder["tone"]
-			# Painterly form: the lower-right rim of the boulder that owns this
-			# point falls into its underbelly shade, the upper-left rim catches
-			# the light. Encoded in the tone so facets stay clean planes.
-			var away := (point-center)/reach
-			form = (1.0-t)*(clampf(away.dot(Vector2(-.6,.8)),0,1)*.5-clampf(away.dot(Vector2(.55,-.83)),0,1))
-		if t<.4: rims.append(Vector2(t,dome))
-	# The tallest dome shapes the surface and the others only lift it a
-	# little, so neighbouring boulders meet in a crease: the upper one's
-	# lower rim turns away from the sun, the lower one's crown faces it.
-	var stacked := 4.0*tanh((maxf(best,0.0)+STACK_SHARE*(total-maxf(best,0.0)))/4.0)
-	if layer==0:
-		# Gameplay guarantees: the route corridor and every protected disc keep
-		# stone behind them even where no boulder would reach.
-		var limit := massif.summit+.4 if massif.finite else INF
-		if point.y>-2.0 and point.y<limit:
-			var corridor := ROUTE_CLEAR-absf(point.x-_route_x(point.y))
-			if corridor>field:
-				field = corridor
-				stacked = maxf(stacked,2.0*sqrt(clampf(corridor/ROUTE_CLEAR,0,1)))
-		if field<.4:
-			var protect := -_protected_clearance(point)
-			if protect>field:
-				field = protect
-				stacked = maxf(stacked,1.6*sqrt(clampf(protect/1.2,0,1)))
-	# Soft shade where a rim lies on the boulder behind it.
-	var joint := 0.0
-	for rim in rims:
-		joint = maxf(joint,(1.0-rim.x/.4)*smoothstep(.2,1.0,total-rim.y))
-	var result := Vector4(field,(WALL_BACK if layer==0 else 0.0)+stacked,joint,tone)
-	eval_cache[point] = result
-	form_cache[point] = form
-	return result
+	for mass in _masses_near(point):
+		var surface: Dictionary = mass.surface_at(point)
+		if surface.is_empty() or float(surface["z"])<=best: continue
+		best = surface["z"]
+		hit.mass_id = mass.id
+		hit.mass = mass
+		hit.position = Vector3(point.x,point.y,surface["z"])
+		hit.normal = surface["normal"]
+		hit.surface_class = surface["class"]
+		hit.depth = mass.inside(point)
+		hit.material_profile = mass.material_profile
+	if hit.valid():
+		var along := Vector3.RIGHT-hit.normal*hit.normal.x
+		hit.tangent = along.normalized() if along.length_squared()>.0001 else Vector3.RIGHT
+		hit.exposure = 1.0 if _open_above(point,hit.position.z) else 0.0
+	query_cache[point] = hit
+	return hit
+
+func _open_above(point: Vector2, z: float) -> bool:
+	var probe := point+Vector2(0,1.2)
+	for mass in _masses_near(probe):
+		var surface: Dictionary = mass.surface_at(probe)
+		if not surface.is_empty() and float(surface["z"])>z+.3: return false
+	return true
 
 func stone_field(point: Vector2) -> float:
-	_use_layer(0)
-	return _evaluate(point).x
+	# Signed distance to the nearest silhouette: >= 0 is stone.
+	var best := -8.0
+	for mass in _masses_near(point): best = maxf(best,mass.inside(point))
+	return best
 
-func _field(point: Vector2) -> float:
-	return _evaluate(point).x
+func wall_depth(point: Vector2) -> float:
+	var hit := surface_query(point)
+	return hit.position.z if hit.valid() else -3.0
 
-var protect_bins: Dictionary = {}
-var protect_signature := Vector3i(-1,-1,-1)
-var mount_bins: Dictionary = {}
-var occlusion_cache: Dictionary = {}
-var mount_signature := Vector4i(-1,-1,-1,-1)
-
-func _refresh_mounts() -> void:
-	# Footprints of gameplay objects for the baked contact shade: [centre, half size, strength].
-	var signature := Vector4i(layout.anchors.size(),layout.finds.size(),layout.obstacles.size(),layout.ledges.size())
-	if signature!=mount_signature:
-		mount_signature = signature
-		mount_bins.clear()
-		occlusion_cache.clear()
-		for anchor in layout.anchors:
-			var d: Vector2 = anchor["dimensions"]
-			_add_mount(anchor["pos"]+Vector2(0,-.2),Vector2(d.x*.5+.85,d.y*.5+.95),.95)
-		for find in layout.finds: _add_mount(find["pos"]+Vector2(0,-.45),Vector2(1.25,1.05),.8)
-		for obstacle in layout.obstacles:
-			var d: Vector2 = obstacle["dimensions"]
-			_add_mount(obstacle["pos"]+Vector2(0,-.2),d*.5+Vector2(.95,.95),1.1)
-		for ledge in layout.ledges:
-			var left: float = ledge["left"]
-			var right: float = ledge["right"]
-			_add_mount(Vector2((left+right)*.5,float(ledge["top"])-.45),Vector2((right-left)*.5+.85,1.2),1.0)
-
-func _add_mount(center: Vector2, size: Vector2, height: float) -> void:
-	var key := int(floor(center.y/4.0))
-	if not mount_bins.has(key): mount_bins[key] = []
-	mount_bins[key].append([center,Vector2(minf(size.x,3.6),minf(size.y,3.6)),height])
-
-func _occlusion(point: Vector2) -> float:
-	# Baked contact shade on the stone itself, offset down-right with the sun,
-	# so objects sit in the rock without separate shadow decals.
-	if occlusion_cache.has(point): return occlusion_cache[point]
-	_refresh_mounts()
-	var shade := 0.0
-	var key := int(floor(point.y/4.0))
-	for bin in range(key-1,key+2):
-		for mount in mount_bins.get(bin,[]):
-			var size: Vector2 = mount[1]
-			var t: float = ((point-mount[0]-Vector2(.3,-.35))/(size*1.15)).length()
-			if t<1.0: shade = maxf(shade,(1.0-smoothstep(.2,1.0,t))*.09*float(mount[2]))
-	occlusion_cache[point] = shade
-	return shade
-func _protected_clearance(point: Vector2) -> float:
-	# Distance from the nearest gameplay object's protected disc, using 4 m
-	# height bins rebuilt only when the generator adds objects.
-	var signature := Vector3i(layout.anchors.size(),layout.finds.size(),layout.obstacles.size())
-	if signature!=protect_signature:
-		protect_signature = signature
-		protect_bins.clear()
-		for anchor in layout.anchors: _add_protected(anchor["pos"],grip_clearance(anchor))
-		for find in layout.finds: _add_protected(find["pos"],FIND_CLEARANCE)
-		for obstacle in layout.obstacles: _add_protected(obstacle["pos"],maxf(obstacle["dimensions"].x,obstacle["dimensions"].y)*.6+1.0)
-	var result := INF
-	var key := int(floor(point.y/4.0))
-	for bin in [key-1,key,key+1]:
-		for entry in protect_bins.get(bin,[]):
-			result = minf(result,point.distance_to(entry[0])-float(entry[1]))
-	return result
-
-const FIND_CLEARANCE := 1.05
-
-static func grip_clearance(anchor: Dictionary) -> float:
-	# Stone reaches past the grip's own polygon on every side, while sky can
-	# still open between neighbouring grips.
-	return maxf(1.0,float(anchor["dimensions"].x)*.5+.32)
-
-func _add_protected(center: Vector2, radius: float) -> void:
-	# Radii never exceed 4 m, so neighbouring bins cover every overlap.
-	var key := int(floor(center.y/4.0))
-	if not protect_bins.has(key): protect_bins[key] = []
-	protect_bins[key].append([center,minf(radius,3.9)])
+func vertex(point: Vector2) -> Vector3:
+	return Vector3(point.x,point.y,wall_depth(point))
 
 func surface_normal(point: Vector2) -> Vector3:
-	if not normals.has(point):
-		var dx := (_depth(point+Vector2(.08,0))-_depth(point-Vector2(.08,0)))/.16
-		var dy := (_depth(point+Vector2(0,.08))-_depth(point-Vector2(0,.08)))/.16
-		normals[point] = Vector3(-dx,-dy,1).normalized()
-	return normals[point]
+	var hit := surface_query(point)
+	return hit.normal if hit.valid() else Vector3.BACK
 
-func _facet_tone(facet: Vector3i) -> Color:
-	# One colour per large facet, sampled at its centre: boulder tone, a soft
-	# crease shade and a random facet offset. Fine contour triangles inside a
-	# facet share it, so the planes read as single low-poly faces.
-	if facet_tones.has(facet): return facet_tones[facet]
-	var keys := _facet_keys(facet.x,facet.y,facet.z)
-	var center := (_lattice_point(keys[0])+_lattice_point(keys[1])+_lattice_point(keys[2]))/3.0
-	var sample := _evaluate(center)
-	var color := zone_color(center.y if layer==0 else 40.0)
-	var shade: float = form_cache.get(center,0.0)
-	var offset := (facet_hash(facet.x*2+facet.z,facet.y,11.0)-.5)*(.06 if layer==0 else .06)+(sample.w-.5)*.10+shade*(.05 if shade<0 else .10)
-	color = color.lightened(offset) if offset>=0 else color.darkened(-offset)
-	# Soft shade in the creases between boulders, never black.
-	if layer==0: color = color.darkened(sample.z*.05)
-	facet_tones[facet] = color
-	return color
+func open_at(point: Vector2) -> bool:
+	return not surface_query(point).valid()
 
-func _emit(surface: SurfaceTool, point: Vector3, color: Color) -> void:
-	emitted_vertices += 1
-	# SurfaceTool colors are already converted by the renderer. Converting them
-	# to linear here a second time makes the whole massif look charcoal green.
-	surface.set_color(color)
-	surface.set_normal(Vector3.BACK)
-	surface.add_vertex(point)
+func support_root_of(object: Dictionary) -> Vector2:
+	return massif.support_root(object) if massif!=null and object.has("id") and object.has("pos") else Vector2.INF
 
-func _edge_cut(a: Vector2, b: Vector2, fa: float, steps: int) -> Vector2:
-	# The boulder field is linear along each straight boulder edge, so a short
-	# bisection lands on the polygonal outline. Endpoints are ordered so both
-	# neighbouring triangles find the identical point.
-	if a.x>b.x or (a.x==b.x and a.y>b.y):
-		var swap := a
-		a = b
-		b = swap
-		fa = _field(a)
-	for step in range(steps):
-		var middle := (a+b)*.5
-		var fm := _field(middle)
-		if (fm>=0)==(fa>=0):
-			a = middle
-			fa = fm
-		else: b = middle
-	return (a+b)*.5
+func socket_margin() -> float:
+	# The host face is already the object's stone: a narrow recess round it.
+	return .22
 
-static func _clip_y(polygon: PackedVector2Array, limit: float, keep_above: bool) -> PackedVector2Array:
-	var result := PackedVector2Array()
-	for i in range(polygon.size()):
-		var a := polygon[i]
-		var b := polygon[(i+1)%polygon.size()]
-		var a_in := a.y>=limit if keep_above else a.y<=limit
-		var b_in := b.y>=limit if keep_above else b.y<=limit
-		if a_in: result.append(a)
-		if a_in!=b_in:
-			var low := a if a.x<b.x or (a.x==b.x and a.y<b.y) else b
-			var high := b if low==a else a
-			result.append(Vector2(lerpf(low.x,high.x,(limit-low.y)/(high.y-low.y)),limit))
-	return result
+func socket_shade() -> float:
+	# Deep enough to read as a niche, never a black ring.
+	return .7
 
-func _lattice_face(surface: SurfaceTool, facet: Vector3i, low_y: float, high_y: float) -> void:
-	# One planar facet of the jittered lattice, clipped to the stone outline
-	# and to the band. Every emitted vertex lies on the facet plane, so the
-	# flat normal gives one clean value per facet.
-	var keys := _facet_keys(facet.x,facet.y,facet.z)
-	var a := _lattice_point(keys[0])
-	var b := _lattice_point(keys[1])
-	var c := _lattice_point(keys[2])
-	if maxf(a.y,maxf(b.y,c.y))<=low_y or minf(a.y,minf(b.y,c.y))>=high_y: return
-	var fa := _field(a)
-	var fb := _field(b)
-	var fc := _field(c)
-	# The field is 1-Lipschitz, so corners this far out or in decide the
-	# whole facet without sampling its interior.
-	var margin := _facet_size()*1.3
-	if maxf(fa,maxf(fb,fc))<-margin: return
-	var depth := Vector3(_facet_depth(keys[0]),_facet_depth(keys[1]),_facet_depth(keys[2]))
-	var color := _facet_tone(facet)
-	var inside := minf(fa,minf(fb,fc))>margin
-	var divisions := 1 if inside else (4 if layer==0 else 2)
-	var steps := 3 if layer==0 else 2
-	var points: Array[Vector2] = []
-	var fields := PackedFloat32Array()
-	for u in range(divisions+1):
-		for v in range(divisions+1-u):
-			var point := a+(b-a)*(float(u)/divisions)+(c-a)*(float(v)/divisions)
-			points.append(point)
-			fields.append(1.0 if inside else _field(point))
-	# Row u of the barycentric grid starts after u rows of shrinking length.
-	for u in range(divisions):
-		for v in range(divisions-u):
-			var i0 := u*(divisions+1)-u*(u-1)/2+v
-			var i1 := (u+1)*(divisions+1)-(u+1)*u/2+v
-			var i2: int = i0+1
-			_clip_emit(surface,[i0,i1,i2],points,fields,steps,a,b,c,depth,color,low_y,high_y)
-			if v<divisions-u-1:
-				_clip_emit(surface,[i1,i1+1,i2],points,fields,steps,a,b,c,depth,color,low_y,high_y)
+func grip_tint() -> float:
+	# A grip is a knob of the host rock: the type shows in its tone, strip
+	# and details, not as a pale plate on the face.
+	return .38
 
-func _clip_emit(surface: SurfaceTool, ids: Array, points: Array[Vector2], fields: PackedFloat32Array, steps: int, a: Vector2, b: Vector2, c: Vector2, depth: Vector3, color: Color, low_y: float, high_y: float) -> void:
-	var f0 := fields[ids[0]]
-	var f1 := fields[ids[1]]
-	var f2 := fields[ids[2]]
-	if maxf(f0,maxf(f1,f2))<0: return
-	var polygon := PackedVector2Array()
-	for k in range(3):
-		var i: int = ids[k]
-		var j: int = ids[(k+1)%3]
-		if fields[i]>=0: polygon.append(points[i])
-		if (fields[i]>=0)!=(fields[j]>=0): polygon.append(_edge_cut(points[i],points[j],fields[i],steps))
-	polygon = _clip_y(polygon,low_y,true)
-	if polygon.size()<3: return
-	polygon = _clip_y(polygon,high_y,false)
-	if polygon.size()<3: return
-	var corners: Array[Vector3] = []
-	var tints: Array[Color] = []
-	for point in polygon:
-		var weights := _barycentric(point,a,b,c)
-		corners.append(Vector3(point.x,point.y,weights.dot(depth)))
-		tints.append(color.darkened(_occlusion(point)) if layer==0 else color)
-	for i in range(1,corners.size()-1):
-		_emit(surface,corners[0],tints[0])
-		_emit(surface,corners[i+1],tints[i+1])
-		_emit(surface,corners[i],tints[i])
+func baked_contact() -> bool:
+	# Contact comes from real shadows and a decal that leaves with its object.
+	return false
 
-func _emit_band(surface: SurfaceTool, low_y: float, high_y: float, low_x: float, high_x: float) -> void:
-	emitted_vertices = 0
-	var size := _facet_size()
-	var row := size*.8660254
-	for j in range(int(floor(low_y/row))-1,int(ceil(high_y/row))+1):
-		for i in range(int(floor((low_x-j*size*.5)/size))-1,int(ceil((high_x-j*size*.5)/size))+1):
-			_lattice_face(surface,Vector3i(i,j,0),low_y,high_y)
-			_lattice_face(surface,Vector3i(i,j,1),low_y,high_y)
+static func grip_clearance(anchor: Dictionary) -> float:
+	# Stone reaches past the grip's own polygon on every side.
+	return maxf(1.0,float(anchor["dimensions"].x)*.5+.32)
+
+func mount_at(point: Vector2, footprint: Vector2, object: Dictionary = {}, standoff: float = GRIP_STANDOFF) -> SurfaceMount:
+	var mount := super.mount_at(point,footprint,object,standoff)
+	var hit := surface_query(point)
+	mount.host_mass = hit.mass_id
+	mount.surface_class = hit.surface_class
+	mount.socket_center = hit.position
+	mount.socket_normal = hit.normal
+	mount.embed_depth = mount.depth
+	mount.contact_bounds = Rect2(point-footprint*.5,footprint)
+	mount.material_profile = hit.material_profile
+	mount.exposure = hit.exposure
+	return mount
+
+func provides_find_shelves() -> bool:
+	return true
+
+func mount_find(find: Dictionary) -> SurfaceMount:
+	# A find stands on its own shelf of the face; without one (the generator
+	# added it after the band was laid out) it keeps the old depth rule.
+	var point: Vector2 = find["pos"]
+	front_band(int(floor(point.y/BAND)))
+	var shelf: RockMassSpec = find_shelves.get(point)
+	if shelf==null: return super.mount_find(find)
+	var wall := wall_depth(point)
+	var mount := mount_at(point,Vector2(.9,.7),{},shelf.front_z+.05-wall)
+	mount.host_mass = shelf.id
+	mount.surface_class = RockMassSpec.TOP
+	return mount
+
+# --- Chunk build --------------------------------------------------------------------
 
 func build_chunk(index: int, parent: Node3D) -> void:
-	_build_skin(index,parent)
-	_build_flanks(index,parent)
+	query_cache.clear()
+	_build_masses(index,parent)
 	_build_decor(index,parent)
 	_build_landmarks(index,parent)
 
-func _landmark_clear(point: Vector2, height: float) -> bool:
-	# The whole set piece, not only its foot, keeps clear of the route and of
-	# every grip, find, obstacle and ledge.
-	if not _decor_route_clear(point,3.2): return false
-	for step in range(4):
-		var probe := point+Vector2(0,height*step/3.0)
-		if _decor_blocked(probe,1.0) or not _decor_route_clear(probe,3.0): return false
-	return true
+func _palette(profile: GripBiomeProfile, height: float, mass: RockMassSpec) -> Dictionary:
+	var rock: Dictionary = profile.rock_material
+	# Each host body has its own shade of the zone's rock.
+	var base := zone_color(height)
+	var shift := (mass.tone-.5)*.14
+	base = base.lightened(shift) if shift>0 else base.darkened(-shift)
+	var facets: Array = []
+	for color in rock["facet_palette"]: facets.append(base.lerp(color,.5))
+	var under: Color = base.lerp(rock["underside_tint"],.42).darkened(.16)
+	return {"base":base,"facets":facets,
+		"top":base.lerp(rock["top_light_tint"],.26).lightened(.06),
+		"side":base.lerp(rock["underside_tint"],.12).darkened(.04),
+		"under":under,
+		"inner":under.darkened(.12)}
 
-func _build_landmarks(index: int, parent: Node3D) -> void:
-	# One large themed piece on top of a side island, by zone.
-	_use_layer(0)
-	front_band(index)
-	var budget := 1 if quality=="battery" else 2
-	var random := layout.rng(index,977)
-	var placed := 0
-	for members in band_islands.get(index,[]):
-		if placed>=budget: break
-		var crown := Vector2(0,-INF)
-		for boulder in members:
-			for corner in boulder["points"]:
-				if corner.y>crown.y: crown = corner
-		var point := crown-Vector2(0,.45)
-		if _field(point)<.1 or _field(point+Vector2(0,.9))>=0: continue
-		var zone := clampi(int(point.y/20.0),0,5)
-		if not _landmark_clear(point,LandmarkVisuals.height_for(zone)): continue
-		var holder := Node3D.new()
-		holder.name = "Крупный элемент_%d" % placed
-		parent.add_child(holder)
-		holder.position = Vector3(point.x,point.y,wall_depth(point)+.05)
-		LandmarkVisuals.build(self,zone,holder,random,quality=="high")
-		placed += 1
+func _cavity(mass: RockMassSpec, point: Vector3) -> float:
+	# Soft shade where another mass stands in front close by: creases, the
+	# foot of a block on the one below, the back of an arch opening.
+	var strength := float(profile_at(point.y).rock_material["cavity_strength"])
+	var shade := 0.0
+	var at := Vector2(point.x,point.y)
+	for other in mass_bins.get(int(floor(point.y/BIN)),[]):
+		if other==mass or other.group==mass.group or other.front_z<point.z+.15: continue
+		var distance: float = other.inside(at)
+		if distance>-.9 and distance<.3: shade = maxf(shade,1.0-clampf(-distance/.9,0,1))
+	if mass.landform=="arch" and mass.inner_edges.size()>0: shade = maxf(shade,.25)
+	return shade*strength
 
-func build_far_band(far: int, band: int, parent: Node3D) -> void:
-	# A distant layer band in its own parallax space (see MountainWorld).
-	_use_layer(far)
-	facet_cells.clear()
-	facet_tones.clear()
+func _build_masses(index: int, parent: Node3D) -> void:
+	# Neighbouring bands first: their masses shade this band's creases.
+	front_band(index-1)
+	front_band(index+1)
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	_emit_band(surface,band*BOULDER_BAND,(band+1)*BOULDER_BAND,-48.0,48.0)
-	if emitted_vertices==0: return
-	surface.index()
-	var instance := MeshInstance3D.new()
-	instance.name = "Дальние скалы_%d_%d" % [far,band]
-	instance.mesh = surface.commit()
-	instance.material_override = far_materials[far-1]
-	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	parent.add_child(instance)
-
-func _build_skin(index: int, parent: Node3D) -> void:
-	_use_layer(0)
-	positions.clear()
-	normals.clear()
-	eval_cache.clear()
-	form_cache.clear()
-	facet_cells.clear()
-	facet_tones.clear()
-	facet_depths.clear()
-	occlusion_cache.clear()
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	surface.set_smooth_group(0)
-	# The first band also closes the rounded feet of the lowest boulders.
-	var low := index*BOULDER_BAND-(8.0 if index==0 else 0.0)
-	_emit_band(surface,low,(index+1)*BOULDER_BAND,-36.0,36.0)
-	if emitted_vertices==0:
-		positions.clear()
-		normals.clear()
-		return
+	var emitted := 0
+	var walls := quality!="battery"
+	for mass in front_band(index):
+		var center: Vector2 = mass.centroid()
+		emitted += RockMassBuilder.emit(surface,mass,_palette(profile_at(center.y),center.y,mass),_cavity,walls)
+	if emitted==0: return
 	var instance := MeshInstance3D.new()
 	instance.name = "Скальный массив_%d" % index
-	surface.index()
-	surface.generate_normals()
-	var rock_mesh := surface.commit()
-	var arrays := rock_mesh.surface_get_arrays(0)
-	var points: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	var smooth_normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-	# Interior normals are generated in native code. At chunk seams both sides
-	# use the same analytic gradient, including the neighbour not loaded yet.
-	for i in range(points.size()):
-		if absf(points[i].y-index*24)<.14 or absf(points[i].y-(index+1)*24)<.14:
-			smooth_normals[i] = surface_normal(Vector2(points[i].x,points[i].y))
-	arrays[Mesh.ARRAY_NORMAL] = smooth_normals
-	rock_mesh.clear_surfaces()
-	rock_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,arrays)
-	instance.mesh = rock_mesh
+	instance.mesh = surface.commit()
 	instance.material_override = rock_material
-	# Keep the surface clean and let anchors, obstacles and loot cast the
-	# readable contact shadows instead of self-shadowing every low-poly face.
-	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Masses shade each other: overhangs, lintels and stacked blocks cast on
+	# the stone behind them. Battery has no shadow map at all.
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if quality!="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(instance)
-	positions.clear()
+
+# --- Ledges -------------------------------------------------------------------------
+
+func build_ledge(object: Dictionary, parent: Node3D) -> void:
+	# The shelf itself is a mass of the face (front_band); here only its
+	# mount and the plants on its walking surface.
+	var left: float = object["left"]
+	var right: float = object["right"]
+	var top: float = object["top"]
+	var center := Vector2((left+right)*.5,top)
+	var mount := mount_at(center-Vector2(0,.2),Vector2(right-left,.4),{},.02)
+	mount.layout_point = center
+	var holder := Node3D.new()
+	holder.name = "Площадка отдыха_%d" % int(roundf(top*10))
+	parent.add_child(holder)
+	holder.position = mount.holder_position()
+	object["visual"] = holder
+	object["mount"] = mount
+	var random := RandomNumberGenerator.new()
+	random.seed = int(absf(center.x*997.0+top*131.0))
+	for tuft in range(2 if quality!="battery" else 1):
+		var x := lerpf(left+.3,right-.3,random.randf())
+		var at := Vector2(x,top-.12)
+		var hit := surface_query(at)
+		if not hit.valid() or hit.surface_class!=RockMassSpec.TOP: continue
+		var grass := Node3D.new()
+		grass.position = Vector3(x-center.x,-.12,hit.position.z+.02-holder.position.z)
+		grass.scale = Vector3.ONE*.7
+		holder.add_child(grass)
+		_build_plant(grass,random,1.0,mount.profile,quality!="battery")
+
+# --- Decor --------------------------------------------------------------------------
 
 func _decor_blocked(point: Vector2, reach: float = 0.0) -> bool:
 	for anchor in layout.nearby_ids(point.y-2.0,point.y+2.0):
@@ -725,29 +653,33 @@ func _decor_route_clear(point: Vector2, radius: float) -> bool:
 	# Keep the line of throws and swings readable: no tall decor on the spine.
 	return absf(point.x-_route_x(point.y))>radius
 
+func _on_face(mass: RockMassSpec, point: Vector2) -> RockSurfaceHit:
+	var hit := surface_query(point)
+	return hit if hit.valid() and hit.mass_id==mass.id else null
+
 func _build_decor(index: int, parent: Node3D) -> void:
-	# Decor follows the boulders: grass on their upper rims and in the creases,
-	# crystal clusters on side rims open to the sky, scree at their feet. Each
-	# piece takes depth and lean from its SurfaceMount and its look from the
-	# place's profile; a cluster grows with the length of open rim it sits on.
-	_use_layer(0)
+	# Decor grows from the faces of the masses: plants and scree from lit
+	# tops (where the face is the frontmost stone), crystals from the sides of
+	# islands and pillars open to the sky, roots or icicles from undersides
+	# over open space. Everything is drawn, nothing collides.
 	var budget := 36 if quality=="high" else 22 if quality=="balanced" else 8
 	var crystal_budget := 5 if quality=="high" else 3 if quality=="balanced" else 1
+	var hanging_budget := 4 if quality=="high" else 2 if quality=="balanced" else 0
 	var detail := quality!="battery"
 	var random := layout.rng(index,902)
 	var candidates: Array = []
-	for boulder in front_band(index):
-		var points: PackedVector2Array = boulder["points"]
-		var edge_normals: PackedVector2Array = boulder["n"]
-		for i in range(points.size()):
-			var outward := -edge_normals[i]
-			var b: Vector2 = points[(i+1)%points.size()]
-			var at: Vector2 = points[i].lerp(b,random.randf_range(.2,.8))
-			var span: float = points[i].distance_to(b)
-			if outward.y>.45: candidates.append([at,"grass",outward,span])
-			elif outward.y<-.55: candidates.append([at,"pebbles",outward,span])
-			elif outward.y>-.25: candidates.append([at,"crystal",outward,span])
-	# Deterministic shuffle so every kind gets its share of the budget.
+	for mass in front_band(index):
+		if mass.role in ["fill","body"]: continue
+		var count: int = mass.outer_contour.size()
+		for i in range(count):
+			var j := (i+1)%count
+			var t := random.randf_range(.25,.75)
+			var rim: Vector2 = mass.outer_contour[i].lerp(mass.outer_contour[j],t)
+			var ring: Vector2 = mass.inner_contour[i].lerp(mass.inner_contour[j],t)
+			var span: float = mass.outer_contour[i].distance_to(mass.outer_contour[j])
+			if mass.top_edges.has(i): candidates.append([mass,rim.lerp(ring,.4),"grass" if random.randf()>.3 else "pebbles",rim,span])
+			elif mass.bottom_edges.has(i) and mass.role!="shelf": candidates.append([mass,rim.lerp(ring,.1),"hanging",rim,span])
+			elif mass.side_edges.has(i) and mass.role in ["island","overhang","arch"]: candidates.append([mass,rim.lerp(ring,.5),"crystal",rim,span])
 	for i in range(candidates.size()-1,0,-1):
 		var j := random.randi_range(0,i)
 		var swap = candidates[i]
@@ -755,117 +687,163 @@ func _build_decor(index: int, parent: Node3D) -> void:
 		candidates[j] = swap
 	var placed := 0
 	var crystals := 0
+	var hanging := 0
 	for candidate in candidates:
 		if placed>=budget: break
-		var outward: Vector2 = candidate[2]
-		var kind: String = candidate[1]
-		var point: Vector2 = candidate[0]-outward*(.22 if kind!="crystal" else .32)
-		var sample := _evaluate(point)
-		if sample.x<.08: continue
-		var open := _field(point+outward*.75)<0
+		var mass: RockMassSpec = candidate[0]
+		var point: Vector2 = candidate[1]
+		var kind: String = candidate[2]
+		var rim: Vector2 = candidate[3]
+		var hit := _on_face(mass,point)
+		if hit==null: continue
+		var outward := (rim-point).normalized()
+		var open := open_at(rim+outward*.4)
 		var profile := profile_at(point.y)
 		match kind:
 			"grass":
-				if not open and sample.z<.35: continue
-				if not _decor_route_clear(point,.9) or _decor_blocked(point): continue
+				if not open or not _decor_route_clear(point,.9) or _decor_blocked(point): continue
 			"crystal":
-				if not open or crystals>=crystal_budget: continue
-				if not _decor_route_clear(point,2.4) or _decor_blocked(point,.7): continue
+				if not open or crystals>=crystal_budget or not _decor_route_clear(point,2.4) or _decor_blocked(point,.7): continue
 				crystals += 1
+			"hanging":
+				if not open or hanging>=hanging_budget or not _decor_route_clear(point,1.6) or _decor_blocked(point,.4): continue
+				if float(profile.weathering_rules["snow"])<.5 and float(profile.weathering_rules["moss"])<.3: continue
+				hanging += 1
 			_:
-				if _decor_blocked(point): continue
-		var mount := mount_at(point,Vector2(.6,.3))
+				if not open or not _decor_route_clear(point,.6) or _decor_blocked(point): continue
 		var holder := Node3D.new()
 		holder.name = "Процедурный декор_%d" % placed
 		parent.add_child(holder)
-		# Sit exactly on the facet plane and lean with the rim.
-		holder.position = Vector3(point.x,point.y,mount.wall_z()+.02)
-		holder.rotation.x = -clampf(mount.normal.y,-.4,.4)*.6
-		var rim := clampf(float(candidate[3])/2.2,.8,1.4)
+		holder.position = hit.position+Vector3(0,0,.02)
+		# Grow along the face: lean back with its slope, out with its side.
+		holder.rotation.x = -clampf(hit.normal.y,-.6,.6)*.5
+		var size := clampf(float(candidate[4])/2.4,.8,1.25)
 		match kind:
 			"crystal":
-				holder.rotation.z = clampf(-outward.x*.3,-.3,.3)
+				holder.rotation.z = clampf(-outward.x*.4,-.4,.4)
 				_build_crystal(holder,random,detail,random.randi_range(3,6) if quality=="high" else random.randi_range(3,4),profile)
+				_decor_shade(holder,Vector2(1.3,.6),.18)
 			"grass":
 				holder.rotation.z = clampf(-outward.x*.5,-.5,.5)
-				var plants: Dictionary = profile.vegetation_set
-				holder.scale = Vector3.ONE*random.randf_range(1.2,1.5)*rim*(1.0 if plants["grass"] else .7)
-				_build_grass(holder,random,quality=="high",rim,profile,detail)
+				_build_plant(holder,random,size,profile,detail)
+			"hanging":
+				holder.position = Vector3(rim.x,rim.y,mass.z_rim+.05)
+				if float(profile.weathering_rules["snow"])>=.5: _icicles(holder,.06,clampf(float(candidate[4])*.4,.6,1.4),int(absf(rim.x*31.0+rim.y*17.0)))
+				else: _build_roots(holder,random,profile,size)
 			_:
-				# Scree: larger stones at the foot, smaller ones down the slope.
-				_build_pebbles(holder,random,zone_color(point.y),quality=="high")
-				var below := point+mount.downhill()*.55
-				if detail and _field(below)>.08 and not _decor_blocked(below):
-					var tail := Node3D.new()
-					tail.name = "Осыпь"
-					tail.position = Vector3(below.x-point.x,below.y-point.y,wall_depth(below)-holder.position.z)
-					tail.scale = Vector3.ONE*.6
-					holder.add_child(tail)
-					_build_pebbles(tail,random,zone_color(below.y),false)
+				_build_pebbles(holder,random,zone_color(point.y).darkened(.04),quality=="high")
+				_decor_shade(holder,Vector2(1.1,.45),.14)
 		placed += 1
 
-func _build_flanks(index: int, parent: Node3D) -> void:
-	# Side faces of the macro forms: where a boulder's edge is the outline of
-	# the massif against open sky, a wall of the same stone runs from the
-	# skin's rim back into the mountain, so a mass reads by its thickness and
-	# not only by facet tone. Upper flanks are warmer, lower ones cool and dark.
-	# Every preset builds the same silhouette; only high casts its shadows.
-	_use_layer(0)
-	var low := index*BOULDER_BAND
-	var high := low+BOULDER_BAND
-	var points := PackedVector3Array()
-	var colors := PackedColorArray()
-	var cool: Color = profile_at(low+12.0).rock_palette["cool"]
-	for boulder in front_band(index):
-		var hull: PackedVector2Array = boulder["points"]
-		var edge_normals: PackedVector2Array = boulder["n"]
-		for i in range(hull.size()):
-			var a := hull[i]
-			var b := hull[(i+1)%hull.size()]
-			var outward := -edge_normals[i]
-			var steps := maxi(1,int(ceil(a.distance_to(b)/.6)))
-			for step in range(steps):
-				var p0 := a.lerp(b,float(step)/steps)
-				var p1 := a.lerp(b,float(step+1)/steps)
-				var middle := (p0+p1)*.5
-				if middle.y<low or middle.y>=high: continue
-				if _field(middle+outward*.3)>=0 or _field(middle-outward*.25)<0: continue
-				var in0 := p0-outward*.04
-				var in1 := p1-outward*.04
-				var z0 := _depth(in0)
-				var z1 := _depth(in1)
-				var flare := outward*.22
-				var back := WALL_BACK-1.2
-				var tone := zone_color(middle.y)
-				if outward.y>.4: tone = tone.lightened(.05)
-				elif outward.y<-.3: tone = tone.lerp(cool,.3).darkened(.22)
-				else: tone = tone.lerp(cool,.2).darkened(.12)
-				var c0 := Vector3(in0.x,in0.y,z0)
-				var c1 := Vector3(in1.x,in1.y,z1)
-				var d0 := Vector3(in0.x+flare.x,in0.y+flare.y,back)
-				var d1 := Vector3(in1.x+flare.x,in1.y+flare.y,back)
-				points.append_array(PackedVector3Array([c0,c1,d1]))
-				colors.append(tone)
-				points.append_array(PackedVector3Array([c0,d1,d0]))
-				colors.append(tone.darkened(.05))
-	if points.is_empty(): return
-	_flat_surface(parent,"Боковые грани_%d" % index,points,colors,flank_material,quality=="high")
+func _decor_shade(holder: Node3D, size: Vector2, opacity: float) -> void:
+	# Decor carries a small soft decal under its root; it leaves with it.
+	_contact_shade(holder,size,-.01,opacity)
 
-func open_at(point: Vector2) -> bool:
-	_use_layer(0)
-	return _field(point)<0
+func _build_plant(holder: Node3D, random: RandomNumberGenerator, rim: float, profile: GripBiomeProfile, detail: bool) -> void:
+	# The plant a profile grows on a lit top: grass in the seam, dry scrub
+	# and now and then a cactus, or a snow cornice where nothing grows.
+	var plants: Dictionary = profile.vegetation_set
+	if not bool(plants["grass"]):
+		_build_snow_cap(holder,random,rim)
+		return
+	if bool(plants.get("dry",false)) and random.randf()<.35:
+		holder.scale = Vector3.ONE*random.randf_range(.8,1.0)
+		_build_cactus(holder,random,profile,quality=="high")
+		return
+	holder.scale = Vector3.ONE*random.randf_range(.9,1.15)*rim*(.85 if bool(plants.get("sparse",false)) else 1.0)
+	_build_grass(holder,random,quality=="high",rim,profile,detail)
 
-func support_root_of(object: Dictionary) -> Vector2:
-	return massif.support_root(object) if object.has("id") and object.has("pos") else Vector2.INF
+# --- Landmarks ----------------------------------------------------------------------
 
-func baked_contact() -> bool:
-	# The skin already carries the contact shade of every object (_occlusion).
+func _landmark_clear(point: Vector2, height: float) -> bool:
+	# The whole set piece, not only its foot, keeps clear of the route and of
+	# every grip, find, obstacle and ledge.
+	if not _decor_route_clear(point,3.2): return false
+	for step in range(4):
+		var probe := point+Vector2(0,height*step/3.0)
+		if _decor_blocked(probe,1.0) or not _decor_route_clear(probe,3.0): return false
 	return true
 
-# --- Gameplay objects ---------------------------------------------------------
+func _build_landmarks(index: int, parent: Node3D) -> void:
+	# One large themed piece standing on the top face of a side island.
+	front_band(index)
+	var budget := 1 if quality=="battery" else 2
+	var random := layout.rng(index,977)
+	var placed := 0
+	for members in band_islands.get(index,[]):
+		if placed>=budget: break
+		var best: RockMassSpec = null
+		for mass in members:
+			if best==null or mass.bounds.end.y>best.bounds.end.y: best = mass
+		if best==null or best.top_edges.is_empty(): continue
+		var edge: int = best.top_edges[0]
+		var rim: Vector2 = best.outer_contour[edge].lerp(best.outer_contour[(edge+1)%best.outer_contour.size()],.5)
+		var ring: Vector2 = best.inner_contour[edge].lerp(best.inner_contour[(edge+1)%best.inner_contour.size()],.5)
+		var point := rim.lerp(ring,.5)
+		var hit := _on_face(best,point)
+		if hit==null: continue
+		var zone := landmark_zone(point)
+		if not _landmark_clear(point,LandmarkVisuals.height_for(zone)): continue
+		var holder := Node3D.new()
+		holder.name = "Крупный элемент_%d" % placed
+		parent.add_child(holder)
+		holder.position = hit.position+Vector3(0,0,.05)
+		LandmarkVisuals.build(self,zone,holder,random,quality=="high")
+		placed += 1
 
+# --- Distant ranges -----------------------------------------------------------------
 
-func wall_depth(point: Vector2) -> float:
-	# Front skin depth at a point, from the same facet planes as the mesh.
-	_use_layer(0)
-	return _depth(point)
+func build_far_band(far: int, band: int, parent: Node3D) -> void:
+	# Mountain ranges in the haze, in their own parallax space (see
+	# MountainWorld): peaks with a lit and a shaded flank, a snow crown where
+	# the profile has snow, and a line of pines in front on the near layer.
+	var random := layout.rng(band*7+far,951)
+	var profile := profile_at(band*BAND*(1.0-float(FAR_LAYERS[far-1]["follow"]))+12.0)
+	var rock: Color = profile.rock_material["base_color"]
+	var tone := rock.lerp(Color("6f8aa6"),.35 if far==1 else .55)
+	var snow := float(profile.weathering_rules["snow"])>.1 or profile.id=="sky"
+	var points := PackedVector3Array()
+	var colors := PackedColorArray()
+	var count := random.randi_range(3,5)
+	for peak in range(count):
+		var x := lerpf(-46.0,46.0,(peak+random.randf_range(.15,.85))/count)
+		var base := band*BAND+random.randf_range(-8.0,10.0)
+		var width := random.randf_range(12.0,22.0)*(1.0+.3*(far-1))
+		var height := random.randf_range(9.0,16.0)*(1.0+.35*(far-1))
+		var z := -random.randf_range(0,3.0)-peak*.15
+		var apex := Vector3(x+random.randf_range(-2,2),base+height,z+2.0)
+		var left := Vector3(x-width*.5,base,z)
+		var right := Vector3(x+width*.5,base,z)
+		var left_shoulder := Vector3(x-width*random.randf_range(.22,.3),base+height*random.randf_range(.5,.62),z+1.0)
+		var right_shoulder := Vector3(x+width*random.randf_range(.18,.28),base+height*random.randf_range(.45,.6),z+1.0)
+		var foot := Vector3(x+random.randf_range(-1.5,1.5),base,z+1.4)
+		var crease := Vector3(apex.x+random.randf_range(-1,1),base+height*.45,z+1.8)
+		for triangle in [[left,left_shoulder,foot],[left_shoulder,crease,foot],[left_shoulder,apex,crease],[foot,crease,right_shoulder],[crease,apex,right_shoulder],[foot,right_shoulder,right]]:
+			var lit: bool = (triangle[0] as Vector3).x+(triangle[1] as Vector3).x+(triangle[2] as Vector3).x<apex.x*3.0
+			var color := tone.lightened(.08) if lit else tone.darkened(.1)
+			if snow and minf((triangle[0] as Vector3).y,minf((triangle[1] as Vector3).y,(triangle[2] as Vector3).y))>base+height*.44: color = Color("e8eef2") if lit else Color("bccbd8")
+			points.append_array(PackedVector3Array(triangle))
+			colors.append(color)
+	if far==1 and bool(profile.vegetation_set["grass"]) and not bool(profile.vegetation_set.get("dry",false)):
+		var pine := Color("2f4a3c").lerp(tone,.25)
+		for tree in range(random.randi_range(6,11)):
+			var foot := Vector3(random.randf_range(-40,40),band*BAND+random.randf_range(0,BAND),2.5)
+			var height := random.randf_range(2.2,3.6)
+			for tier in range(3):
+				var y := foot.y+height*tier*.28
+				var half := height*(.34-tier*.08)
+				points.append_array(PackedVector3Array([Vector3(foot.x-half,y,foot.z),Vector3(foot.x,y+height*.45,foot.z+.2),Vector3(foot.x+half,y,foot.z)]))
+				colors.append(pine.lightened(tier*.03))
+	if points.is_empty(): return
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(0,points.size(),3):
+		for k in range(3):
+			surface.set_color(colors[i/3])
+			surface.add_vertex(points[i+k])
+	var instance := MeshInstance3D.new()
+	instance.name = "Дальние скалы_%d_%d" % [far,band]
+	instance.mesh = surface.commit()
+	instance.material_override = far_materials[far-1]
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(instance)

@@ -347,8 +347,8 @@ func _apply_shadow_preset(preset: String) -> void:
 	match preset:
 		"high":
 			sun_light.shadow_enabled = true
-			# Soft, light shadows: shaded stone keeps its colour, as in the art.
-			sun_light.shadow_opacity = .28
+			# Readable cast shadows between rock masses; ambient fill keeps them blue-grey.
+			sun_light.shadow_opacity = .46
 			sun_light.light_energy = SUN_ENERGY
 			sun_light.shadow_bias = .04
 			sun_light.shadow_normal_bias = 1.2
@@ -367,7 +367,7 @@ func _apply_shadow_preset(preset: String) -> void:
 			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_HARD)
 		_:
 			sun_light.shadow_enabled = true
-			sun_light.shadow_opacity = .27
+			sun_light.shadow_opacity = .44
 			sun_light.light_energy = SUN_ENERGY
 			sun_light.shadow_bias = .04
 			sun_light.shadow_normal_bias = 1.2

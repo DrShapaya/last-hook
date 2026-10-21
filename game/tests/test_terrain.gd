@@ -107,26 +107,25 @@ func run_tests() -> void:
 	var next_arrays := next_mesh.surface_get_arrays(0)
 	var vertices: PackedVector3Array = first_arrays[Mesh.ARRAY_VERTEX]
 	var next_vertices: PackedVector3Array = next_arrays[Mesh.ARRAY_VERTEX]
-	var shared := 0
-	var seam_matches := true
-	# Both chunks clip the same facets at y=24, so every seam vertex of one
-	# chunk exists in the other with the same analytic normal.
-	for a in range(vertices.size()):
-		if not is_equal_approx(vertices[a].y,24.0): continue
-		var b := next_vertices.find(vertices[a])
-		if b>=0:
-			shared += 1
-			seam_matches = seam_matches and first_arrays[Mesh.ARRAY_NORMAL][a].distance_to(next_arrays[Mesh.ARRAY_NORMAL][b])<.0001
-		else: seam_matches = false
-	check(shared>10 and seam_matches,"independently built chunks share the exact same detailed contour positions and seam normals")
+	# Masses are whole solids owned by one chunk each; they cross the chunk
+	# border, so the face continues without a cut seam.
+	var ids := {}
+	var disjoint := true
+	var crossing := 0
+	for band in [0,1]:
+		for mass in renderer.front_band(band):
+			disjoint = disjoint and not ids.has(mass.id)
+			ids[mass.id] = true
+			if mass.bounds.position.y<24.0 and mass.bounds.end.y>24.0: crossing += 1
+	check(disjoint and crossing>3,"every rock mass is built by exactly one chunk and masses run across the chunk border (%d)" % crossing)
 	var low := INF
 	var high := -INF
 	var valid_normals := true
 	for i in range(vertices.size()):
 		low = minf(low,vertices[i].z)
 		high = maxf(high,vertices[i].z)
-		valid_normals = valid_normals and first_arrays[Mesh.ARRAY_NORMAL][i].is_finite() and first_arrays[Mesh.ARRAY_NORMAL][i].z>0
-	check(high-low>1.5 and valid_normals and first_arrays[Mesh.ARRAY_INDEX].size()>3000,"dense rock mesh has real depth, finite outward normals and indexed topology")
+		valid_normals = valid_normals and first_arrays[Mesh.ARRAY_NORMAL][i].is_finite() and first_arrays[Mesh.ARRAY_NORMAL][i].z>-.001
+	check(high-low>1.5 and valid_normals and vertices.size()>1500 and next_vertices.size()>1500,"rock masses have real depth and finite outward normals")
 	mesh_world.free()
 
 	var world := empty_world()
@@ -239,6 +238,6 @@ func run_tests() -> void:
 	game.queue_free()
 	await process_frame
 	var report := FileAccess.open(directory.path_join("terrain-test-report.json"),FileAccess.WRITE)
-	report.store_string(JSON.stringify({"checks":checks,"failures":failures,"passed":failures.is_empty(),"seeds":100,"obstacles":count,"generation_version":MountainWorld.GENERATION_VERSION,"landforms":forms.size(),"front_width_range":[smallest_width,largest_width],"max_narrow_fraction":float(most_narrow_rows)/104,"shared_seam_vertices":shared,"mesh_depth_range":[low,high]},"\t"))
+	report.store_string(JSON.stringify({"checks":checks,"failures":failures,"passed":failures.is_empty(),"seeds":100,"obstacles":count,"generation_version":MountainWorld.GENERATION_VERSION,"landforms":forms.size(),"front_width_range":[smallest_width,largest_width],"max_narrow_fraction":float(most_narrow_rows)/104,"masses_across_seam":crossing,"mesh_depth_range":[low,high]},"\t"))
 	print("TERRAIN_TESTS ",checks," checks, ",failures.size()," failures; obstacles=",count)
 	quit(0 if failures.is_empty() else 1)

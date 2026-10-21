@@ -25,9 +25,13 @@ var weathering_rules: Dictionary = {}
 var light_and_shadow_tuning: Dictionary = {}
 # HUD names per type, with grammatical gender for the lifetime word.
 var type_titles: Array = []
+# Material of the host rock masses: base and facet colours, roughness,
+# strata, cavity shade, tints of lit tops and shaded undersides, weathering.
+var rock_material: Dictionary = {}
 
 const DATA := {
 	"forest":{
+		"rock_material":{"base_color":Color("6f6e66"),"facet_palette":[Color("75746a"),Color("6a6a63"),Color("7a776b")],"roughness":.94,"normal_strength":.45,"strata_scale":.6,"cavity_strength":.32,"top_light_tint":Color("e6dfc4"),"underside_tint":Color("4f5d68"),"weathering_mask":{"moss":.6,"snow":0.0,"dust":0.0},"decor_palette":[Color("6fae3a"),Color("3f3527")]},
 		"title":"Лес и обычная гора",
 		"rock_palette":{"base":Color("6d6d63"),"warm":Color("e4dcc4"),"cool":Color("5d6a70")},
 		"surface_material":[["известняк",Color("cfc7af"),.0],["живой корень",Color("7a5636"),.05],["гибкая ветка",Color("8a6a44"),.05],["мокрая плита",Color("6f8d96"),.75],["кварц",Color("5f8fe0"),.8]],
@@ -41,6 +45,7 @@ const DATA := {
 		"type_titles":[["Камень","m"],["Хрупкий корень","m"],["Упругая ветка","f"],["Скользкая плита","f"],["Кристалл выбора","m"]],
 	},
 	"desert":{
+		"rock_material":{"base_color":Color("86705a"),"facet_palette":[Color("8f775c"),Color("7d6853"),Color("957d60")],"roughness":.97,"normal_strength":.55,"strata_scale":1.4,"cavity_strength":.30,"top_light_tint":Color("f1cf98"),"underside_tint":Color("6a5047"),"weathering_mask":{"moss":0.0,"snow":0.0,"dust":.6},"decor_palette":[Color("a49a55"),Color("5c4630")]},
 		"title":"Пустыня",
 		"rock_palette":{"base":Color("8a7356"),"warm":Color("e2b98a"),"cool":Color("7a6a5c")},
 		"surface_material":[["песчаник",Color("d9a774"),.0],["сухая плита",Color("b5764a"),.0],["натянутая ткань",Color("d8c08f"),.05],["солевой выступ",Color("e9e2d2"),.7],["янтарная жеода",Color("e8913f"),.75]],
@@ -54,6 +59,7 @@ const DATA := {
 		"type_titles":[["Песчаник","m"],["Сухая плита","f"],["Натянутая ткань","f"],["Солевой выступ","m"],["Жеода выбора","f"]],
 	},
 	"snow":{
+		"rock_material":{"base_color":Color("6c727a"),"facet_palette":[Color("737a82"),Color("656b73"),Color("777c84")],"roughness":.85,"normal_strength":.4,"strata_scale":.4,"cavity_strength":.30,"top_light_tint":Color("f2f6f8"),"underside_tint":Color("4a5f78"),"weathering_mask":{"moss":0.0,"snow":.8,"dust":0.0},"decor_palette":[Color("dfeef0"),Color("6c7a82")]},
 		"title":"Снег и лёд",
 		"rock_palette":{"base":Color("6a7076"),"warm":Color("c9ced2"),"cool":Color("566676")},
 		"surface_material":[["холодный гранит",Color("a7adb4"),.05],["замёрзшая ветвь",Color("6c5a4c"),.15],["ледяная корка",Color("bfe2f0"),.6],["прозрачный лёд",Color("a6d2e6"),.9],["ледяной кластер",Color("7fc4ee"),.85]],
@@ -67,6 +73,7 @@ const DATA := {
 		"type_titles":[["Гранит","m"],["Замёрзшая ветвь","f"],["Ледяная корка","f"],["Скользкий лёд","m"],["Ледяной кристалл","m"]],
 	},
 	"ruins":{
+		"rock_material":{"base_color":Color("6e6b66"),"facet_palette":[Color("74706a"),Color("67645f"),Color("78746c")],"roughness":.93,"normal_strength":.5,"strata_scale":.2,"cavity_strength":.34,"top_light_tint":Color("e4d8bc"),"underside_tint":Color("514f5c"),"weathering_mask":{"moss":.3,"snow":0.0,"dust":.3},"decor_palette":[Color("6e9a3e"),Color("4a4036")]},
 		"title":"Руины",
 		"rock_palette":{"base":Color("6e6c67"),"warm":Color("d4c8ae"),"cool":Color("5e6066")},
 		"surface_material":[["тёсаный камень",Color("c9bfa6"),.0],["старая балка",Color("6e5236"),.0],["пружинная скоба",Color("8a8f94"),.4],["полированная плитка",Color("b8c3c4"),.75],["минерал в шве",Color("8a6ad0"),.8]],
@@ -80,6 +87,7 @@ const DATA := {
 		"type_titles":[["Тёсаный камень","m"],["Старая балка","f"],["Пружинная скоба","f"],["Гладкая плитка","f"],["Минерал выбора","m"]],
 	},
 	"sky":{
+		"rock_material":{"base_color":Color("7b7f85"),"facet_palette":[Color("83878c"),Color("74787e"),Color("878a8e")],"roughness":.9,"normal_strength":.35,"strata_scale":.3,"cavity_strength":.26,"top_light_tint":Color("fbf6ea"),"underside_tint":Color("5a6a86"),"weathering_mask":{"moss":.1,"snow":.2,"dust":0.0},"decor_palette":[Color("7fbf8a"),Color("8a8478")]},
 		"title":"Небеса",
 		"rock_palette":{"base":Color("7e8285"),"warm":Color("eae6dc"),"cool":Color("8a96a6")},
 		"surface_material":[["пористый камень",Color("e3dfd4"),.0],["канатный корень",Color("b08a5a"),.05],["подвесной крепёж",Color("c9c2ad"),.2],["облачная плита",Color("dceaf4"),.8],["светящийся кварц",Color("bfe4ff"),.85]],
@@ -113,6 +121,7 @@ static func named(profile_id: String) -> GripBiomeProfile:
 		profile.weathering_rules = data["weathering_rules"]
 		profile.light_and_shadow_tuning = data["light_and_shadow_tuning"]
 		profile.type_titles = data["type_titles"]
+		profile.rock_material = data["rock_material"]
 		_cache[key] = profile
 	return _cache[key]
 

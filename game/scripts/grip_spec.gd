@@ -92,6 +92,88 @@ static func slide_samples(object: Dictionary, count: int = 3) -> Array[Vector2]:
 		result.append(object["pos"]+slide_direction(object)*ICE_SLIDE_MAX*(float(step)/maxf(1,steps)))
 	return result
 
+# --- Contact geometry on the drawn stone ----------------------------------------
+# Shared by the running game (MountainWorld) and the route audit (RouteGraph).
+
+static func outline(object: Dictionary) -> PackedVector2Array:
+	var pos: Vector2 = object["pos"]
+	var result := PackedVector2Array()
+	if object.has("surface") or object.has("polygon"):
+		for point in object["surface"] if object.has("surface") else object["polygon"]: result.append(point+pos)
+	else:
+		var half: Vector2 = object["dimensions"]*.5
+		result = PackedVector2Array([pos-half,pos+Vector2(half.x,-half.y),pos+half,pos+Vector2(-half.x,half.y)])
+	return result
+
+# Moves a point onto the visible grip surface: along the shot direction when
+# it still meets the stone, otherwise to the nearest point of the contour.
+static func surface_point(object: Dictionary, point: Vector2, direction: Vector2 = Vector2.ZERO) -> Vector2:
+	var contour := outline(object)
+	if contour.size()<3 or Geometry2D.is_point_in_polygon(point,contour): return point
+	var best := contour[0]
+	for index in range(contour.size()):
+		var closest := Geometry2D.get_closest_point_to_segment(point,contour[index],contour[(index+1)%contour.size()])
+		if closest.distance_squared_to(point)<best.distance_squared_to(point): best = closest
+	if direction.length_squared()>.000001:
+		# A grazing ray may meet the stone far along its path; then the nearest
+		# point reads better than a hook sliding across the face.
+		var limit := point.distance_to(best)*2+.05
+		var reach := point+direction.normalized()*limit
+		var fraction := RopeSim.hit_polygon(point,reach,contour)
+		if fraction>=0: return point.lerp(reach,fraction)
+	return best
+
+# Contact after holding for `held` seconds: ice walks the hook along the drawn
+# contour in its slide direction, never uphill, and stops in the lowest corner
+# it reaches; every other type keeps the contact. The walk is continuous, so
+# the hook can neither jump across a thin grip nor leave the stone.
+static func contact_after(object: Dictionary, contact: Vector2, held: float) -> Vector2:
+	var remaining := slide_distance(object,held)
+	if remaining<=0: return contact
+	var contour := outline(object)
+	if contour.size()<3: return contact
+	var direction := slide_direction(object)
+	var count := contour.size()
+	var point := surface_point(object,contact)
+	var segment := 0
+	var best := INF
+	for index in range(count):
+		var closest := Geometry2D.get_closest_point_to_segment(point,contour[index],contour[(index+1)%count])
+		if closest.distance_squared_to(point)<best:
+			best = closest.distance_squared_to(point)
+			segment = index
+	# Walk towards whichever end of the segment lies down the slide.
+	var a := contour[segment]
+	var b := contour[(segment+1)%count]
+	var step := 1 if (b-a).dot(direction)>=(a-b).dot(direction) else -1
+	var target := (segment+1)%count if step>0 else segment
+	for guard in range(count+1):
+		var leg := contour[target]-point
+		if leg.length_squared()<.000001:
+			target = posmod(target+step,count)
+			continue
+		var heading := leg.normalized()
+		if heading.dot(direction)<=0 or heading.y>.05: break
+		if leg.length()>=remaining: return point+heading*remaining
+		remaining -= leg.length()
+		point = contour[target]
+		target = posmod(target+step,count)
+	return point
+
+# Every contact an ice grip can really give the hook, for the route audit:
+# each landing spot on the drawn stone (corners and edge midpoints) and where
+# the full slide carries it from there. Generation keeps `slide_samples`, so
+# saved attempts regenerate unchanged.
+static func slide_contacts(object: Dictionary) -> Array[Vector2]:
+	var result: Array[Vector2] = []
+	var contour := outline(object)
+	var full_slide := 10.0 # seconds; well past ICE_SLIDE_MAX
+	for index in range(contour.size()):
+		for landing in [contour[index],(contour[index]+contour[(index+1)%contour.size()])*.5]:
+			result.append(landing)
+			result.append(contact_after(object,landing,full_slide))
+	return result
+
 static func exit_direction(object: Dictionary) -> Vector2:
 	var direction: Vector2 = object.get("exit_dir",Vector2.UP)
 	return direction.normalized() if direction.length_squared()>.0001 else Vector2.UP

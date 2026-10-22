@@ -1,5 +1,6 @@
 {
-  "status": "progression_v13_four_stage_hooks_human_validation_required",
+  "status": "economy_v15_chat4_coins_items_consumables_human_calibration_required",
+  "balance_version": 15,
   "meters_per_unit": 10,
   "zone_units": 20,
   "summit_units": 120,
@@ -8,21 +9,89 @@
   "rope_adjust_speed_units": 2.4,
   "rope_drag_units_per_pixel": 0.025,
   "gravity": 14,
-  "upgrade_prices": [90, 450, 1800, 5400, 9000],
-  "upgrade_weights": [1.0, 1.0, 0.9, 1.1, 0.75, 0.9, 1.0, 1.0],
-  "rope_lengths": [5.5, 6.3, 7.4, 8.7, 10.2, 12.0],
-  "throw_speeds": [16, 20, 25, 30, 35, 40],
-  "slowmo_seconds": [0.7],
-  "impulse_factors": [1.0, 1.08, 1.16, 1.25, 1.35, 1.46],
+  "upgrade_prices": [120, 350, 900, 1900],
+  "upgrade_weights": [1.0, 1.05, 1.0, 1.1, 0.9, 0.95, 1.0, 1.0],
+  "upgrade_gates": [{}, {}, {"acts": 2}, {"acts": 3}, {"summit_or_contracts": 2}],
+  "rope_lengths": [5.5, 6.2, 7.0, 7.8, 8.8],
+  "throw_speeds": [16, 19, 23, 27, 31],
+  "slowmo_seconds": [0.7, 1.0, 1.35, 1.75],
+  "slowmo": {"time_scale": 0.32, "cooldown_seconds": 1.2, "fade_seconds": 0.12},
+  "movement": {"walk_speed": 2.6, "walk_acceleration": 12.0, "walk_deceleration": 16.0, "walk_turn_acceleration": 24.0, "walk_edge_braking": 9.0, "walk_edge_lookahead": 0.6, "landing_friction": 7.0},
+  "camera": {"base_size": 24, "zoom_levels": [1.0, 1.1, 1.2, 1.3], "zoom_smoothing": 4.0, "slowmo_zoom": 1.04, "zoomed_floor_margin": 2.6},
+  "impulse_factors": [1.0, 1.07, 1.14, 1.21, 1.28],
   "hook_radii": [0.32, 0.76, 0.32, 0.76],
   "hook_counts": [1, 1, 2, 2],
   "hook_tips": [1, 3, 1, 3],
   "hook_spread_degrees": 8.0,
-  "tip_prices": [900, 1800, 3000],
-  "capacities": [1, 2, 3, 4, 5, 6],
-  "magnet_radii": [0.0, 0.35, 0.65, 1.0, 1.4, 1.8],
-  "recovery_percents": [30, 43, 56, 69, 82, 95],
+  "hook_prices": [500, 1200, 2200],
+  "capacities": [1, 2, 3, 4, 5],
+  "special_slots": [0, 0, 0, 0, 1],
+  "magnet_coin_radii": [0.0, 0.9, 1.2, 1.5, 1.8],
+  "magnet_radii": [0.0, 0.0, 0.65, 1.0, 1.4],
+  "recovery_percents": [30, 40, 55, 70, 82],
+  "specializations": {
+    "rope": {"track": 0, "unlock_level": 3, "default": "reach", "options": {
+      "reach": {"name": "Дальность", "hint": "+0,5 м каната: открытые пролёты каньона", "rope_bonus": 0.5},
+      "control": {"name": "Контроль", "hint": "Канат меняет длину в 1,6 раза быстрее: трещина и лёд", "reel_speed": 1.6}}},
+    "impulse": {"track": 1, "unlock_level": 3, "default": "power", "options": {
+      "power": {"name": "Сила", "hint": "+6% к отпусканию: пружинные корни", "impulse_bonus": 0.06},
+      "control": {"name": "Контроль", "hint": "Отпускание вниз без прибавки: гладкие плиты", "downward_factor": 1.0}}},
+    "throw": {"track": 6, "unlock_level": 3, "default": "speed", "options": {
+      "speed": {"name": "Скорость", "hint": "Полная скорость крюка: дальние опоры"},
+      "steady": {"name": "Устойчивость", "hint": "Крюк меньше уносит раскачкой: ветровые карманы", "carry": 0.6, "speed_scale": 0.95}}},
+    "magnet": {"track": 4, "unlock_level": 5, "default": "valuable", "options": {
+      "valuable": {"name": "Ценности", "hint": "Магнит сначала тянет ценности"},
+      "relic": {"name": "Реликвии", "hint": "Магнит сначала тянет части комплектов"},
+      "material": {"name": "Материалы", "hint": "Магнит сначала тянет материалы"}}}
+  },
+  "upgrade_uses": [
+    ["База: соседние опоры", "Сухой каньон: длинные пролёты", "Синяя трещина: выбор дальность/контроль", "Внешний ледяной карниз", "Короткие ветки без промежуточной опоры"],
+    ["База: обычный отпуск", "Лесная стена: пружинные корни", "Белая седловина: сила или контроль", "Погребённый караван: окно бури", "Расколотая корона: внешний путь"],
+    ["Одинарный: точный бросок", "Тройной: прощает близкий промах", "Два одинарных: выбор направления", "Два тройных: поздние широкие ветки"],
+    ["1 слот", "Ветки комплектов Ветрового траверса", "Старый пост: комплект + ценность", "Караван: контрактный груз", "Последний слот — материал, реликвия или контракт"],
+    ["Сбор касанием", "Монеты по маршруту", "Обычные находки рядом", "Россыпи монет на ветках", "Приоритет выбранного семейства"],
+    ["30% при падении", "Ранние ошибки дешевле", "Контракты с дорогим грузом", "Обсерватория: рискованная буря", "Ледяная корона: дорогая ошибка"],
+    ["База: быстрый крюк", "Ветровой траверс: дальние опоры", "Выбор скорость/устойчивость", "Ледяные мосты", "Самые дальние ветки"],
+    ["0,7 с решения", "Окна бури и сосульки", "Точный отпуск после скольжения", "Самые узкие окна"]
+  ],
   "loot_values": [40, 75, 130, 220, 360, 560],
+  "location_value_scale": [1.0, 1.15, 1.3],
+  "items": {"rare_multiplier": 1.8, "relic_multiplier": 1.2, "landmark_multiplier": 1.5, "contract_multiplier": 1.3},
+  "coins": {"single": 12, "main_arc": 3, "scatter_count": 3, "scatter_value": 12, "cache_min": 40, "cache_max": 60},
+  "materials": {
+    "fiber": {"name": "Верёвочное волокно", "grade": "common", "craft_value": 70, "sell_value": 35},
+    "silk": {"name": "Лёгкий шёлк", "grade": "light", "craft_value": 90, "sell_value": 45},
+    "sinew": {"name": "Пружинная жила", "grade": "medium", "craft_value": 110, "sell_value": 55},
+    "core": {"name": "Сердце кристалла", "grade": "rare", "craft_value": 350, "sell_value": 180}
+  },
+  "material_drops": [
+    {"main": ["fiber", "silk"], "risk": "sinew"},
+    {"main": ["fiber", "sinew"], "risk": "core"},
+    {"main": ["silk", "sinew"], "risk": "core"}
+  ],
+  "sets": {
+    "forest_relic": {"name": "Метки старого лесника", "landmark": "Сердцевина корня"},
+    "ridge_flag": {"name": "Сигнальные флажки", "landmark": "Компас траверса"},
+    "post_seal": {"name": "Детали подъёмника", "landmark": "Печать поста"},
+    "canyon_bone": {"name": "Части солнечной карты", "landmark": "Солнечный камень"},
+    "caravan_cargo": {"name": "Караванные жетоны", "landmark": "Ключ от отсека"},
+    "observatory_lens": {"name": "Линзы и крепления", "landmark": "Сердце вихря"},
+    "saddle_ice": {"name": "Метки экспедиции", "landmark": "Снежный маяк"},
+    "crevasse_core": {"name": "Ледяные образцы", "landmark": "Осколок жилы"},
+    "crown_signal": {"name": "Детали станции", "landmark": "Фрагмент короны"}
+  },
+  "set_parts": 3,
+  "set_tokens": 1,
+  "contracts": {"gold": [250, 350, 450], "repeat_share": 0.5, "tokens_first": 1},
+  "active_slots": 2,
+  "consumable_stock_max": 2,
+  "starter_stock": {"beacon": 1},
+  "consumables": [
+    {"id": "beacon", "name": "Маяк опор", "category": "route_reading", "duration": 3.0, "charges": 1, "price_gold": 140, "recipe_materials": {"fiber": 2}, "max_per_run": 1, "conflicts": [], "hint": "2 выхода на 3 с"},
+    {"id": "booster", "name": "Импульсный бустер", "category": "control", "duration": 1.4, "charges": 1, "price_gold": 220, "recipe_materials": {"sinew": 2}, "max_per_run": 1, "conflicts": [], "acceleration": 6.0, "max_speed": 13.0, "hint": "разгон к опоре 1,4 с"},
+    {"id": "glide", "name": "Плавное падение", "category": "rescue", "duration": 3.5, "charges": 1, "price_gold": 180, "recipe_materials": {"silk": 2}, "max_per_run": 1, "conflicts": ["tape"], "fall_speed": 2.2, "hint": "медленное падение 3,5 с"},
+    {"id": "tape", "name": "Страховочная лента", "category": "rescue", "duration": 0.0, "charges": 1, "price_gold": 350, "recipe_materials": {"core": 1}, "max_per_run": 1, "conflicts": ["glide"], "hint": "1 срыв: назад к опоре"}
+  ],
   "summit_repeat_bonus": 300,
   "first_summit_gold": 1000,
   "first_summit_diamonds": 20,
@@ -31,8 +100,8 @@
   "new_zone_diamonds": 3,
   "diamond_revive_cost": 3,
   "locations": [
-    {"id": "green_peak", "name": "Зелёная вершина", "price": 0, "currency": "gold", "height_units": 120},
-    {"id": "stone_spires", "name": "Каменные шпили", "price": 8000, "currency": "gold", "height_units": 140},
-    {"id": "sky_city", "name": "Небесный город", "price": 45, "currency": "diamonds", "height_units": 160}
+    {"id": "green_peak", "name": "Живой хребет", "height_units": 120, "unlock": {}},
+    {"id": "stone_spires", "name": "Солнечный разлом", "height_units": 140, "unlock": {"cleared": 0, "gold": 2500}},
+    {"id": "sky_city", "name": "Ледяная корона", "height_units": 160, "unlock": {"cleared": 1, "tokens": 5, "diamonds": 15}}
   ]
 }

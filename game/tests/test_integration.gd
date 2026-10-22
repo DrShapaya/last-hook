@@ -146,7 +146,8 @@ func run_tests() -> void:
 		check(climbed==count,"movement bot climbs the complete primary route below the summit, seed %d (reached %d/%d)" % [seed_number,climbed,count])
 	for side in [-1,1]:
 		game.start_run(false)
-		game._create_world(58273,0,126)
+		# Lateral branches of the v13 massif (saved first-location attempts).
+		game._create_world(58273,0,126,13)
 		var route := route_to_side(game.world,side)
 		var initial: Vector2 = game.world.anchors[0]["pos"]
 		game.sim.pos = initial+Vector2(0,-2.8)
@@ -159,8 +160,7 @@ func run_tests() -> void:
 		var seed_number: int = scenario[0]
 		var kit: int = scenario[1]
 		game.model.profile = GameModel.fresh_profile()
-		game.model.profile["levels"].fill(kit)
-		game.model.profile["levels"][2] = mini(kit,3)
+		game.model.set_levels([kit,kit,mini(kit,3),kit,kit,kit,kit,1])
 		game.start_run(false)
 		game._create_world(seed_number,0,126)
 		game.fire_hook(game.direction_to_target(game.world.anchors[0]["pos"]))
@@ -185,29 +185,29 @@ func run_tests() -> void:
 	game.world.obstacles.clear()
 	game.world.add_anchor(game.sim.pos+Vector2(0,8),0)
 	var long_rope_times: Array[float] = []
-	for rope_level in [1,6]:
-		for force_level in [1,6]:
+	for rope_level in [1,5]:
+		for force_level in [1,5]:
 			game.sim.attached = false
 			game.bolt_active = false
 			game.sim.vel = Vector2.ZERO
-			game.model.profile["levels"] = [rope_level,1,1,1,1,1,force_level]
+			game.model.set_levels([rope_level,1,1,1,1,1,force_level,1])
 			game.fire_hook(Vector2(0,1))
 			game._update_bolt(.01)
-			check(absf(game.bolt_pos.distance_to(game.bolt_origin)-(.16 if force_level==1 else .4))<.001,"projectile speed depends only on force, rope %d force %d" % [rope_level,force_level])
+			check(absf(game.bolt_pos.distance_to(game.bolt_origin)-(.16 if force_level==1 else .31))<.001,"projectile speed depends only on force, rope %d force %d" % [rope_level,force_level])
 			var flight_time := .01
 			for frame in range(100):
 				if not game.bolt_active: break
 				game._update_bolt(.01)
 				flight_time += .01
-			check(game.sim.attached==(rope_level==6),"only rope length determines whether the 80 m grip can be reached, rope %d force %d" % [rope_level,force_level])
-			if rope_level==6: long_rope_times.append(flight_time)
-	check(long_rope_times[0]>long_rope_times[1]*2,"strong throw catches the same far grip over twice as fast as weak throw")
+			check(game.sim.attached==(rope_level==5),"only rope length determines whether the 80 m grip can be reached, rope %d force %d" % [rope_level,force_level])
+			if rope_level==5: long_rope_times.append(flight_time)
+	check(long_rope_times[0]>long_rope_times[1]*1.7,"strong throw (31 against 16) catches the same far grip much faster than the weak throw")
 	game.sim.attached = false
 	game.world.anchors.clear()
 	game.world.layout.bins.clear()
 	var shot_start: Vector2 = game.sim.pos
 	game.world.add_anchor(shot_start+Vector2(0,7),0)
-	game.model.profile["levels"] = [1,1,1,1,1,1,1,1]
+	game.model.set_levels([1,1,1,1,1,1,1,1])
 	game.fire_hook(Vector2(0,1))
 	game._update_bolt(.1)
 	game.sim.pos += Vector2(0,2)
@@ -267,7 +267,7 @@ func run_tests() -> void:
 	game._physics_process(1.0/120)
 	check(game.state=="play","leaving the mountain silhouette into sky does not cause defeat")
 	game.start_run(false)
-	game.model.profile["levels"][3] = 3
+	game.model.set_level(GameModel.BAG,3)
 	game.model.bag = [{"id":-5,"tier":0,"value":40},{"id":-6,"tier":1,"value":200}]
 	game.hud.refresh_bag()
 	check(game.hud.bag_panel.get_child_count()==3,"backpack upgrades expose usable inventory cells, including empty cells")
@@ -296,7 +296,7 @@ func run_tests() -> void:
 	check(flyer!=null and not arriving.reveal,"a collected find flies toward its cell before the cell shows it")
 	if flyer!=null: flyer._process(1.0)
 	check(arriving.reveal and arriving.pop>0 and game.model.bag_value()==340,"the find lands in its cell with a bounce and the bag keeps its value")
-	game.model.profile["levels"][3] = 1
+	game.model.set_level(GameModel.BAG,1)
 	game.state = "play"
 	game.model.bag = [{"id":-7,"tier":0,"value":200}]
 	game.model.picked = [-7]

@@ -33,17 +33,25 @@ func run_tests() -> void:
 	model.discard(0)
 	check(not model.try_pick(cheap),"discarded item cannot be re-collected")
 	check(model.try_pick(expensive),"player can collect another find after discarding")
-	model.profile["levels"][5] = 6
-	check(model.retained(false)==190,"maximum retention is 95 percent")
+	model.set_level(GameModel.RECOVERY,5)
+	check(model.retained(false)==164,"maximum retention is 82 percent, never the whole bag")
 	model.bag.clear()
 	check(model.try_pick({"id":3,"tier":5,"value":560}),"a reached valuable find fits an empty starter bag regardless of its tier")
 	check(not model.try_pick({"id":4,"tier":0,"value":40}),"unrestricted find tiers do not bypass starter capacity")
 	check(model.item_is_rare(expensive) and not model.item_is_rare(cheap),"rare and ordinary items of the same type remain distinguishable")
 	model.profile["gold"] = 1000000
-	model.profile["levels"][0] = 2
+	model.set_level(GameModel.ROPE,2)
 	model.purchase(0)
-	check(model.level(0)==2,"bought gold cannot bypass a higher upgrade zone gate")
-	check(model.reach(20).size()==1,"entering zone 2 opens the next tier immediately")
+	check(model.level(0)==2,"bought gold cannot bypass the first-act gate of level 3")
+	check(model.reach(20).size()==1,"entering zone 2 still pays its first-entry reward")
+	check(model.reach_act(2) and model.purchase(0).begins_with("Улучшено") and model.level(0)==3,"clearing the first act opens level 3")
+	check(model.purchase(0)=="Дойди до 3-го акта" and model.level(0)==3,"level 4 waits for the third act")
+	model.reach_act(3)
+	model.purchase(0)
+	check(model.level(0)==4 and model.purchase(0).begins_with("Вершина или") and model.level(0)==4,"level 5 needs a summit or two contracts")
+	model.profile["completed_contracts"] = ["root_impulse","open_arc"]
+	model.purchase(0)
+	check(model.level(0)==5 and model.cost(0)==0,"two contracts open the last level instead of a summit")
 	model.purchase(GameModel.THROW)
 	check(model.level(GameModel.THROW)==2,"unlocked upgrade can be purchased independently")
 	var after_reach: int = model.profile["gold"]
@@ -70,37 +78,40 @@ func run_tests() -> void:
 	var repeat_wallet: int = model.profile["diamonds"]
 	model.settle("test-run-4","summit",120,true,0)
 	check(model.profile["diamonds"]==repeat_wallet,"reloading a repeat summit result cannot duplicate its diamonds")
-	var renewable := GameModel.new(directory.path_join("renewable-tests.json"))
-	renewable.profile = GameModel.fresh_profile()
-	renewable.reach(120)
-	renewable.settle("first-peak","summit",120,true,0)
-	renewable.profile["gold"] = 10000
-	renewable.purchase_location(1)
-	renewable.settle("second-peak","summit",140,true,1)
-	renewable.profile["diamonds"] -= 4*int(renewable.balance["diamond_revive_cost"])
-	check(renewable.profile["diamonds"]==43,"four continuations reproduce the previous location-currency trap")
-	renewable.settle("recover-diamonds","summit",120,true,0)
-	renewable.purchase_location(2)
-	check(renewable.profile["locations"].has(2) and renewable.profile["diamonds"]==1,"playing an already open summit recovers enough diamonds for the blocked location")
-	renewable.profile["locations"] = [0,1]
-	renewable.profile["diamonds"] = 0
-	for run in range(15): renewable.settle("empty-wallet-%d" % run,"summit",120,true,0)
-	renewable.purchase_location(2)
-	check(renewable.profile["locations"].has(2) and renewable.profile["diamonds"]==0,"even a depleted wallet can earn the entire location price without purchases")
+	# Expeditions open by progress plus a moderate price (balance.json).
+	var unlocks := GameModel.new(directory.path_join("unlock-tests.json"))
+	unlocks.profile = GameModel.fresh_profile()
+	unlocks.profile["gold"] = 100000
+	unlocks.profile["diamonds"] = 100
+	unlocks.purchase_location(1)
+	check(not unlocks.profile["locations"].has(1) and unlocks.profile["gold"]==100000,"the second expedition waits for the first summit")
+	unlocks.settle("first-peak","summit",120,true,0)
+	unlocks.profile["gold"] = 2499
+	unlocks.purchase_location(1)
+	check(not unlocks.profile["locations"].has(1) and unlocks.profile["gold"]==2499,"the second expedition costs 2500 gold, not a partial charge")
+	unlocks.profile["gold"] = 2500
+	unlocks.purchase_location(1)
+	check(unlocks.profile["locations"].has(1) and unlocks.profile["gold"]==0,"first summit plus 2500 gold opens the second expedition")
+	unlocks.purchase_location(2)
+	check(not unlocks.profile["locations"].has(2),"the third expedition waits for the second summit")
+	unlocks.settle("second-peak","summit",140,true,1)
+	var gems: int = unlocks.profile["diamonds"]
+	unlocks.purchase_location(2)
+	check(not unlocks.profile["locations"].has(2) and unlocks.profile["diamonds"]==gems,"the third expedition also needs five mastery tokens")
+	unlocks.profile["mastery_tokens"] = 5
+	unlocks.purchase_location(2)
+	check(unlocks.profile["locations"].has(2) and unlocks.profile["diamonds"]==gems-15 and unlocks.profile["mastery_tokens"]==5,"second summit, 5 tokens and 15 diamonds open the third expedition; tokens are a threshold")
 	model.profile["gold"] = 10000
 	model.purchase_location(1)
-	check(model.profile["locations"].has(1) and int(model.profile["gold"])==2000,"second location is purchased using gold")
-	model.profile["diamonds"] = 45
-	model.purchase_location(2)
-	check(model.profile["locations"].has(2) and int(model.profile["diamonds"])==0,"third location is purchased using diamonds")
+	check(model.profile["locations"].has(1) and int(model.profile["gold"])==7500,"second location is purchased using gold")
 	model.save()
 	var reloaded := GameModel.new(path)
-	check(reloaded.profile["locations"].has(2) and int(reloaded.profile["gold"])==2000,"profile survives save and reload")
+	check(reloaded.profile["locations"].has(1) and int(reloaded.profile["gold"])==7500,"profile survives save and reload")
 	var corrupted := FileAccess.open(path,FileAccess.WRITE)
 	corrupted.store_string("not valid JSON")
 	corrupted.close()
 	var recovered := GameModel.new(path)
-	check(int(recovered.profile["version"])==5 and int(recovered.profile["runs"])>0,"a broken primary save falls back to backup")
+	check(int(recovered.profile["version"])==6 and int(recovered.profile["runs"])>0,"a broken primary save falls back to backup")
 	var sim := RopeSim.new()
 	sim.pos = Vector2(1,2)
 	sim.attach(Vector2(0,6),5.5)
@@ -158,10 +169,12 @@ func run_tests() -> void:
 	legacy_file.store_string(JSON.stringify(legacy))
 	legacy_file.close()
 	var migrated := GameModel.new(legacy_path)
-	check(migrated.profile["levels"]==[4,3,2,5,2,6,4,1] and migrated.profile["gold"]==1789+1500+3015,"legacy saves preserve purchases and return the net price reduction on tips and maximum recovery")
+	# v1 -> v5 returns 1500+3015 (tips, maximum recovery); v5 -> v6 returns
+	# what the new five-level tracks cost less: 970+46+400+4917+0+11959+970.
+	check(migrated.profile["upgrade_levels"]==[4,3,2,5,2,5,4,1] and migrated.profile["gold"]==1789+1500+3015+19262,"legacy saves keep purchases (level 6 becomes 5) and return each net price reduction once")
 	migrated.save()
 	var migrated_again := GameModel.new(legacy_path)
-	check(migrated_again.profile["levels"].size()==8 and migrated_again.level(6)==4 and migrated_again.level(GameModel.SLOWMO)==1,"migration is idempotent across subsequent loads")
+	check(migrated_again.profile["upgrade_levels"].size()==8 and migrated_again.level(6)==4 and migrated_again.level(GameModel.SLOWMO)==1 and migrated_again.profile["gold"]==migrated.profile["gold"],"migration is idempotent across subsequent loads")
 	check(migrated_again.level(2)==2,"a purchased legacy grip retains a useful two-prong hook across reloads")
 	legacy["version"] = 2
 	legacy["levels"] = [6,6,6,6,6,6,6]
@@ -169,53 +182,71 @@ func run_tests() -> void:
 	legacy_file.store_string(JSON.stringify(legacy))
 	legacy_file.close()
 	var maximum_legacy := GameModel.new(legacy_path)
-	check(maximum_legacy.level(2)==4 and maximum_legacy.level(0)==6,"maximum old grip becomes two triple hooks while other maximum upgrades stay unchanged")
+	check(maximum_legacy.level(2)==4 and maximum_legacy.level(0)==5 and maximum_legacy.hook_config()==4,"maximum old grip becomes two triple hooks, other maximum tracks their new maximum")
 	var tips := GameModel.new(directory.path_join("tip-tests.json"))
 	tips.profile = GameModel.fresh_profile()
-	tips.profile["gold"] = 899
+	tips.profile["gold"] = 499
 	tips.purchase(2)
-	check(tips.level(2)==1 and tips.profile["gold"]==899,"tips cannot be purchased with a partial charge")
-	tips.profile["gold"] = 5700
+	check(tips.level(2)==1 and tips.profile["gold"]==499,"tips cannot be purchased with a partial charge")
+	tips.profile["gold"] = 3900
 	var base_radius := tips.hook_radius()
 	tips.purchase(2)
-	check(tips.level(2)==2 and tips.profile["gold"]==4800 and tips.hook_tips()==3 and tips.hook_count()==1 and tips.hook_radius()>base_radius,"triple hook costs 900 gold without a material or zone gate")
+	check(tips.level(2)==2 and tips.profile["gold"]==3400 and tips.hook_tips()==3 and tips.hook_count()==1 and tips.hook_radius()>base_radius,"triple hook costs 500 gold without a material or zone gate")
 	tips.purchase(2)
-	check(tips.level(2)==3 and tips.profile["gold"]==3000 and tips.hook_tips()==1 and tips.hook_count()==2 and tips.hook_radius()<=base_radius,"two single hooks cost another 1800 gold and use a narrow spread")
+	check(tips.level(2)==3 and tips.profile["gold"]==2200 and tips.hook_tips()==1 and tips.hook_count()==2 and tips.hook_radius()<=base_radius,"two single hooks cost another 1200 gold and use a narrow spread")
 	tips.purchase(2)
-	check(tips.level(2)==4 and tips.profile["gold"]==0 and tips.hook_tips()==3 and tips.hook_count()==2,"two triple hooks cost the final 3000 gold")
+	check(tips.level(2)==4 and tips.profile["gold"]==0 and tips.hook_tips()==3 and tips.hook_count()==2,"two triple hooks cost the final 2200 gold")
+	check(tips.set_choice("hook","2").begins_with("Крюки") and tips.hook_count()==1 and tips.hook_tips()==3,"owned hook schemes are exclusive and can be switched between runs")
+	tips.profile["active"] = {"id":"busy"}
+	check(tips.set_choice("hook","4")=="Сначала заверши текущую попытку" and tips.hook_config()==2,"the scheme cannot change during a run")
+	tips.profile["active"] = {}
+	tips.set_choice("hook","4")
 	tips.purchase(2)
 	check(tips.level(2)==4 and tips.cost(2)==0,"four is the hard upgrade cap")
 	var saved_tips := GameModel.new(tips.save_path)
 	check(saved_tips.level(2)==4 and saved_tips.hook_count()==2 and saved_tips.hook_tips()==3 and saved_tips.profile["gold"]==0,"hook configuration and prices survive a profile reload")
 	model.profile = GameModel.fresh_profile()
-	model.profile["levels"][0] = 6
-	check(model.shot_range()==12 and model.value("throw_speeds",6)==16,"long rope immediately extends reach without changing throwing speed")
-	model.profile["levels"] = [1,1,1,1,1,1,6,1]
-	check(model.shot_range()==5.5 and model.value("rope_lengths",0)==5.5 and model.value("throw_speeds",6)==40,"stronger throw accelerates the projectile while respecting the short rope")
-	model.profile["levels"][0] = 6
-	check(model.shot_range()==12 and model.value("throw_speeds",6)==40,"long rope and strong throw combine independent reach and speed")
-	model.profile["levels"] = [1,1,1,1,1,1,1,1]
-	check(model.shot_range()==5.5 and model.value("throw_speeds",6)==16,"weak throw and short rope retain their separate base values")
+	model.set_level(GameModel.ROPE,5)
+	check(is_equal_approx(model.shot_range(),9.3) and model.throw_speed()==16,"long rope (with its default reach profile) extends reach without changing throwing speed")
+	model.set_choice("rope","control")
+	check(is_equal_approx(model.shot_range(),8.8) and is_equal_approx(model.reel_speed_scale(),1.6),"the rope control profile trades the extra reach for faster length changes")
+	model.set_levels([1,1,1,1,1,1,5,1])
+	check(model.shot_range()==5.5 and model.value("rope_lengths",0)==5.5 and model.throw_speed()==31,"stronger throw accelerates the projectile while respecting the short rope")
+	model.set_choice("throw","steady")
+	check(is_equal_approx(model.throw_speed(),31*.95) and is_equal_approx(model.throw_carry(),.6),"the steady throw keeps less of the hero's swing")
+	model.set_choice("throw","speed")
+	model.set_level(GameModel.ROPE,5)
+	check(model.shot_range()==8.8 and model.throw_speed()==31,"long rope and strong throw combine independent reach and speed")
+	model.set_levels([1,1,1,1,1,1,1,1])
+	check(model.shot_range()==5.5 and model.throw_speed()==16 and is_equal_approx(model.reel_speed_scale(),1.0),"weak throw and short rope retain their separate base values; profiles need their level")
+	model.set_level(GameModel.IMPULSE,3)
+	check(is_equal_approx(model.impulse_factor(Vector2(0,1)),1.20) and is_equal_approx(model.impulse_factor(Vector2(0,-1)),1.20),"impulse power adds to every release")
+	model.set_choice("impulse","control")
+	check(is_equal_approx(model.impulse_factor(Vector2(0,1)),1.14) and is_equal_approx(model.impulse_factor(Vector2(0,-1)),1.0),"impulse control adds nothing to a falling release")
+	model.set_levels([1,1,1,1,1,1,1,1])
 	model.learn_control("aim")
 	model.learn_control("aim")
 	model.save()
 	var lessons := GameModel.new(model.save_path)
 	check(lessons.profile["learned_controls"]==["aim"],"completed lessons persist once without repeating across runs")
 	model.profile["reached_zones"] = 2
-	model.profile["gold"] = 90
+	model.profile["gold"] = 120
 	check(model.recommended_upgrade()==0,"result can point a new player to an affordable unlocked rope upgrade")
 	model.profile["reached_zones"] = 1
 	model.purchase(0)
 	check(model.level(0)==2 and model.profile["gold"]==0,"gold from early failed attempts can buy the first upgrade before reaching 200 m")
 	model.profile["gold"] = 1000
+	model.profile["reached_acts"] = 1
+	model.set_level(GameModel.ROPE,2)
 	model.purchase(0)
-	check(model.level(0)==2 and model.profile["gold"]==1000,"higher upgrades still require their mountain zone")
+	check(model.level(0)==2 and model.profile["gold"]==1000,"higher upgrades still require their act")
 	model.profile["gold"] = 100000
-	model.profile["reached_zones"] = 6
+	model.profile["reached_acts"] = 3
 	model.profile["active"] = {"id":"pending"}
-	var before_levels: Array = model.profile["levels"].duplicate()
+	var before_levels: Array = model.profile["upgrade_levels"].duplicate()
 	model.purchase(1)
-	check(model.profile["levels"]==before_levels and model.profile["gold"]==100000,"an active saved run cannot buy upgrades through the model")
+	check(model.profile["upgrade_levels"]==before_levels and model.profile["gold"]==100000,"an active saved run cannot buy upgrades through the model")
+	model.profile["active"] = {}
 	var descending := RopeSim.new()
 	descending.pos = Vector2(0,40)
 	descending.flight_peak = 40
@@ -226,26 +257,22 @@ func run_tests() -> void:
 	check(descending.fallen()==20,"successive lower catches preserve historical height telemetry")
 	descending.land(18)
 	check(descending.fallen()>20,"landing preserves historical fall telemetry without defining defeat")
-	# Release slow motion is a profile track read from balance.json.
+	# Release slow motion: four levels read from balance.json.
 	var slowmo := GameModel.new(directory.path_join("slowmo-tests.json"))
 	slowmo.profile = GameModel.fresh_profile()
-	check(slowmo.max_level(GameModel.SLOWMO)==slowmo.balance["slowmo_seconds"].size() and is_equal_approx(slowmo.slowmo_seconds(),float(slowmo.balance["slowmo_seconds"][0])),"slow motion starts at the first duration listed in the balance")
-	if slowmo.max_level(GameModel.SLOWMO)==1:
-		slowmo.profile["gold"] = 100000
-		slowmo.profile["reached_zones"] = 6
-		check(slowmo.purchase(GameModel.SLOWMO)=="Уже максимальный уровень" and slowmo.profile["gold"]==100000 and slowmo.recommended_upgrade()!=GameModel.SLOWMO,"a single listed duration keeps slow motion off sale")
-	# A longer track (as balance.json may list later) is bought and saved like any upgrade.
-	slowmo.balance["slowmo_seconds"] = [.7,.85,1.0]
+	check(slowmo.max_level(GameModel.SLOWMO)==4 and is_equal_approx(slowmo.slowmo_seconds(),.7),"slow motion has four levels starting at 0,7 s")
 	slowmo.profile["gold"] = 100000
-	slowmo.profile["reached_zones"] = 6
+	slowmo.profile["reached_acts"] = 3
 	var slowmo_price := slowmo.cost(GameModel.SLOWMO)
 	slowmo.purchase(GameModel.SLOWMO)
-	check(slowmo.level(GameModel.SLOWMO)==2 and is_equal_approx(slowmo.slowmo_seconds(),.85) and slowmo.profile["gold"]==100000-slowmo_price,"buying slow motion raises its duration for the next release")
+	check(slowmo.level(GameModel.SLOWMO)==2 and is_equal_approx(slowmo.slowmo_seconds(),1.0) and slowmo.profile["gold"]==100000-slowmo_price and slowmo_price==120,"buying slow motion raises its duration for the next release")
 	var slowmo_saved: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(slowmo.save_path))
-	check(int(slowmo_saved["levels"][GameModel.SLOWMO])==2,"purchased slow motion is written to the profile")
+	check(int(slowmo_saved["upgrade_levels"][GameModel.SLOWMO])==2,"purchased slow motion is written to the profile")
 	slowmo.purchase(GameModel.SLOWMO)
+	check(slowmo.level(GameModel.SLOWMO)==3 and is_equal_approx(slowmo.slowmo_seconds(),1.35),"the third level gives 1,35 s")
+	slowmo.profile["summit_cleared"] = true
 	slowmo.purchase(GameModel.SLOWMO)
-	check(slowmo.level(GameModel.SLOWMO)==3 and slowmo.cost(GameModel.SLOWMO)==0,"slow motion stops at the last listed duration")
+	check(slowmo.level(GameModel.SLOWMO)==4 and is_equal_approx(slowmo.slowmo_seconds(),1.75) and slowmo.cost(GameModel.SLOWMO)==0,"slow motion stops at 1,75 s")
 	var report := {"checks":checks,"failures":failures,"passed":failures.is_empty(),"engine":Engine.get_version_info()["string"]}
 	var output := FileAccess.open(directory.path_join("rules-test-report.json"),FileAccess.WRITE)
 	output.store_string(JSON.stringify(report,"\t"))

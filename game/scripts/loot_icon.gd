@@ -8,7 +8,13 @@ extends RefCounted
 
 const RARITY := [Color("e0a83a"),Color("e8833a"),Color("e9bf4f"),Color("6fc6e8"),Color("a98fdc"),Color("f3d478")]
 
+const MATERIAL_COLORS := {"fiber":Color("c9a46a"),"silk":Color("e9e4f2"),"sinew":Color("7fc48a"),"core":Color("8fd8ee")}
+
 static func rarity_color(item: Dictionary) -> Color:
+	match str(item.get("family","")):
+		"material": return MATERIAL_COLORS.get(str(item.get("set_id","")),Color("c9a46a"))
+		"contract": return Color("ff9d5c")
+		"relic": return Color("d8c27a")
 	return RARITY[clampi(int(item.get("tier",0)),0,5)]
 
 static func draw(ci: CanvasItem, item: Dictionary, origin: Vector2, size: float, time: float = 0.0, rotation: float = 0.0) -> void:
@@ -27,6 +33,7 @@ static func draw(ci: CanvasItem, item: Dictionary, origin: Vector2, size: float,
 		"idol": _idol(ci,time)
 		"star": _star(ci,time)
 		"crystal": _crystal(ci)
+		"material": _material(ci,MATERIAL_COLORS.get(str(item.get("set_id","")),Color("c9a46a")))
 		_: _relic(ci)
 	ci.draw_set_transform(Vector2.ZERO,0,Vector2.ONE)
 
@@ -121,6 +128,14 @@ static func _crystal(ci: CanvasItem) -> void:
 	poly(ci,[Vector2(1,-18),Vector2(8,-6),Vector2(1,-3)],Color("e6f8ff"))
 	poly(ci,[Vector2(7,15),Vector2(8,-1),Vector2(13,-5),Vector2(15,3),Vector2(13,15)],Color("5bb4e2"))
 	poly(ci,[Vector2(8,-1),Vector2(13,-5),Vector2(13,15),Vector2(8,15)],Color("9fe0f6"))
+
+# A tied bundle: regional material for the consumable recipes.
+static func _material(ci: CanvasItem, color: Color) -> void:
+	poly(ci,[Vector2(-14,-6),Vector2(-4,-15),Vector2(12,-10),Vector2(15,4),Vector2(5,15),Vector2(-11,11)],color.darkened(.35))
+	poly(ci,[Vector2(-14,-6),Vector2(-4,-15),Vector2(12,-10),Vector2(2,-2)],color.lightened(.15))
+	poly(ci,[Vector2(2,-2),Vector2(12,-10),Vector2(15,4),Vector2(5,15)],color)
+	ci.draw_line(Vector2(-9,-12),Vector2(9,12),Color("5a3b1e"),3.0,true)
+	ci.draw_line(Vector2(-12,2),Vector2(13,-3),Color("5a3b1e"),3.0,true)
 
 static func _relic(ci: CanvasItem) -> void:
 	poly(ci,[Vector2(-12,-15),Vector2(10,-16),Vector2(13,14),Vector2(-11,16)],Color("8a7f68"))

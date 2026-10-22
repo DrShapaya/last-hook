@@ -39,7 +39,7 @@ func build_pause() -> void:
 	var bag_height := 64.0+maxf(1,rows)*42+(10 if rows>0 else 16)
 	var bag := slab(self,Vector2(bag_x,bag_y),Vector2(bag_width,bag_height))
 	text(bag,"Рюкзак",Vector2(20,16),Vector2(120,26),18,INK,"display")
-	text(bag,"%d из %d" % [rows,model.level(3)],Vector2(106,19),Vector2(120,22),14,INK_SOFT)
+	text(bag,"%d из %d" % [rows,model.bag_capacity()],Vector2(106,19),Vector2(120,22),14,INK_SOFT)
 	var total := str(model.bag_value())
 	var total_width: float = hud.heading_font.get_string_size(total,HORIZONTAL_ALIGNMENT_LEFT,-1,18).x
 	coin_amount(bag,model.bag_value(),Vector2(bag_width-20-total_width-27,16),18)
@@ -57,7 +57,7 @@ func build_pause() -> void:
 			slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			bag.add_child(slot)
 			text(bag,GameModel.loot_name(item),Vector2(68,row_y+6),Vector2(bag_width-200,24),15,INK)
-			if slot.rare: text(bag,"редкая",Vector2(bag_width-188,row_y+8),Vector2(70,20),12,COIN,"strong")
+			if slot.rare or str(item.get("family","valuable"))!="valuable": text(bag,ItemCatalog.family_name(item),Vector2(bag_width-188,row_y+8),Vector2(76,20),12,COIN,"strong")
 			var value := text(bag,str(int(item["value"])),Vector2(bag_width-112,row_y+5),Vector2(92,26),17,INK,"display")
 			value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	var actions_y := 300.0 if landscape else bag_y+bag_height+22
@@ -67,6 +67,19 @@ func build_pause() -> void:
 	if landscape:
 		var help := "Стик задаёт направление, отпускание — бросок или отцепление. Канат: держи строго вверх или вниз 0,28 секунды." if hud.touch_controls_hint else "A / D — раскачка, W / S — длина каната.\nПробел — отцепиться, ЛКМ — следующий бросок."
 		paragraph(self,help,Vector2(bag_x,bag_y+bag_height+18),Vector2(bag_width,48),13)
+
+# Sets, landmarks, materials, tokens and spent items: what changed beyond gold.
+static func progress_line(result: Dictionary) -> String:
+	var parts: Array = []
+	for entry in result.get("sets",[]):
+		parts.append(("Комплект собран: %s" if entry.get("completed",false) else "%s %d/3") % ([entry["name"]] if entry.get("completed",false) else [entry["name"],int(entry["parts"])]))
+	for id in result.get("landmarks",[]): parts.append("ориентир: "+str(ItemCatalog.balance()["sets"].get(id,{}).get("landmark",id)))
+	var materials: Dictionary = result.get("materials",{})
+	for id in materials.keys(): parts.append("%s +%d" % [ItemCatalog.material_name(id),int(materials[id])])
+	if int(result.get("tokens",0))>0: parts.append("жетоны мастерства +%d" % int(result["tokens"]))
+	var spent: Array = result.get("spent",[])
+	if not spent.is_empty(): parts.append("использовано: "+", ".join(spent.map(func(id): return str(ItemCatalog.consumable(str(id)).get("name",id)))))
+	return " · ".join(parts) if not parts.is_empty() else "Комплекты, материалы и контракты — на боковых ветках."
 
 func build_revive(reason: String) -> void:
 	var available: bool = game.revive_available()
@@ -124,31 +137,36 @@ func build_result(result: Dictionary) -> void:
 	var right_x := 556.0 if landscape else 28.0
 	var right_y := 136.0 if landscape else 392.0
 	var right_width := 496.0 if landscape else 484.0
-	var panel_height := 236.0 if not practice else 150.0
+	var panel_height := 312.0 if not practice else 150.0
 	var reward := slab(self,Vector2(right_x,right_y),Vector2(right_width,panel_height))
 	if practice:
 		text(reward,"Попробуй ещё одну дугу",Vector2(20,18),Vector2(right_width-40,30),22,INK,"display")
 		paragraph(reward,"Пройди увереннее, сохрани скорость или забери находку на боковом пути. Кошелёк и снаряжение не изменились.",Vector2(20,58),Vector2(right_width-40,72),15)
 	else:
 		text(reward,"Награда",Vector2(20,16),Vector2(200,26),18,INK,"display")
-		var rows := [["За высоту",int(result.get("height",0))],["Находки из рюкзака",int(result.get("loot",0))],["Бонус вершины",int(result.get("finish",0))],["Новые зоны, уже на счету",int(result.get("zone_bonus",0))]]
+		var recovery := int(result.get("recovery",100))
+		var loot_title := "Рюкзак продан" if success else "Рюкзак: сохранено %d%%" % recovery
+		var rows := [["За высоту",int(result.get("height",0))],[loot_title,int(result.get("loot",0))],["Бонус вершины",int(result.get("finish",0))],
+			["Контракт выполнен" if result.get("contract_done",false) else "Контракт",int(result.get("contract",0))],
+			["Монеты, уже на счету",int(result.get("coins",0))],["Новые зоны, уже на счету",int(result.get("zone_bonus",0))]]
 		for index in range(rows.size()):
-			var row_y := 50+index*26
+			var row_y := 48+index*24
 			var muted: bool = int(rows[index][1])==0
-			text(reward,rows[index][0],Vector2(20,row_y),Vector2(right_width-140,24),15,INK_FAINT if muted else INK_SOFT)
-			text(reward,"+%d" % rows[index][1],Vector2(right_width-120,row_y),Vector2(100,24),16,INK_FAINT if muted else INK,"display").horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			text(reward,rows[index][0],Vector2(20,row_y),Vector2(right_width-140,22),14,INK_FAINT if muted else INK_SOFT)
+			text(reward,"+%d" % rows[index][1],Vector2(right_width-120,row_y),Vector2(100,22),15,INK_FAINT if muted else INK,"display").horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		paragraph(reward,progress_line(result),Vector2(20,196),Vector2(right_width-40,40),12,MOSS if int(result.get("tokens",0))>0 else INK_SOFT).name = "Progress"
 		var rule := ColorRect.new()
 		rule.color = STONE_LIP
-		rule.position = Vector2(20,160)
+		rule.position = Vector2(20,240)
 		rule.size = Vector2(right_width-40,2)
 		rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		reward.add_child(rule)
-		symbol(reward,12,Vector2(20,176),Vector2(32,32),COIN)
-		text(reward,"+%d" % (int(result.get("total",0))+int(result.get("zone_bonus",0))),Vector2(60,168),Vector2(240,48),36,INK,"display")
+		symbol(reward,12,Vector2(20,256),Vector2(32,32),COIN)
+		text(reward,"+%d" % (int(result.get("total",0))+int(result.get("zone_bonus",0))+int(result.get("coins",0))),Vector2(60,248),Vector2(240,48),36,INK,"display")
 		var gems := int(result.get("diamonds",0))+int(result.get("zone_diamonds",0))
 		if gems>0:
-			symbol(reward,13,Vector2(right_width-118,178),Vector2(28,28),CRYSTAL)
-			text(reward,"+%d" % gems,Vector2(right_width-84,172),Vector2(64,40),28,CRYSTAL,"display")
+			symbol(reward,13,Vector2(right_width-118,258),Vector2(28,28),CRYSTAL)
+			text(reward,"+%d" % gems,Vector2(right_width-84,252),Vector2(64,40),28,CRYSTAL,"display")
 	var action_y := right_y+panel_height+22
 	var main_text := "Повторить тренировку" if practice else "Ещё одна попытка"
 	action(self,main_text,Vector2(right_x,action_y),Vector2(right_width,64),func(): game.start_run(false if practice else game.run_mode=="endless"),"primary").add_theme_font_size_override("font_size",21)

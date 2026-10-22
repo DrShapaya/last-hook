@@ -55,9 +55,24 @@ var reel := 0.0
 # Walking on a platform without a rope. A gesture that walked never throws.
 var walk := 0.0
 var walk_used := false
-const WALK_SPEED := 2.6
-const WALK_ACCELERATION := 14.0
+# Walking tuning comes from balance.json "movement" (see _configure_movement).
+var WALK_SPEED := 2.6
+var walk_acceleration := 12.0
+var walk_deceleration := 16.0
+var walk_turn_acceleration := 24.0
+var walk_edge_braking := 9.0
+var walk_edge_lookahead := .6
+var landing_friction := 7.0
+const EDGE_PROBE := .14
+const EDGE_PROBE_STEP := .04
 var focus_remaining := 0.0
+# Real-time pause after a slow motion window before a release may start the
+# next one, so quick catch/release chains cannot hold the world slowed.
+var focus_cooldown := 0.0
+var focus_duration := 0.0
+var focus_serial := 0
+var focus_blend := 0.0
+var focus_audio: AudioStreamPlayer
 var last_release_reason := ""
 var aim_direction := Vector2.UP
 var elapsed := 0.0
@@ -69,7 +84,15 @@ var camera_y := 7.0
 var camera_x := 0.0
 var camera_dip := 0.0
 const CAMERA_DIP_SHARE := .22
+# Gameplay framing always uses camera_base_size: the danger edge, headroom and
+# fall rules never depend on the zoom setting. Zoom only narrows what is drawn
+# to a window inside that framing (camera_view_offset keeps the hero in it).
+var camera_base_size := 24.0
+var camera_zoom_current := 1.0
+var camera_view_offset := 0.0
 var snapshot_timer := 0.0
+const SNAPSHOT_PERIOD := 3.0
+const COIN_SAVE_DELAY := .5
 var hint_timer := 0.0
 var hint := ""
 var hint_context := ""
@@ -97,11 +120,34 @@ var ads := AdsService.new()
 var ad_revive_run_id := ""
 var ad_revive_authorized := false
 var ad_revive_pending := false
+# Act hazards (v14): a knock has a short grace time; the act is tracked to
+# announce a new one.
+var hazard_cooldown := 0.0
+var current_act := -1
+# The act hazards' own clock: it advances by the simulation step, so slow
+# motion slows storms and icicles together with the hero. run_seconds stays
+# real time for the result screen.
+var hazard_clock := 0.0
+# The grip the hero left last: a branch pocket keeps drifting it in flight.
+var last_anchor_id := -1
+# Chat 4: the active items carried this run ({"id","used"}), the running effect
+# ({"id","remaining","duration"}), the beacon's highlighted exits, the run's
+# contract and the pending full-bag swap.
+var run_items: Array = []
+var item_effect: Dictionary = {}
+var beacon_targets: Array[Vector2] = []
+var run_contract: Dictionary = {}
+var swap_offer: Dictionary = {}
+var swap_declined: Array = []
 
 func _ready() -> void:
 	Engine.max_fps = 60
 	get_tree().auto_accept_quit = false
+	# Android Back walks the menus (section -> main, run -> pause) and only
+	# leaves the game from the main section.
+	get_tree().quit_on_go_back = false
 	model = GameModel.new()
+	_configure_movement()
 	_apply_graphics_quality(str(model.profile.get("graphics_quality","balanced")),false)
 	selected_location = int(model.profile.get("selected_location",0))
 	if not model.profile["active"].is_empty():
@@ -111,7 +157,8 @@ func _ready() -> void:
 	_apply_graphics_quality(str(model.profile.get("graphics_quality","balanced")),false)
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	camera.size = 24
+	camera_base_size = clampf(float(model.camera_setting("base_size",24.0)),8.0,60.0)
+	camera.size = camera_base_size
 	camera.near = .1
 	camera.far = 120
 	add_child(camera)
@@ -119,6 +166,9 @@ func _ready() -> void:
 	audio = AudioStreamPlayer.new()
 	audio.volume_db = -18
 	add_child(audio)
+	focus_audio = AudioStreamPlayer.new()
+	focus_audio.volume_db = -20
+	add_child(focus_audio)
 	hud = GameHud.new()
 	add_child(hud)
 	hud.setup(self)
@@ -149,13 +199,14 @@ func _ready() -> void:
 		preview = true
 		model.profile = GameModel.fresh_profile()
 		if not capture_quality.is_empty(): _apply_graphics_quality(capture_quality,false)
-		model.profile["levels"][2] = capture_tips
+		model.set_level(GameModel.HOOKS,capture_tips)
 		selected_location = capture_location
 		lobby_location = capture_location
 		if capture_screen in ["play","rope","inventory","equipment","flight","slowmo"]:
 			start_run(false)
 			run_seed = capture_seed
 			_create_world(run_seed,selected_location,summit_height+6)
+			run_contract = world.contract_info()
 			var point: Dictionary = world.anchor_by_id(world.main_route[mini(capture_grip,world.main_route.size()-1)])
 			anchor_id = point["id"]
 			sim.pos = point["pos"]+Vector2(2.5 if capture_left else -2.5,-3.5)
@@ -174,18 +225,19 @@ func _ready() -> void:
 				var previous_grip := world.anchor_by_id(world.main_route[route_index])
 				if not previous_grip.get("permanent",true): previous_grip["broken"] = true
 			model.profile["learned_controls"] = ["aim","swing","rope","release"]
-			model.bag = [{"id":-10,"tier":0,"value":40}]
+			model.bag = [ItemCatalog.valuable(-10,0,"root_wall",1)]
 			if capture_screen=="rope":
-				sim.length = model.value("rope_lengths",0)
+				sim.length = model.rope_length()
 				sim.target_length = sim.length
 			elif capture_screen=="inventory":
-				model.profile["levels"][3] = 6
+				model.set_level(GameModel.BAG,5)
 				model.bag.append_array([{"id":-11,"tier":1,"value":75},{"id":-12,"tier":3,"value":220}])
 			hud.refresh_bag()
 			camera_y = sim.pos.y+2.5
 			camera_x = sim.pos.x
 			hint_timer = 0
 			if capture_screen=="equipment":
+				camera_base_size = 9
 				camera.size = 9
 				hud.hide()
 			if capture_screen=="flight":
@@ -195,13 +247,17 @@ func _ready() -> void:
 			if capture_screen=="slowmo":
 				sim.attached = false
 				anchor_id = -1
-				focus_remaining = model.slowmo_seconds()*.6
+				focus_duration = model.slowmo_seconds()
+				focus_remaining = focus_duration*.6
+				focus_blend = 1.0
 		elif capture_screen == "result":
 			state = "result"
 			model.profile["gold"] = 4540
 			model.profile["reached_zones"] = 6
-			model.profile["levels"] = [3,2,2,3,2,2,3,1]
-			hud.show_result({"success":true,"highest":1200,"height":540,"loot":900,"carried":900,"finish":1300,"total":2740,"diamonds":20,"zone_bonus":1800,"first":true,"seconds":214,"shots":51,"catches":43})
+			model.set_levels([3,2,2,3,2,2,3,1])
+			hud.show_result({"success":true,"highest":1200,"height":540,"loot":900,"carried":900,"finish":1300,"contract":250,"contract_done":true,"coins":312,"recovery":100,
+				"sets":[{"id":"forest_relic","name":"Метки старого лесника","parts":3,"completed":true}],"landmarks":["ridge_flag"],"materials":{"silk":1},"tokens":2,"spent":["beacon"],
+				"total":2990,"diamonds":20,"zone_bonus":1800,"first":true,"seconds":214,"shots":51,"catches":43})
 		elif capture_screen in ["practice","practice_result"]:
 			start_practice()
 			var grip := world.anchor_by_id(world.main_route[5])
@@ -220,19 +276,25 @@ func _ready() -> void:
 				finish_run(true)
 		elif capture_screen=="pause_bag":
 			start_run(false)
-			model.profile["levels"][3] = 6
+			model.set_level(GameModel.BAG,5)
 			for tier in range(6): model.bag.append({"id":-tier-1,"tier":tier,"value":int(model.balance["loot_values"][tier]*(1.8 if tier%2==1 else 1.0))})
 			pause_run()
-		elif capture_screen in ["workshop","settings"]:
+		elif capture_screen in ["workshop","settings","supplies"]:
 			model.profile["gold"] = 640
 			model.profile["reached_zones"] = 4
-			model.profile["levels"] = [3,2,2,3,2,2,3,1]
+			model.profile["reached_acts"] = 2
+			model.set_levels([3,2,2,3,2,2,3,1])
+			model.profile["material_wallet"] = {"fiber":3,"silk":1}
+			model.profile["consumable_stock"] = {"beacon":1,"glide":2}
+			model.profile["active_loadout"] = ["beacon","glide"]
+			model.profile["set_parts"] = {"forest_relic":2}
+			hud.equipment_view = "supplies" if capture_screen=="supplies" else "upgrades"
 			show_workshop()
 			if capture_screen=="settings": hud.select_menu("settings")
 		elif capture_screen=="terrain":
 			start_run(false)
 			_create_world(58273,0,126)
-			model.profile["levels"][0] = 6
+			model.set_level(GameModel.ROPE,5)
 			_configure_rope()
 			var obstacle: Dictionary = world.obstacles[0]
 			var center: Vector2 = obstacle["pos"]
@@ -248,6 +310,7 @@ func _ready() -> void:
 			world.update_rope_path(sim)
 			camera_x = center.x
 			camera_y = center.y+1
+			camera_base_size = 16
 			camera.size = 16
 			hint_timer = 0
 			model.profile["learned_controls"] = ["aim","swing","rope","release"]
@@ -412,6 +475,7 @@ func _create_world(seed_number: int, location_number: int, height: float, saved_
 	add_child(explorer)
 	explorer.setup(world,model.hook_tips())
 	explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
+	explorer.set_walk_speed(WALK_SPEED)
 
 func start_run(endless: bool) -> void:
 	if ads.fullscreen: return
@@ -432,6 +496,13 @@ func start_run(endless: bool) -> void:
 	_configure_rope()
 	model.bag = []
 	model.picked = []
+	model.begin_run_ledger(run_id)
+	run_items = model.run_items() if run_mode!="practice" else []
+	item_effect = {}
+	beacon_targets.clear()
+	swap_offer = {}
+	swap_declined = []
+	run_contract = world.contract_info() if run_mode=="summit" else {}
 	anchor_id = -1
 	safe_anchor_id = -1
 	anchor_time = 0
@@ -445,13 +516,19 @@ func start_run(endless: bool) -> void:
 	hook_volley = null
 	volley_primary = 0
 	focus_remaining = 0.0
+	focus_cooldown = 0.0
+	focus_duration = model.slowmo_seconds()
+	focus_blend = 0.0
 	camera_y = 4.8
 	camera_x = 0
 	camera_dip = 0.0
 	_position_camera()
 	state = "play"
 	lobby_location = selected_location
+	current_act = int(world.act_at(sim.pos.y).get("index",-1))
+	hazard_cooldown = 0.0
 	run_seconds = 0
+	hazard_clock = 0.0
 	shots = 0
 	catches = 0
 	failure_reason = ""
@@ -479,8 +556,7 @@ func resume_run() -> void:
 	if snapshot.is_empty():
 		return
 	var saved_version := int(snapshot.get("generation_version",0))
-	var compatible_old := saved_version in [6,7,8,9,10,11,12] and int(snapshot.get("location",0))==0
-	if not compatible_old and saved_version!=MountainWorld.generation_version_for(int(snapshot.get("location",0))):
+	if not MountainWorld.resumable(saved_version,int(snapshot.get("location",0))):
 		# Old contact IDs describe another route: settle its earned rewards once.
 		model.bag = snapshot.get("bag",[]).duplicate(true)
 		settlement = model.settle(snapshot["id"],snapshot.get("mode","summit"),maxf(0,float(snapshot["highest"])-START_Y),false,int(snapshot.get("location",0)))
@@ -504,6 +580,8 @@ func resume_run() -> void:
 	sim.highest = float(snapshot["highest"])
 	sim.flight_peak = float(snapshot["flight_peak"])
 	run_seconds = float(snapshot.get("run_seconds",0))
+	# Saves from before the separate clock ran the hazards on run_seconds.
+	hazard_clock = float(snapshot.get("hazard_clock",run_seconds))
 	shots = int(snapshot.get("shots",0))
 	catches = int(snapshot.get("catches",0))
 	failure_reason = snapshot.get("failure_reason","")
@@ -514,6 +592,8 @@ func resume_run() -> void:
 	anchor_id = int(snapshot["anchor_id"])
 	anchor_time = float(snapshot["anchor_time"])
 	focus_remaining = clampf(float(snapshot.get("focus_remaining",0.0)),0.0,model.slowmo_seconds()) if bool(snapshot.get("focus_active",false)) else 0.0
+	focus_duration = clampf(float(snapshot.get("focus_duration",model.slowmo_seconds())),focus_remaining,model.slowmo_seconds())
+	focus_cooldown = clampf(float(snapshot.get("focus_cooldown",0.0)),0.0,model.slowmo_cooldown())
 	safe_anchor_id = int(snapshot["safe_anchor_id"])
 	safe_position = Vector2(snapshot["safe_x"],snapshot["safe_y"])
 	revive_used = bool(snapshot["revive_used"])
@@ -521,11 +601,27 @@ func resume_run() -> void:
 	ad_revive_run_id = ""
 	model.bag = snapshot["bag"].duplicate(true)
 	model.picked = snapshot["picked"].duplicate()
+	model.begin_run_ledger(run_id)
+	run_items = []
+	for entry in snapshot.get("run_items",[]):
+		if entry is Dictionary and not ItemCatalog.consumable(str(entry.get("id",""))).is_empty():
+			run_items.append({"id":str(entry["id"]),"used":bool(entry.get("used",false))})
+	item_effect = {}
+	var saved_effect = snapshot.get("item_effect",{})
+	if saved_effect is Dictionary and not saved_effect.is_empty() and not ItemCatalog.consumable(str(saved_effect.get("id",""))).is_empty():
+		item_effect = {"id":str(saved_effect["id"]),"remaining":maxf(0,float(saved_effect.get("remaining",0))),"duration":float(saved_effect.get("duration",1))}
+	beacon_targets.clear()
+	swap_offer = {}
+	swap_declined = []
+	run_contract = world.contract_info() if run_mode=="summit" else {}
 	for point in world.anchors:
 		point["broken"] = not snapshot.get("active_reserves",[]).has(point["id"]) if point.get("reserve",false) else snapshot["broken"].has(point["id"])
 		GripSpec.restore(point,int(point["id"])==anchor_id)
 	for find in world.finds:
-		find["picked"] = model.picked.has(find["item"]["id"])
+		find["picked"] = model.picked.has(find["item"]["id"]) or find.get("withdrawn",false)
+	world.restore_hazards(snapshot.get("collapsed_hazards",[]))
+	current_act = int(world.act_at(sim.pos.y).get("index",-1))
+	hazard_cooldown = 0.0
 	if anchor_id>=0:
 		var point := world.anchor_by_id(anchor_id)
 		if not point.is_empty() and not point["broken"]:
@@ -555,7 +651,7 @@ func resume_run() -> void:
 	bolt_direction = Vector2(snapshot.get("bolt_dx",0),snapshot.get("bolt_dy",1))
 	bolt_travel = float(snapshot.get("bolt_travel",0))
 	hook_flight.position = bolt_pos
-	hook_flight.velocity = Vector2(snapshot.get("bolt_vx",bolt_direction.x*model.value("throw_speeds",GameModel.THROW)),snapshot.get("bolt_vy",bolt_direction.y*model.value("throw_speeds",GameModel.THROW)))
+	hook_flight.velocity = Vector2(snapshot.get("bolt_vx",bolt_direction.x*model.throw_speed()),snapshot.get("bolt_vy",bolt_direction.y*model.throw_speed()))
 	hook_flight.age = float(snapshot.get("bolt_age",0))
 	hook_flight.trail = PackedVector2Array([bolt_pos])
 	bolt_returning = bool(snapshot.get("bolt_returning",false)) and not sim.attached and not bolt_active
@@ -618,10 +714,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	if ads.fullscreen: return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			pause_run() if state=="play" else unpause() if state=="pause" else show_menu()
+			if state=="menu":
+				if hud.menu_tab!="expedition": go_back()
+			else:
+				pause_run() if state=="play" else unpause() if state=="pause" else show_menu()
 		elif event.keycode==KEY_SPACE and state=="play":
 			if sim.attached: model.learn_control("release")
 			release_hook(pressed)
+		elif event.keycode in [KEY_1,KEY_2] and state=="play":
+			activate_item(0 if event.keycode==KEY_1 else 1)
 	if state != "play" or preview:
 		return
 	if event is InputEventScreenTouch:
@@ -732,9 +833,20 @@ func _cancel_primary() -> void:
 	touch_controls = {}
 	climb_gesture.reset()
 
+func _configure_movement() -> void:
+	WALK_SPEED = maxf(.5,model.movement("walk_speed",2.6))
+	walk_acceleration = maxf(.5,model.movement("walk_acceleration",12.0))
+	walk_deceleration = maxf(.5,model.movement("walk_deceleration",16.0))
+	walk_turn_acceleration = maxf(.5,model.movement("walk_turn_acceleration",24.0))
+	walk_edge_braking = maxf(.5,model.movement("walk_edge_braking",9.0))
+	walk_edge_lookahead = clampf(model.movement("walk_edge_lookahead",.6),0.0,2.0)
+	landing_friction = maxf(.5,model.movement("landing_friction",7.0))
+	if is_instance_valid(explorer): explorer.set_walk_speed(WALK_SPEED)
+
 func _configure_rope() -> void:
-	sim.maximum_length = model.value("rope_lengths",0)
-	sim.adjust_speed = float(model.balance["rope_adjust_speed_units"])
+	_configure_movement()
+	sim.maximum_length = model.rope_length()
+	sim.adjust_speed = float(model.balance["rope_adjust_speed_units"])*model.reel_speed_scale()
 	sim.fall_speed_limit = float(model.balance["fall_speed_limit_units"])
 	sim.gravity = float(model.balance["gravity"])
 
@@ -762,12 +874,12 @@ func fire_hook(direction: Vector2) -> void:
 	bolt_direction = direction.normalized()
 	bolt_travel = 0
 	bolt_returning = false
-	hook_flight.launch(sim.pos,bolt_direction,model.value("throw_speeds",GameModel.THROW),sim.vel)
+	hook_flight.launch(sim.pos,bolt_direction,model.throw_speed(),throw_carry_velocity())
 	hook_volley = null
 	volley_primary = 0
 	if model.hook_count()==2:
 		hook_volley = HookVolley.new()
-		hook_volley.launch(sim.pos,model.hook_directions(direction),model.value("throw_speeds",GameModel.THROW),sim.vel)
+		hook_volley.launch(sim.pos,model.hook_directions(direction),model.throw_speed(),throw_carry_velocity())
 		_sync_volley()
 	shot_serial += 1
 	_hook_sound("launch")
@@ -775,13 +887,54 @@ func fire_hook(direction: Vector2) -> void:
 func can_walk() -> bool:
 	return sim.grounded and not sim.attached and not bolt_active
 
-func ground_ahead(direction: float) -> bool:
+func ground_ahead(direction: float, distance: float = EDGE_PROBE) -> bool:
 	# A short downward sweep just past the body centre in the walking direction.
-	var probe := sim.pos+Vector2(direction*.14,.04)
+	var probe := sim.pos+Vector2(direction*distance,.04)
 	return bool(world.move_player(probe,probe+Vector2(0,-.5),Vector2(0,-1))["grounded"])
 
+func edge_room(direction: float) -> float:
+	# Free walking distance before the hero reaches the stopping point at the
+	# edge, capped by the look-ahead. Walking speed follows this distance so the
+	# hero brakes into the edge instead of stopping dead on it.
+	var room := 0.0
+	while room<walk_edge_lookahead:
+		if not ground_ahead(direction,EDGE_PROBE+room+EDGE_PROBE_STEP):
+			# Bisect the last interval so the braking curve is continuous.
+			var low := room
+			var high := room+EDGE_PROBE_STEP
+			for iteration in range(4):
+				var middle := (low+high)*.5
+				if ground_ahead(direction,EDGE_PROBE+middle): low = middle
+				else: high = middle
+			return low
+		room += EDGE_PROBE_STEP
+	return walk_edge_lookahead
+
+func walk_velocity(current: float, input: float, step: float) -> float:
+	# Platform walking: eased start, quicker turn, braking stop. Landing momentum
+	# above walking speed keeps the original, softer slide.
+	var target := input*WALK_SPEED
+	if input!=0:
+		if not ground_ahead(signf(input)):
+			# Safety net for steps and odd contours: never walk off a support.
+			if current*input>0 and absf(current)<=WALK_SPEED+.05: return 0.0
+			target = 0.0
+		else:
+			target = signf(input)*minf(absf(target),sqrt(2*walk_edge_braking*edge_room(signf(input))))
+	var rate := landing_friction
+	if absf(current)<=WALK_SPEED+.05 or input!=0:
+		if target==0.0: rate = walk_deceleration if absf(current)<=WALK_SPEED+.05 else landing_friction
+		elif current*target<0: rate = walk_turn_acceleration
+		elif absf(target)<absf(current): rate = maxf(walk_deceleration,walk_edge_braking*2)
+		else: rate = walk_acceleration
+	return move_toward(current,target,step*rate)
+
+# The share of the hero's motion a throw inherits ("steady" throw keeps less).
+func throw_carry_velocity() -> Vector2:
+	return sim.vel*model.throw_carry()
+
 func direction_to_target(target: Vector2) -> Vector2:
-	return HookFlight.aim_solution(sim.pos,target,model.value("throw_speeds",GameModel.THROW),sim.vel)["direction"]
+	return HookFlight.aim_solution(sim.pos,target,model.throw_speed(),throw_carry_velocity())["direction"]
 
 func _shot_forecast_hero() -> RopeSim:
 	var forecast := RopeSim.new()
@@ -817,7 +970,7 @@ func predict_shot(direction: Vector2) -> Dictionary:
 
 func _predict_single_shot(direction: Vector2) -> Dictionary:
 	var flight := HookFlight.new()
-	flight.launch(sim.pos,direction,model.value("throw_speeds",GameModel.THROW),sim.vel)
+	flight.launch(sim.pos,direction,model.throw_speed(),throw_carry_velocity())
 	var forecast := _shot_forecast_hero()
 	var points := PackedVector2Array([sim.pos])
 	var result := {"points":points,"contact":sim.pos,"time":0.0,"collision":{},"reachable":true}
@@ -842,9 +995,9 @@ func _predict_single_shot(direction: Vector2) -> Dictionary:
 	return result
 
 func shot_window_open(contact: Vector2) -> bool:
-	var solution := HookFlight.aim_solution(sim.pos,contact,model.value("throw_speeds",GameModel.THROW),sim.vel)
+	var solution := HookFlight.aim_solution(sim.pos,contact,model.throw_speed(),throw_carry_velocity())
 	var flight := HookFlight.new()
-	flight.launch(sim.pos,solution["direction"],model.value("throw_speeds",GameModel.THROW),sim.vel)
+	flight.launch(sim.pos,solution["direction"],model.throw_speed(),throw_carry_velocity())
 	var forecast := _shot_forecast_hero()
 	while flight.age<float(solution["time"])-.00001:
 		var dt := minf(HookFlight.STEP,float(solution["time"])-flight.age)
@@ -854,15 +1007,36 @@ func shot_window_open(contact: Vector2) -> bool:
 	return true
 
 func _position_camera() -> void:
-	var view_y := camera_y-camera_dip
+	var view_y := camera_y-camera_dip+camera_view_offset
+	camera.size = camera_base_size/maxf(1.0,camera_zoom_current)
 	camera.position = Vector3(camera_x,view_y,28)
 	camera.look_at(Vector3(camera_x,view_y,0))
 
+func camera_zoom_target() -> float:
+	if state=="menu" or (preview and capture_screen in ["equipment","terrain"]): return 1.0
+	var punch := lerpf(1.0,maxf(1.0,float(model.camera_setting("slowmo_zoom",1.0))),focus_blend)
+	return clampf(model.camera_zoom()*punch,1.0,1.6)
+
+func zoom_view_offset() -> float:
+	# Vertical shift of the zoomed window inside the gameplay framing: keep as
+	# much of the climb above the hero as possible, but never let the hero (or
+	# the ground under them) leave the bottom of the picture.
+	var visual := camera_base_size/maxf(1.0,camera_zoom_current)
+	var slack := maxf(0,(camera_base_size-visual)*.5)
+	if slack<=.0001: return 0.0
+	var center := camera_y-camera_dip
+	var margin := clampf(float(model.camera_setting("zoomed_floor_margin",2.6)),.5,visual*.45)
+	var hero_floor := sim.pos.y-margin+visual*.5
+	return clampf(hero_floor-center,-slack,slack)
+
+func set_camera_zoom(zoom: float) -> void:
+	model.profile["camera_zoom"] = model.snap_camera_zoom(zoom)
+	if not preview: model.save()
+
 func screen_bottom_y() -> float:
-	# The danger edge follows the undipped framing: lowering the view after a
-	# landing shows more ground but never extends the rescue margin.
-	var viewport := get_viewport().get_visible_rect().size
-	return _screen_world(Vector2(viewport.x*.5,viewport.y)).y+camera_dip
+	# The danger edge follows the undipped, unzoomed framing: lowering the view
+	# after a landing or zooming in never moves the rescue margin.
+	return camera_y-camera_base_size*.5
 
 func below_screen() -> bool:
 	return sim.pos.y+float(model.balance["fall_screen_margin_units"])<screen_bottom_y()
@@ -870,7 +1044,7 @@ func below_screen() -> bool:
 func release_hook(keep_primary: bool = false, reason: String = "manual") -> void:
 	if not sim.attached:
 		return
-	var factor := model.value("impulse_factors",1)
+	var factor := model.impulse_factor(sim.vel)
 	var point := world.anchor_by_id(anchor_id)
 	# The type's effect belongs to the attached -> acted transition, so it is
 	# applied once per catch: a spring adds its exit impulse, ice hands over
@@ -878,6 +1052,7 @@ func release_hook(keep_primary: bool = false, reason: String = "manual") -> void
 	if GripSpec.act(point): sim.vel = GripSpec.release_velocity(point,sim.vel,anchor_slide_velocity)
 	anchor_slide_velocity = Vector2.ZERO
 	world.release_anchor_load(anchor_id)
+	last_anchor_id = anchor_id
 	world.consume_anchor(anchor_id)
 	if anchor_id==safe_anchor_id and not point.get("permanent",true):
 		safe_anchor_id = -1
@@ -888,7 +1063,7 @@ func release_hook(keep_primary: bool = false, reason: String = "manual") -> void
 			if shot["state"]=="attached": shot["state"] = "idle"
 	anchor_id = -1
 	# Release focus is real-time and does not depend on the input still being held.
-	focus_remaining = model.slowmo_seconds()
+	_start_focus()
 	last_release_reason = reason
 	if reason!="manual":
 		print("HOOK_RELEASE reason=%s keep_primary=%s position=%s" % [reason,keep_primary,sim.pos])
@@ -899,6 +1074,29 @@ func release_hook(keep_primary: bool = false, reason: String = "manual") -> void
 	else:
 		_reset_input()
 
+func _start_focus() -> void:
+	# A release inside the cooldown keeps full speed; nothing can refill or
+	# extend a running window.
+	if focus_cooldown>0.0 or focus_remaining>0.0: return
+	focus_duration = model.slowmo_seconds()
+	focus_remaining = focus_duration
+	focus_serial += 1
+	_focus_sound(true)
+	if OS.has_feature("mobile") and model.profile.get("vibration",true) and not preview: Input.vibrate_handheld(12,.15)
+
+func _end_focus() -> void:
+	if focus_remaining<=0.0: return
+	focus_remaining = 0.0
+	focus_cooldown = model.slowmo_cooldown()
+	_focus_sound(false)
+
+func focus_active() -> bool:
+	return focus_remaining>0.0 and not sim.attached
+
+# Smoothed 0..1 presence of slow motion for visuals (tint, camera, animation).
+func focus_visual() -> float:
+	return focus_blend
+
 func _physics_process(delta: float) -> void:
 	if state!="play" or preview:
 		return
@@ -906,9 +1104,14 @@ func _physics_process(delta: float) -> void:
 	_update_touch_controls()
 	_refresh_aim()
 	var step := delta
+	# Both timers use the unscaled physics delta: slow motion never slows its
+	# own countdown or its cooldown.
+	if focus_remaining<=0.0: focus_cooldown = maxf(0,focus_cooldown-delta)
 	if not sim.attached and focus_remaining>0:
-		focus_remaining = maxf(0,focus_remaining-delta)
-		step *= .32
+		step *= model.slowmo_time_scale()
+		if focus_remaining<=delta: _end_focus()
+		else: focus_remaining -= delta
+	_update_item_effect(delta)
 	var keyboard_pump := float(Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT))-float(Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT))
 	var keyboard_reel := float(Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP))-float(Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN))
 	var previous := sim.pos
@@ -930,16 +1133,19 @@ func _physics_process(delta: float) -> void:
 				var before_slide := sim.anchor
 				sim.anchor = world.anchor_contact_after(point,anchor_contact,anchor_time)
 				anchor_slide_velocity = (sim.anchor-before_slide)/step if step>0 else Vector2.ZERO
+	# Act hazards push an airborne hero, knock it off a grip or drop a bridge.
+	hazard_cooldown = maxf(0,hazard_cooldown-delta)
+	hazard_clock += step
+	var hazard_effect := world.step_hazards(hazard_clock,sim.pos,sim.grounded,anchor_id if sim.attached else -1,last_anchor_id)
+	sim.vel += (hazard_effect["force"] as Vector2)*step
+	if not hazard_effect["knock"].is_empty() and hazard_cooldown<=0: _hazard_knock(hazard_effect["knock"])
+	if not sim.attached and not sim.grounded: _apply_item_effect(step)
 	var was_grounded := sim.grounded
 	if was_grounded and not sim.attached:
 		var walk_input := clampf(walk+(keyboard_pump if not pressed or not touch_gesture else 0.0),-1,1) if can_walk() else 0.0
-		var walk_target := walk_input*WALK_SPEED
 		# The hero stops at the edge of the support instead of stepping off;
 		# leaving a platform takes a hook. Landing momentum still slides.
-		if walk_input!=0 and not ground_ahead(signf(walk_input)):
-			walk_target = 0.0
-			if sim.vel.x*walk_input>0 and absf(sim.vel.x)<=WALK_SPEED+.05: sim.vel.x = 0.0
-		sim.vel.x = move_toward(sim.vel.x,walk_target,step*(WALK_ACCELERATION if walk_input!=0 else 7.0))
+		sim.vel.x = walk_velocity(sim.vel.x,walk_input,step)
 	sim.grounded = false
 	sim.tick(step,clampf(pump+keyboard_pump,-1,1),clampf(reel+keyboard_reel,-1,1))
 	if sim.attached:
@@ -947,14 +1153,17 @@ func _physics_process(delta: float) -> void:
 			model.learn_control("swing")
 		if absf(sim.length-previous_length)>.0001:
 			model.learn_control("rope")
+	if item_effect_id()=="glide" and not sim.attached: sim.vel.y = maxf(sim.vel.y,-float(ItemCatalog.consumable("glide")["fall_speed"]))
 	var motion := world.move_player(previous,sim.pos,sim.vel)
 	sim.pos = motion["position"]
 	sim.vel = motion["velocity"]
 	sim.grounded = motion["grounded"]
+	# Landing ends the aiming window: walking never runs in slow motion.
+	if sim.grounded and not was_grounded and focus_remaining>0: _end_focus()
 	if sim.grounded and motion["rest"] and not sim.attached:
 		safe_position = sim.pos
 		safe_anchor_id = -1
-	if world.location==0 and sim.attached:
+	if not (world.layout is LegacyMountainLayout) and sim.attached:
 		if world.generation_version>=10:
 			if not world.update_rope_path(sim):
 				release_hook(true,"rope_path")
@@ -984,6 +1193,7 @@ func _physics_process(delta: float) -> void:
 		_update_return(step)
 	sim.highest = maxf(previous_highest,sim.pos.y)
 	sim.flight_peak = maxf(previous_peak,sim.pos.y)
+	_track_act()
 	_collect_finds()
 	if state!="play":
 		return
@@ -1006,6 +1216,34 @@ func _physics_process(delta: float) -> void:
 		finish_run(true)
 	elif run_mode=="endless" and sim.pos.y+35>world.generated_height:
 		world.generate_to(world.generated_height+40,false)
+
+func _hazard_knock(knock: Dictionary) -> void:
+	# The ordinary release path: a spring or ice effect is not granted, the
+	# grip settles as on any release.
+	hazard_cooldown = 1.2
+	if sim.attached: release_hook(false,"hazard")
+	sim.vel += knock["push"]
+	toast(world.hazards.knock_message(int(knock["hazard"])),1.8,"hazard")
+
+func _track_act() -> void:
+	var act := world.act_at(sim.pos.y)
+	if act.is_empty(): return
+	var index := int(act["index"])
+	if index==current_act: return
+	var announce := current_act>=0 and index>current_act
+	current_act = index
+	# Entering an act opens the next workshop gate.
+	if run_mode!="practice" and model.reach_act(int(act["local"])+1): save_snapshot()
+	if announce and run_mode!="practice":
+		print("ACT_ENTER location=%d act=%s index=%d" % [world.location,act["id"],index])
+		toast("Акт %d · %s
+%s" % [int(act["local"])+1,act["display_name"],act["intro_rule"]],3.2,"act")
+
+# Compact run state for logs, captures and tests.
+func debug_state() -> Dictionary:
+	var result := world.debug_state(sim.pos,hazard_clock)
+	result.merge({"state":state,"mode":run_mode,"seed":run_seed,"height":sim.pos.y,"attached":sim.attached,"anchor":anchor_id})
+	return result
 
 func _update_bolt(step: float) -> void:
 	if hook_volley!=null:
@@ -1033,6 +1271,12 @@ func _update_bolt(step: float) -> void:
 				return
 			var hit: Dictionary = collision["object"]
 			var contact: Vector2 = collision["contact"]
+			# Same rule as the volley: a hero already on a rope takes no second catch.
+			if sim.attached:
+				bolt_active = false
+				bolt_returning = true
+				return_velocity = Vector2.ZERO
+				return
 			if sim.pos.distance_to(contact)>model.shot_range()+.001:
 				_begin_hook_return("Не хватает длины каната")
 				return
@@ -1050,14 +1294,14 @@ func _catch_contact(hit: Dictionary, contact: Vector2) -> void:
 	bolt_active = false
 	bolt_returning = false
 	anchor_contact = contact
-	sim.attach(contact,model.value("rope_lengths",0),true)
+	sim.attach(contact,model.rope_length(),true)
 	model.learn_control("aim")
 	catches += 1
 	anchor_id = hit["id"]
 	anchor_time = 0
 	anchor_slide_velocity = Vector2.ZERO
 	GripSpec.attach(hit)
-	focus_remaining = 0.0
+	_end_focus()
 	if hint_context=="release": hint_timer = 0
 	if pressed: _recenter_climb_control()
 	if GripSpec.network_safe_point(hit) and (world.generation_version<9 or hit.get("primary",false)):
@@ -1151,37 +1395,227 @@ func _update_return(dt: float) -> void:
 	if hook_flight.trail.size()>15: hook_flight.trail.remove_at(0)
 
 func _collect_finds() -> void:
-	var radius := .54+model.value("magnet_radii",4)
+	var coin_reach := .54+model.coin_radius()
+	var item_reach := .54+model.item_radius()
+	var priority := model.magnet_priority()
 	var candidates: Array[Dictionary] = []
 	for find in world.finds:
-		if bool(find.get("picked",false)) or sim.pos.distance_to(find["pos"])>radius:
-			continue
+		if bool(find.get("picked",false)): continue
+		var reach := coin_reach if ItemCatalog.is_coin(find["item"]) else item_reach
+		if sim.pos.distance_to(find["pos"])>reach: continue
 		if world.rope_blocked(sim.pos,find["pos"]): continue
 		candidates.append(find)
-	# Direct contact is deliberate. Among magnetic finds, prefer value over
-	# generator order so an upgraded magnet does not waste the last free slot.
+	# Direct contact is deliberate. Among magnetic finds the chosen family
+	# comes first, then value, so an upgraded magnet does not waste the last
+	# free slot; the order never depends on the generator's array.
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var a_touch := sim.pos.distance_squared_to(a["pos"])<=.54*.54
 		var b_touch := sim.pos.distance_squared_to(b["pos"])<=.54*.54
 		if a_touch!=b_touch: return a_touch
+		var a_family := str(a["item"].get("family",""))==priority
+		var b_family := str(b["item"].get("family",""))==priority
+		if a_family!=b_family: return a_family
 		if int(a["item"]["value"])!=int(b["item"]["value"]):
 			return int(a["item"]["value"])>int(b["item"]["value"])
 		var da := sim.pos.distance_squared_to(a["pos"])
 		var db := sim.pos.distance_squared_to(b["pos"])
 		return int(a["item"]["id"])<int(b["item"]["id"]) if is_equal_approx(da,db) else da<db)
+	var banked := false
 	for find in candidates:
-		if model.bag.size()>=model.level(3): break
-		if model.try_pick(find["item"]):
-			find["picked"] = true
-			if is_instance_valid(find.get("visual")): find["visual"].visible = false
+		var item: Dictionary = find["item"]
+		if ItemCatalog.is_coin(item):
+			# Coins never enter the bag: they are banked at once, once per id.
+			if model.collect_coin(run_id,item):
+				_hide_find(find)
+				banked = true
+				_sound(1250,.05)
+				hud.animate_coin(int(item["value"]),find["pos"])
+			elif model.picked.has(int(item["id"])):
+				find["picked"] = true
+			continue
+		if not model.can_fit(item):
+			if model.worth_prompt(item) and swap_offer.is_empty() and not swap_declined.has(int(item["id"])): _offer_swap(find)
+			continue
+		if model.try_pick(item):
+			_hide_find(find)
 			_sound(1000,.08)
 			hud.refresh_bag()
-			hud.animate_pickup(find["item"],find["pos"])
+			hud.animate_pickup(model.bag[-1],find["pos"])
+	# Ledger, wallet and picked id go to disk together in the next snapshot,
+	# brought forward to COIN_SAVE_DELAY, so a run of coins costs one write.
+	# Until then all three live only in memory and roll back together.
+	if banked: snapshot_timer = maxf(snapshot_timer,SNAPSHOT_PERIOD-COIN_SAVE_DELAY)
+	_update_swap_offer()
+
+func _hide_find(find: Dictionary) -> void:
+	find["picked"] = true
+	if is_instance_valid(find.get("visual")): find["visual"].visible = false
+
+# Full bag and a find worth a decision: compare it with the cheapest item.
+# Nothing is replaced unless the player takes it.
+func _offer_swap(find: Dictionary) -> void:
+	var index := model.cheapest_index(find["item"])
+	if index<0: return
+	swap_offer = {"find":find,"index":index}
+	hud.show_swap(find["item"],model.bag[index])
+
+func _swap_in_reach() -> bool:
+	if swap_offer.is_empty(): return false
+	var find: Dictionary = swap_offer["find"]
+	return not bool(find.get("picked",false)) and sim.pos.distance_to(find["pos"])<=.54+model.item_radius()+1.5 and not world.rope_blocked(sim.pos,find["pos"])
+
+func _update_swap_offer() -> void:
+	if not swap_offer.is_empty() and (state!="play" or not _swap_in_reach()): close_swap(false)
+
+func accept_swap() -> void:
+	if not _swap_in_reach():
+		close_swap(false)
+		return
+	var find: Dictionary = swap_offer["find"]
+	var index := model.cheapest_index(find["item"])
+	if index>=0 and model.swap_in(find["item"],index):
+		_hide_find(find)
+		_sound(1000,.08)
+		hud.refresh_bag()
+		hud.animate_pickup(model.bag[-1],find["pos"])
+		save_snapshot()
+	close_swap(false)
+
+func close_swap(declined: bool = true) -> void:
+	if declined and not swap_offer.is_empty(): swap_declined.append(int(swap_offer["find"]["item"]["id"]))
+	swap_offer = {}
+	if is_instance_valid(hud): hud.hide_swap()
+
+# --- Active items ---------------------------------------------------------------------
+
+func spent_item_ids() -> Array:
+	var result: Array = []
+	for entry in run_items:
+		if bool(entry["used"]): result.append(str(entry["id"]))
+	return result
+
+# Valid exits for the beacon and the booster: grips not spent, in rope reach,
+# with a free line, not lower than the hero by more than half a metre.
+func reachable_exits(limit: int = 2) -> Array[Vector2]:
+	var found: Array[Dictionary] = []
+	for point in world.nearby_anchors(sim.pos.y-1,sim.pos.y+model.shot_range()+1):
+		if point.get("broken",false) or point.get("hidden",false) or int(point["id"])==anchor_id: continue
+		if GripSpec.state(point)!="available": continue
+		var at: Vector2 = point["pos"]
+		if at.y<sim.pos.y-.5 or at.distance_to(sim.pos)>model.shot_range(): continue
+		if world.rope_blocked(sim.pos,at): continue
+		found.append(point)
+	found.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var a_main := bool(a.get("primary",false))
+		var b_main := bool(b.get("primary",false))
+		if a_main!=b_main: return a_main
+		return sim.pos.distance_squared_to(a["pos"])<sim.pos.distance_squared_to(b["pos"]))
+	var result: Array[Vector2] = []
+	for point in found.slice(0,limit): result.append(point["pos"])
+	return result
+
+func item_blocked_reason(id: String) -> String:
+	match id:
+		"tape": return "Лента срабатывает сама при срыве"
+		"glide":
+			if sim.grounded or sim.attached: return "Плавное падение — только в полёте"
+		"booster":
+			if sim.grounded or sim.attached: return "Бустер — только в полёте"
+			if _booster_direction()==Vector2.ZERO: return "Впереди нет видимой опоры"
+		"beacon":
+			if reachable_exits().is_empty(): return "Рядом нет доступных выходов"
+	return ""
+
+# The booster only speeds a flight already heading for a visible grip.
+func _booster_direction() -> Vector2:
+	if sim.vel.length()<.5: return Vector2.ZERO
+	var heading := sim.vel.normalized()
+	for exit in reachable_exits(6):
+		if heading.dot((exit-sim.pos).normalized())>.5: return heading
+	return Vector2.ZERO
+
+func activate_item(index: int) -> void:
+	if state!="play" or index<0 or index>=run_items.size(): return
+	var entry: Dictionary = run_items[index]
+	var definition := ItemCatalog.consumable(str(entry["id"]))
+	if bool(entry["used"]):
+		toast(str(definition["name"])+" уже использован",1.6,"item")
+		return
+	if not item_effect.is_empty():
+		toast("Дождись окончания: "+str(ItemCatalog.consumable(item_effect_id())["name"]),1.6,"item")
+		return
+	var reason := item_blocked_reason(str(entry["id"]))
+	if not reason.is_empty():
+		toast(reason,1.6,"item")
+		return
+	if not model.spend_item(run_items,index): return
+	item_effect = {"id":str(entry["id"]),"remaining":float(definition["duration"]),"duration":maxf(.01,float(definition["duration"]))}
+	if entry["id"]=="beacon": beacon_targets = reachable_exits()
+	print("ITEM_BEGIN id=%s position=%s" % [entry["id"],sim.pos])
+	_sound(720,.1)
+	toast(str(definition["name"]),1.2,"item")
+	save_snapshot()
+
+func _end_item_effect() -> void:
+	if item_effect.is_empty(): return
+	print("ITEM_END id=%s" % item_effect["id"])
+	item_effect = {}
+	beacon_targets.clear()
+
+func item_effect_id() -> String:
+	return str(item_effect.get("id",""))
+
+# Begin/active/end: the effect counts down in real time and ends early once
+# it no longer applies (a catch or a landing ends glide and booster).
+func _update_item_effect(delta: float) -> void:
+	if item_effect.is_empty(): return
+	if item_effect_id() in ["glide","booster"] and (sim.attached or sim.grounded):
+		_end_item_effect()
+		return
+	item_effect["remaining"] = float(item_effect["remaining"])-delta
+	if float(item_effect["remaining"])<=0: _end_item_effect()
+
+func _apply_item_effect(step: float) -> void:
+	match item_effect_id():
+		"glide":
+			# Slower descent only: rope, bottom edge and fail rules are untouched.
+			sim.vel.y = maxf(sim.vel.y,-float(ItemCatalog.consumable("glide")["fall_speed"]))
+		"booster":
+			var definition := ItemCatalog.consumable("booster")
+			if sim.vel.length()>.1 and sim.vel.length()<float(definition["max_speed"]):
+				sim.vel = (sim.vel+sim.vel.normalized()*float(definition["acceleration"])*step).limit_length(float(definition["max_speed"]))
+
+# Safety strap: the first fatal fall returns to the last safe point and the
+# last find falls out of the bag. It needs the same valid way back as a
+# continuation and never counts as one.
+func _tape_rescue() -> bool:
+	if run_mode=="practice": return false
+	var index := -1
+	for slot in range(run_items.size()):
+		if run_items[slot]["id"]=="tape" and not run_items[slot]["used"]: index = slot
+	if index<0: return false
+	var plan := world.revive_plan(safe_anchor_id,safe_position,model.shot_range(),safe_contact)
+	if not plan.get("available",false) or not model.spend_item(run_items,index): return false
+	var lost := ""
+	for slot in range(model.bag.size()-1,-1,-1):
+		if str(model.bag[slot].get("family",""))!="contract":
+			lost = ItemCatalog.name_of(model.bag[slot])
+			model.bag.remove_at(slot)
+			break
+	print("ITEM_BEGIN id=tape position=%s" % sim.pos)
+	_return_to_safety(plan)
+	hud.refresh_bag()
+	toast("Страховочная лента: назад к опоре"+(" · выпало: "+lost if not lost.is_empty() else ""),3,"item")
+	save_snapshot()
+	return true
 
 func fail_run(reason: String) -> void:
 	if state!="play":
 		return
 	if sim.attached: release_hook(false,"fall")
+	_end_item_effect()
+	close_swap(false)
+	if _tape_rescue(): return
 	var offer_revive := not revive_used and run_mode!="practice" and revive_available()
 	state = "revive" if offer_revive else "result"
 	failure_reason = reason
@@ -1224,8 +1658,23 @@ func revive(currency: String) -> void:
 		ad_revive_pending = false
 	else:
 		return
-	world.activate_rescue_anchors(plan["anchors"])
 	revive_used = true
+	_return_to_safety(plan)
+	toast("Продолжение использовано · следующая ошибка завершит попытку")
+	save_snapshot()
+
+# Shared by the continuation and the safety strap: dormant rescue grips
+# wake up and the hero returns to the last safe point.
+func _return_to_safety(plan: Dictionary) -> void:
+	world.activate_rescue_anchors(plan["anchors"])
+	# A shot thrown before the fall ends here, like on any other rescue.
+	_reset_input()
+	bolt_active = false
+	bolt_returning = false
+	hook_volley = null
+	volley_primary = 0
+	focus_remaining = 0.0
+	focus_cooldown = 0.0
 	sim.vel = Vector2.ZERO
 	sim.pos = safe_position
 	sim.flight_peak = sim.pos.y
@@ -1237,7 +1686,7 @@ func revive(currency: String) -> void:
 		if not point.is_empty() and not point["broken"] and point.get("permanent",true):
 			sim.pos = safe_contact+Vector2(0,-2.8)
 			anchor_contact = safe_contact
-			sim.attach(safe_contact,model.value("rope_lengths",0))
+			sim.attach(safe_contact,model.rope_length())
 			anchor_id = safe_anchor_id
 			GripSpec.attach(point)
 	anchor_time = 0
@@ -1248,8 +1697,7 @@ func revive(currency: String) -> void:
 	camera_dip = 0.0
 	_position_camera()
 	hud.show_play()
-	toast("Продолжение использовано · следующая ошибка завершит попытку")
-	save_snapshot()
+	_end_item_effect()
 
 func request_ad_revive() -> void:
 	if state!="revive" or revive_used or not revive_available() or ads.fullscreen: return
@@ -1304,7 +1752,7 @@ func finish_run(success: bool) -> void:
 	var rewarded_height := maxf(0,sim.highest-START_Y)
 	if success:
 		rewarded_height = maxf(rewarded_height,summit_height)
-	settlement = model.settle(run_id,run_mode,rewarded_height,success,selected_location)
+	settlement = model.settle(run_id,run_mode,rewarded_height,success,selected_location,{"contract":str(run_contract.get("tag","")),"spent":spent_item_ids()})
 	if settlement.get("duplicate",false):
 		return
 	settlement["seconds"] = run_seconds
@@ -1314,8 +1762,8 @@ func finish_run(success: bool) -> void:
 	settlement["zone_bonus"] = zone_gold
 	settlement["zone_diamonds"] = zone_diamonds
 	if not preview:
-		model.profile["run_history"].append({"id":run_id,"seed":run_seed,"seconds":snappedf(run_seconds,.1),"height":settlement["highest"],"gold":int(settlement["total"])+zone_gold,"zone_bonus":zone_gold,"success":success,"shots":shots,"catches":catches,"reason":failure_reason,"levels":model.profile["levels"].duplicate()})
-		model.profile["run_history"][-1].merge({"build":GameModel.BUILD_VERSION,"mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"diamond_reward":settlement["diamonds"],"zone_diamonds":zone_diamonds,"first_summit":settlement["first"]})
+		model.profile["run_history"].append({"id":run_id,"seed":run_seed,"seconds":snappedf(run_seconds,.1),"height":settlement["highest"],"gold":int(settlement["total"])+zone_gold,"zone_bonus":zone_gold,"success":success,"shots":shots,"catches":catches,"reason":failure_reason,"levels":model.profile["upgrade_levels"].duplicate(),"choices":model.profile["upgrade_choices"].duplicate()})
+		model.profile["run_history"][-1].merge({"build":GameModel.BUILD_VERSION,"mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"diamond_reward":settlement["diamonds"],"coin_gold":settlement["coins"],"contract_gold":settlement["contract"],"items_spent":settlement["spent"],"zone_diamonds":zone_diamonds,"first_summit":settlement["first"]})
 		model.profile["run_history"] = model.profile["run_history"].slice(-30)
 		model.save()
 	hud.show_result(settlement)
@@ -1359,6 +1807,21 @@ func show_menu() -> void:
 	camera_dip = 0.0
 	hud.show_menu()
 
+func go_back() -> void:
+	if ads.fullscreen: return
+	match state:
+		"play": pause_run()
+		"pause": unpause()
+		"result": show_menu()
+		"menu":
+			if hud.menu_tab!="expedition":
+				hud.menu_slide = -1
+				hud.menu_focus = "tab"
+				hud.select_menu("expedition")
+			elif not preview:
+				save_snapshot()
+				get_tree().quit()
+
 func show_workshop() -> void:
 	show_menu()
 	hud.select_menu("equipment")
@@ -1366,10 +1829,13 @@ func show_workshop() -> void:
 func show_locations() -> void:
 	show_menu()
 
-func cycle_location(direction: int) -> void:
-	if not model.profile["active"].is_empty():
-		return
-	lobby_location = posmod(lobby_location+direction,model.balance["locations"].size())
+func cycle_location(direction: int) -> bool:
+	# Routes form a line: the first and last stay put instead of wrapping.
+	var next := lobby_location+direction
+	if not model.profile["active"].is_empty() or next<0 or next>=model.balance["locations"].size():
+		return false
+	hud.menu_slide = direction
+	lobby_location = next
 	_create_world(58273,lobby_location,36)
 	if model.profile["locations"].has(lobby_location):
 		selected_location = lobby_location
@@ -1377,6 +1843,7 @@ func cycle_location(direction: int) -> void:
 		if not preview:
 			model.save()
 	hud.show_menu()
+	return true
 
 func lobby_action() -> void:
 	if not model.profile["active"].is_empty():
@@ -1408,17 +1875,19 @@ func save_snapshot() -> void:
 		"camera_y":camera_y,"camera_x":camera_x,"camera_dip":camera_dip,
 		"x":sim.pos.x,"y":sim.pos.y,"vx":sim.vel.x,"vy":sim.vel.y,"length":sim.length,"target_length":sim.target_length,"reel_velocity":sim.reel_velocity,
 		"highest":sim.highest,"flight_peak":sim.flight_peak,"launched":sim.launched,"grounded":sim.grounded,
-		"run_seconds":run_seconds,"shots":shots,"catches":catches,"failure_reason":failure_reason,"zone_gold":zone_gold,"zone_diamonds":zone_diamonds,
+		"run_seconds":run_seconds,"hazard_clock":hazard_clock,"shots":shots,"catches":catches,"failure_reason":failure_reason,"zone_gold":zone_gold,"zone_diamonds":zone_diamonds,
 		"anchor_id":anchor_id,"anchor_time":anchor_time,"contact_x":anchor_contact.x,"contact_y":anchor_contact.y,"rope_pivots":pivots,
-		"safe_contact_x":safe_contact.x,"safe_contact_y":safe_contact.y,"focus_remaining":focus_remaining,"focus_active":focus_remaining>0.0,"safe_anchor_id":safe_anchor_id,
+		"safe_contact_x":safe_contact.x,"safe_contact_y":safe_contact.y,"focus_remaining":focus_remaining,"focus_active":focus_remaining>0.0,"focus_cooldown":focus_cooldown,"focus_duration":focus_duration,"safe_anchor_id":safe_anchor_id,
 		"safe_x":safe_position.x,"safe_y":safe_position.y,"revive_used":revive_used,"awaiting_revive":state=="revive","ad_revive_earned":ad_revive_pending,
-		"bag":model.bag.duplicate(true),"picked":model.picked.duplicate(),"broken":broken,"active_reserves":active_reserves,
+		"bag":model.bag.duplicate(true),"picked":model.picked.duplicate(),"broken":broken,"active_reserves":active_reserves,"collapsed_hazards":world.hazards.collapsed_ids(),
 		"bolt_active":bolt_active,"bolt_x":bolt_pos.x,"bolt_y":bolt_pos.y,"bolt_ox":bolt_origin.x,"bolt_oy":bolt_origin.y,
 		"bolt_dx":bolt_direction.x,"bolt_dy":bolt_direction.y,"bolt_travel":bolt_travel,
 		"bolt_vx":hook_flight.velocity.x,"bolt_vy":hook_flight.velocity.y,"bolt_age":hook_flight.age,
 		"bolt_returning":bolt_returning,"return_vx":return_velocity.x,"return_vy":return_velocity.y}
 	model.profile["active"]["hook_volley"] = hook_volley.snapshot() if hook_volley!=null else []
 	model.profile["active"]["volley_primary"] = volley_primary
+	model.profile["active"]["run_items"] = run_items.duplicate(true)
+	model.profile["active"]["item_effect"] = item_effect.duplicate()
 	model.save()
 
 func _notification(what: int) -> void:
@@ -1427,6 +1896,8 @@ func _notification(what: int) -> void:
 	if what==NOTIFICATION_WM_CLOSE_REQUEST:
 		save_snapshot()
 		get_tree().quit()
+	elif what==NOTIFICATION_WM_GO_BACK_REQUEST:
+		go_back()
 	elif what==NOTIFICATION_APPLICATION_PAUSED:
 		pause_run()
 		save_snapshot()
@@ -1441,7 +1912,9 @@ func _move_camera(delta: float) -> void:
 		_position_camera()
 		return
 	var viewport := get_viewport().get_visible_rect().size
-	var visible_height := absf(_screen_world(Vector2.ZERO).y-_screen_world(Vector2(0,viewport.y)).y)
+	camera_zoom_current = lerpf(camera_zoom_current,camera_zoom_target(),1-exp(-delta*maxf(.5,float(model.camera_setting("zoom_smoothing",4.0)))))
+	if absf(camera_zoom_current-camera_zoom_target())<.0005: camera_zoom_current = camera_zoom_target()
+	var visible_height := camera_base_size
 	var headroom := clampf(visible_height*.17,2.5,4.0)
 	var desired := maxf(4.8,sim.pos.y+headroom+clampf(sim.vel.y*.13,0,1.6))
 	if state!="menu": desired = maxf(camera_y,desired)
@@ -1455,6 +1928,7 @@ func _move_camera(delta: float) -> void:
 	var room := maxf(0,camera_y-(sim.pos.y+headroom))
 	var dip_target := minf(room,visible_height*CAMERA_DIP_SHARE) if state=="play" and sim.grounded and not sim.attached else minf(camera_dip,room)
 	camera_dip = lerpf(camera_dip,dip_target,1-exp(-delta*3.0))
+	camera_view_offset = lerpf(camera_view_offset,zoom_view_offset(),1-exp(-delta*6.0))
 	var visible_width := absf(_screen_world(Vector2.ZERO).x-_screen_world(Vector2(viewport.x,0)).x)
 	var lead := clampf(sim.vel.x*.24,-1.8,1.8)
 	if sim.attached:
@@ -1474,12 +1948,16 @@ func _move_camera(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	var fade := maxf(.02,float(model.balance.get("slowmo",{}).get("fade_seconds",.12)))
+	focus_blend = move_toward(focus_blend,1.0 if state in ["play","pause"] and focus_active() else 0.0,delta/fade) if state!="pause" else focus_blend
 	if state not in ["pause","revive","result"]:
-		animation_time += delta
+		# The hero and effects slow down with the world, so a slowed walk or
+		# fall never looks like sliding.
+		animation_time += delta*lerpf(1.0,model.slowmo_time_scale(),focus_blend)
 		hint_timer = maxf(0,hint_timer-delta)
 	if state=="play" and not preview:
 		snapshot_timer += delta
-		if snapshot_timer>3:
+		if snapshot_timer>SNAPSHOT_PERIOD:
 			snapshot_timer = 0
 			save_snapshot()
 	_move_camera(delta)
@@ -1543,6 +2021,28 @@ func _sound(frequency: float, duration: float) -> void:
 	stream.data = data
 	audio.stream = stream
 	audio.play()
+
+func _focus_sound(starting: bool) -> void:
+	# A soft falling "whoomp" when time slows and a short rise when it returns.
+	if not model.profile.get("sound",true) or preview or DisplayServer.get_name()=="headless" or not is_instance_valid(focus_audio): return
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = 22050
+	var duration := .32 if starting else .16
+	var count := int(duration*stream.mix_rate)
+	var data := PackedByteArray()
+	data.resize(count*2)
+	var phase := 0.0
+	for index in range(count):
+		var t := float(index)/count
+		var frequency := lerpf(520.0,150.0,sqrt(t)) if starting else lerpf(240.0,620.0,t)
+		phase += TAU*frequency/stream.mix_rate
+		var envelope := sin(minf(1,t*10)*PI*.5)*pow(1-t,1.6)
+		var sample := (sin(phase)*.7+sin(phase*.5)*.3)*envelope
+		data.encode_s16(index*2,int(clampf(sample,-1,1)*14000))
+	stream.data = data
+	focus_audio.stream = stream
+	focus_audio.play()
 
 func _hook_sound(kind: String) -> void:
 	if not model.profile.get("sound",true) or preview or DisplayServer.get_name()=="headless": return

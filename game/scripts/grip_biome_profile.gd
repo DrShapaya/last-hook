@@ -7,6 +7,7 @@ extends RefCounted
 # one mountain transfers to the next.
 
 const IDS := ["forest","desert","snow","ruins","sky"]
+const ACT_IDS := ["ridge","caravan","observatory","crevasse","crown"]
 
 var id := "forest"
 var title := ""
@@ -25,12 +26,16 @@ var weathering_rules: Dictionary = {}
 var light_and_shadow_tuning: Dictionary = {}
 # HUD names per type, with grammatical gender for the lifetime word.
 var type_titles: Array = []
+# Paint on the top-front chamfer of each type's block: stable amber, root
+# green, spring red-orange, ice blue, crystal violet, tuned per place.
+var paint_colors: Array = []
 # Material of the host rock masses: base and facet colours, roughness,
 # strata, cavity shade, tints of lit tops and shaded undersides, weathering.
 var rock_material: Dictionary = {}
 
 const DATA := {
 	"forest":{
+		"paint_colors":[Color("e9a332"),Color("57b84a"),Color("e8652a"),Color("5cc0ea"),Color("9a5ae0")],
 		"rock_material":{"base_color":Color("6f6e66"),"facet_palette":[Color("75746a"),Color("6a6a63"),Color("7a776b")],"roughness":.94,"normal_strength":.45,"strata_scale":.6,"cavity_strength":.32,"top_light_tint":Color("e6dfc4"),"underside_tint":Color("4f5d68"),"weathering_mask":{"moss":.6,"snow":0.0,"dust":0.0},"decor_palette":[Color("6fae3a"),Color("3f3527")]},
 		"title":"Лес и обычная гора",
 		"rock_palette":{"base":Color("6d6d63"),"warm":Color("e4dcc4"),"cool":Color("5d6a70")},
@@ -45,6 +50,7 @@ const DATA := {
 		"type_titles":[["Камень","m"],["Хрупкий корень","m"],["Упругая ветка","f"],["Скользкая плита","f"],["Кристалл выбора","m"]],
 	},
 	"desert":{
+		"paint_colors":[Color("eda236"),Color("6fae3e"),Color("e05a24"),Color("63c6e6"),Color("a457d8")],
 		"rock_material":{"base_color":Color("86705a"),"facet_palette":[Color("8f775c"),Color("7d6853"),Color("957d60")],"roughness":.97,"normal_strength":.55,"strata_scale":1.4,"cavity_strength":.30,"top_light_tint":Color("f1cf98"),"underside_tint":Color("6a5047"),"weathering_mask":{"moss":0.0,"snow":0.0,"dust":.6},"decor_palette":[Color("a49a55"),Color("5c4630")]},
 		"title":"Пустыня",
 		"rock_palette":{"base":Color("8a7356"),"warm":Color("e2b98a"),"cool":Color("7a6a5c")},
@@ -59,6 +65,7 @@ const DATA := {
 		"type_titles":[["Песчаник","m"],["Сухая плита","f"],["Натянутая ткань","f"],["Солевой выступ","m"],["Жеода выбора","f"]],
 	},
 	"snow":{
+		"paint_colors":[Color("e6a63e"),Color("4fb85a"),Color("e8662f"),Color("4fb2ec"),Color("8f5ce6")],
 		"rock_material":{"base_color":Color("6c727a"),"facet_palette":[Color("737a82"),Color("656b73"),Color("777c84")],"roughness":.85,"normal_strength":.4,"strata_scale":.4,"cavity_strength":.30,"top_light_tint":Color("f2f6f8"),"underside_tint":Color("4a5f78"),"weathering_mask":{"moss":0.0,"snow":.8,"dust":0.0},"decor_palette":[Color("dfeef0"),Color("6c7a82")]},
 		"title":"Снег и лёд",
 		"rock_palette":{"base":Color("6a7076"),"warm":Color("c9ced2"),"cool":Color("566676")},
@@ -73,6 +80,7 @@ const DATA := {
 		"type_titles":[["Гранит","m"],["Замёрзшая ветвь","f"],["Ледяная корка","f"],["Скользкий лёд","m"],["Ледяной кристалл","m"]],
 	},
 	"ruins":{
+		"paint_colors":[Color("e3a03a"),Color("5aae48"),Color("df6230"),Color("5abbe0"),Color("9a58d8")],
 		"rock_material":{"base_color":Color("6e6b66"),"facet_palette":[Color("74706a"),Color("67645f"),Color("78746c")],"roughness":.93,"normal_strength":.5,"strata_scale":.2,"cavity_strength":.34,"top_light_tint":Color("e4d8bc"),"underside_tint":Color("514f5c"),"weathering_mask":{"moss":.3,"snow":0.0,"dust":.3},"decor_palette":[Color("6e9a3e"),Color("4a4036")]},
 		"title":"Руины",
 		"rock_palette":{"base":Color("6e6c67"),"warm":Color("d4c8ae"),"cool":Color("5e6066")},
@@ -87,6 +95,7 @@ const DATA := {
 		"type_titles":[["Тёсаный камень","m"],["Старая балка","f"],["Пружинная скоба","f"],["Гладкая плитка","f"],["Минерал выбора","m"]],
 	},
 	"sky":{
+		"paint_colors":[Color("efb04a"),Color("62c45a"),Color("ee7240"),Color("6ccaf0"),Color("a96aea")],
 		"rock_material":{"base_color":Color("7b7f85"),"facet_palette":[Color("83878c"),Color("74787e"),Color("878a8e")],"roughness":.9,"normal_strength":.35,"strata_scale":.3,"cavity_strength":.26,"top_light_tint":Color("fbf6ea"),"underside_tint":Color("5a6a86"),"weathering_mask":{"moss":.1,"snow":.2,"dust":0.0},"decor_palette":[Color("7fbf8a"),Color("8a8478")]},
 		"title":"Небеса",
 		"rock_palette":{"base":Color("7e8285"),"warm":Color("eae6dc"),"cool":Color("8a96a6")},
@@ -102,13 +111,50 @@ const DATA := {
 	},
 }
 
+# Act styles of the expeditions (v14): a base style with its own rock, plants,
+# weather and hardware. Grip mechanics stay identical.
+const DERIVED := {
+	"ridge":["forest",{"title":"Ветровой хребет",
+		"rock_material":{"base_color":Color("7a7a70"),"facet_palette":[Color("82827a"),Color("727269"),Color("88857a")],"roughness":.92,"normal_strength":.5,"strata_scale":.9,"cavity_strength":.28,"top_light_tint":Color("eef0dc"),"underside_tint":Color("56636e"),"weathering_mask":{"moss":.3,"snow":0.0,"dust":.1},"decor_palette":[Color("8ab45a"),Color("4a4232")]},
+		"rock_palette":{"base":Color("777870"),"warm":Color("e8e2c8"),"cool":Color("5f6c74")},
+		"vegetation_set":{"grass":true,"moss":.3,"leaf":Color("8ab45a"),"tip":Color("c4d97a"),"root":Color("6a8f3a"),"soil":Color("4a4232"),"dry":false,"sparse":true},
+		"weathering_rules":{"moss":.3,"snow":0.0,"dust":.1,"strata":.5,"cracks":.6},
+		"attachment_hardware":{"style":"lashing","metal":Color("5a5048"),"accent":Color("e8624d")}}],
+	"caravan":["desert",{"title":"Погребённый караван",
+		"rock_material":{"base_color":Color("917458"),"facet_palette":[Color("9a7c5e"),Color("846a50"),Color("a08463")],"roughness":.97,"normal_strength":.5,"strata_scale":1.1,"cavity_strength":.32,"top_light_tint":Color("f4d6a4"),"underside_tint":Color("6e4f42"),"weathering_mask":{"moss":0.0,"snow":0.0,"dust":.75},"decor_palette":[Color("b0a060"),Color("6a4c32")]},
+		"rock_palette":{"base":Color("8e7357"),"warm":Color("e8c08c"),"cool":Color("7c6a5a")},
+		"attachment_hardware":{"style":"dowel","metal":Color("6e5236"),"accent":Color("d8c08f")},
+		"weathering_rules":{"moss":0.0,"snow":0.0,"dust":.75,"strata":.6,"cracks":.6}}],
+	"observatory":["desert",{"title":"Обсерватория пыльной бури",
+		"rock_material":{"base_color":Color("8b7a66"),"facet_palette":[Color("948168"),Color("7f705f"),Color("9a876d")],"roughness":.9,"normal_strength":.45,"strata_scale":.7,"cavity_strength":.3,"top_light_tint":Color("f6dfb0"),"underside_tint":Color("67535a"),"weathering_mask":{"moss":0.0,"snow":0.0,"dust":.55},"decor_palette":[Color("a49a55"),Color("5c4630")]},
+		"rock_palette":{"base":Color("887764"),"warm":Color("ecd0a0"),"cool":Color("7a6c66")},
+		"attachment_hardware":{"style":"rivets","metal":Color("b8913f"),"accent":Color("f0d898")},
+		"weathering_rules":{"moss":0.0,"snow":0.0,"dust":.55,"strata":.3,"cracks":.5}}],
+	"crevasse":["snow",{"title":"Синяя трещина",
+		"rock_material":{"base_color":Color("5f7488"),"facet_palette":[Color("678096"),Color("56697c"),Color("6e8aa0")],"roughness":.6,"normal_strength":.35,"strata_scale":.5,"cavity_strength":.36,"top_light_tint":Color("e6f6ff"),"underside_tint":Color("2f4f78"),"weathering_mask":{"moss":0.0,"snow":.6,"dust":0.0},"decor_palette":[Color("cfeaf6"),Color("4f6a82")]},
+		"rock_palette":{"base":Color("5c7084"),"warm":Color("cfe2ee"),"cool":Color("3f5e80")},
+		"weathering_rules":{"moss":0.0,"snow":.6,"dust":0.0,"strata":.3,"cracks":.5}}],
+	"crown":["snow",{"title":"Расколотая корона",
+		"rock_material":{"base_color":Color("767c86"),"facet_palette":[Color("7e848e"),Color("6c727c"),Color("858a92")],"roughness":.82,"normal_strength":.4,"strata_scale":.3,"cavity_strength":.28,"top_light_tint":Color("f6fafc"),"underside_tint":Color("4c5a74"),"weathering_mask":{"moss":0.0,"snow":.9,"dust":0.0},"decor_palette":[Color("eef6f8"),Color("707c88")]},
+		"rock_palette":{"base":Color("737a84"),"warm":Color("d6dce0"),"cool":Color("5a6a80")},
+		"attachment_hardware":{"style":"bracket","metal":Color("8fa2b0"),"accent":Color("ffb347")},
+		"weathering_rules":{"moss":0.0,"snow":.9,"dust":0.0,"strata":.1,"cracks":.3}}],
+}
+
 static var _cache: Dictionary = {}
 
+static func data_of(profile_id: String) -> Dictionary:
+	if DERIVED.has(profile_id):
+		var base: Dictionary = (DATA[DERIVED[profile_id][0]] as Dictionary).duplicate()
+		base.merge(DERIVED[profile_id][1],true)
+		return base
+	return DATA[profile_id if DATA.has(profile_id) else "forest"]
+
 static func named(profile_id: String) -> GripBiomeProfile:
-	var key := profile_id if DATA.has(profile_id) else "forest"
+	var key := profile_id if DATA.has(profile_id) or DERIVED.has(profile_id) else "forest"
 	if not _cache.has(key):
 		var profile := GripBiomeProfile.new()
-		var data: Dictionary = DATA[key]
+		var data: Dictionary = data_of(key)
 		profile.id = key
 		profile.title = data["title"]
 		profile.rock_palette = data["rock_palette"]
@@ -122,6 +168,7 @@ static func named(profile_id: String) -> GripBiomeProfile:
 		profile.light_and_shadow_tuning = data["light_and_shadow_tuning"]
 		profile.type_titles = data["type_titles"]
 		profile.rock_material = data["rock_material"]
+		profile.paint_colors = data["paint_colors"]
 		_cache[key] = profile
 	return _cache[key]
 
@@ -145,6 +192,9 @@ func material_color(kind: int) -> Color:
 
 func gloss(kind: int) -> float:
 	return float(surface_material[clampi(kind,0,4)][2])
+
+func paint_color(kind: int) -> Color:
+	return paint_colors[clampi(kind,0,4)]
 
 func family(kind: int) -> String:
 	return str(silhouette_family_by_type[clampi(kind,0,4)])

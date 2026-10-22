@@ -1,0 +1,162 @@
+{
+  "balance_version": 15,
+  "profiles": [
+    {
+      "profile": "novice",
+      "assumptions": {
+        "reach": 0.3,
+        "gain": 0.07,
+        "summit": 0.35,
+        "coins": 0.45,
+        "branch": 0.15,
+        "minutes": 9.0
+      },
+      "runs": 15,
+      "minutes": 123.2,
+      "milestones": {
+        "first_purchase_min": 3.2,
+        "first_purchase_run": 1,
+        "first_specialization_min": 13.3,
+        "first_summit_min": 46.7,
+        "second_expedition_min": 47.2,
+        "full_kit_min": 123.2
+      },
+      "income_share_percent": {
+        "height": 28.3,
+        "coins": 14.5,
+        "bag": 44.8,
+        "finish": 4.7,
+        "contract": 0.6,
+        "zones": 7.2
+      },
+      "avg_run_income_last10": 2243,
+      "consumable_share_percent": {
+        "beacon": 6.2,
+        "booster": 9.8,
+        "glide": 8.0,
+        "tape": 15.6
+      },
+      "levels_at_end": [
+        5,
+        5,
+        4,
+        5,
+        5,
+        5,
+        5,
+        4
+      ]
+    },
+    {
+      "profile": "learned",
+      "assumptions": {
+        "reach": 0.55,
+        "gain": 0.12,
+        "summit": 0.6,
+        "coins": 0.6,
+        "branch": 0.35,
+        "minutes": 6.5
+      },
+      "runs": 12,
+      "minutes": 80.0,
+      "milestones": {
+        "first_purchase_min": 4.1,
+        "first_purchase_run": 1,
+        "first_specialization_min": 10.0,
+        "first_summit_min": 16.5,
+        "second_expedition_min": 17.0,
+        "third_expedition_min": 73.0,
+        "full_kit_min": 80.0
+      },
+      "income_share_percent": {
+        "height": 24.8,
+        "coins": 17.3,
+        "bag": 41.3,
+        "finish": 7.8,
+        "contract": 2.4,
+        "zones": 6.5
+      },
+      "avg_run_income_last10": 2784,
+      "consumable_share_percent": {
+        "beacon": 5.0,
+        "booster": 7.9,
+        "glide": 6.5,
+        "tape": 12.6
+      },
+      "levels_at_end": [
+        5,
+        5,
+        4,
+        5,
+        5,
+        5,
+        5,
+        4
+      ]
+    },
+    {
+      "profile": "expert",
+      "assumptions": {
+        "reach": 0.85,
+        "gain": 0.15,
+        "summit": 0.85,
+        "coins": 0.75,
+        "branch": 0.6,
+        "minutes": 5.0
+      },
+      "runs": 9,
+      "minutes": 48.8,
+      "milestones": {
+        "first_purchase_min": 4.8,
+        "first_purchase_run": 1,
+        "first_specialization_min": 4.8,
+        "first_summit_min": 9.8,
+        "second_expedition_min": 10.2,
+        "third_expedition_min": 26.8,
+        "full_kit_min": 48.8
+      },
+      "income_share_percent": {
+        "height": 21.5,
+        "coins": 20.4,
+        "bag": 36.8,
+        "finish": 9.5,
+        "contract": 5.2,
+        "zones": 6.6
+      },
+      "avg_run_income_last10": 3391,
+      "consumable_share_percent": {
+        "beacon": 4.1,
+        "booster": 6.5,
+        "glide": 5.3,
+        "tape": 10.3
+      },
+      "levels_at_end": [
+        5,
+        5,
+        4,
+        5,
+        5,
+        5,
+        5,
+        4
+      ]
+    }
+  ],
+  "farm": {
+    "novice": {
+      "early_400m_per_min": 88.8,
+      "full_summit_per_min": 246.1,
+      "summit_coin_share_percent": 13.7
+    },
+    "learned": {
+      "early_400m_per_min": 133.5,
+      "full_summit_per_min": 360.5,
+      "summit_coin_share_percent": 18.1
+    },
+    "expert": {
+      "early_400m_per_min": 186.7,
+      "full_summit_per_min": 496.7,
+      "summit_coin_share_percent": 22.0
+    }
+  }
+}

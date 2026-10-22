@@ -220,6 +220,10 @@ func _generate_row(index: int) -> void:
 	# Rest belongs to a movement phrase, with a minimum separation and a cap;
 	# it is not another evenly spaced ladder of permanent platforms.
 	ledges.resize(ledges_before)
+	_place_rest(index)
+	_place_encounter(index)
+
+func _place_rest(index: int) -> void:
 	var kind := phrase_kind(maxi(0,(index-2)/3))
 	var point := main_point(index)
 	var last_top: float = ledges[-1]["top"]
@@ -230,6 +234,9 @@ func _generate_row(index: int) -> void:
 		disposable_streak = 0
 		for branch in branches:
 			if branch["entry"]==main_route[-1]: branch["entry_consumed"] = false
+
+func _place_encounter(index: int) -> void:
+	var kind := phrase_kind(maxi(0,(index-2)/3))
 	if index>=2 and (index-2)%3==0:
 		var block := (index-2)/3
 		var encounter := {"row":index,"kind":kind,"name":NAMES[kind],"entry":main_route[-1],"obstacles":[]}

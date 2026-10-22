@@ -56,11 +56,13 @@ function Invoke-TaskGodot([string[]]$TaskArguments, [string]$TaskLog) {
 Invoke-TaskGodot @('--headless','--editor','--import','--quit') (Join-Path $taskArtifacts 'build-import.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_rules.gd') (Join-Path $taskArtifacts 'build-rules.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_progression.gd') (Join-Path $taskArtifacts 'build-progression.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_economy.gd') (Join-Path $taskArtifacts 'build-economy.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_integration.gd') (Join-Path $taskArtifacts 'build-integration.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_hook.gd') (Join-Path $taskArtifacts 'build-hook.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_controls.gd') (Join-Path $taskArtifacts 'build-controls.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_generation.gd') (Join-Path $taskArtifacts 'build-generation.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_routes.gd') (Join-Path $taskArtifacts 'build-routes.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_levels.gd') (Join-Path $taskArtifacts 'build-levels.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_grip_types.gd') (Join-Path $taskArtifacts 'build-grip-types.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_terrain.gd') (Join-Path $taskArtifacts 'build-terrain.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_visuals.gd') (Join-Path $taskArtifacts 'build-visuals.log')
@@ -70,6 +72,7 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_menus.gd') (Join-Pa
 Invoke-TaskGodot @('--headless','--script','res://tests/test_ads.gd') (Join-Path $taskArtifacts 'build-ads.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_character_editing.gd') (Join-Path $taskArtifacts 'build-character-editing.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_sprite_animation.gd') (Join-Path $taskArtifacts 'build-sprite-animation.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_polish.gd') (Join-Path $taskArtifacts 'build-polish.log')
 
 if ($Target -in @('All','Windows')) {
     $taskWindows = Join-Path $taskRoot $(if ($Release) { 'Builds\Windows-Release' } else { 'Builds\Windows' })

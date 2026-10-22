@@ -141,6 +141,9 @@ func paragraph(parent: Node, value: String, at: Vector2, dimensions: Vector2, fo
 	var node := text(parent,value,at,dimensions,font_size,color)
 	node.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	node.size = dimensions
+	# A paragraph is never cut: it grows down to fit all its lines.
+	var lines := node.get_line_count()
+	node.size.y = maxf(dimensions.y,lines*node.get_line_height()+maxi(0,lines-1)*node.get_theme_constant("line_spacing"))
 	return node
 
 func symbol(parent: Node, kind: int, at: Vector2, dimensions: Vector2 = Vector2(28,28), color: Color = INK) -> UiSymbol:

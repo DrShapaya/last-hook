@@ -1,7 +1,8 @@
 param(
     # Version to release, for example 0.14.0. Empty keeps the current one.
     [string]$Version = '',
-    [ValidateSet('All','Windows','Android')][string]$Target = 'All',
+    # A release is the signed Android APK; Windows is only built on request.
+    [ValidateSet('All','Windows','Android')][string]$Target = 'Android',
     # Replace an existing Builds\Versions\v<version> folder.
     [switch]$Force
 )
@@ -81,8 +82,4 @@ if ($Target -in @('All','Android')) {
     Copy-Item -LiteralPath (Join-Path $taskRoot 'Builds\Android\LastHook-release.apk') -Destination $taskApk
     $taskFiles += $taskApk
 }
-$taskSums = foreach ($taskFile in $taskFiles) {
-    (Get-FileHash -Algorithm SHA256 -LiteralPath $taskFile).Hash.ToLower() + '  ' + (Split-Path -Leaf $taskFile)
-}
-[IO.File]::WriteAllLines((Join-Path $taskOutput 'SHA256SUMS.txt'), [string[]]$taskSums, $taskUtf8)
-Write-Output "Release Last Hook $Version is ready: $taskOutput"
+foreach ($taskFile in $taskFiles) { Write-Output "Release Last Hook ${Version}: $taskFile" }

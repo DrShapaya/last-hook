@@ -4,7 +4,9 @@ extends SceneTree
 # location without the HUD, the hero or the follow camera, so changes to the
 # stone, mounts, decor and light can be compared frame by frame.
 #   Godot --path game --script res://tools/visual_fixture.gd -- --out=DIR
-#         [--location=0] [--quality=balanced] [--seed=58273]
+#         [--location=0] [--quality=balanced] [--seed=58273] [--acts]
+# --acts: the expedition of the location, one overview per act plus its
+# fork, hazard (shown in its telegraph or active phase) and landmark.
 # Lighting mirrors main.gd::_setup_lighting and _apply_shadow_preset.
 
 const MainScript := preload("res://scripts/main.gd")
@@ -17,6 +19,7 @@ var camera: Camera3D
 var frames: Array = []
 # --reference: the acceptance screen only, in three variants.
 var reference := false
+var acts := false
 
 func _initialize() -> void:
 	call_deferred("setup")
@@ -28,6 +31,7 @@ func setup() -> void:
 		if argument.begins_with("--quality="): quality = argument.trim_prefix("--quality=")
 		if argument.begins_with("--seed="): seed_value = int(argument.trim_prefix("--seed="))
 		if argument=="--reference": reference = true
+		if argument=="--acts": acts = true
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	root.size = Vector2i(540,960)
 	var stage := Node3D.new()
@@ -43,7 +47,8 @@ func setup() -> void:
 	stage.add_child(world)
 	world.setup(seed_value,location)
 	world.set_visual_quality(quality)
-	world.generate_to(126,true,120)
+	var total := float(LevelCatalog.level(location)["height_units"]) if acts else 120.0
+	world.generate_to(total+6,true,total)
 	_plan()
 	_run()
 
@@ -92,7 +97,51 @@ func _reference_center() -> Vector2:
 		return Vector2(lerpf(at.x,visuals.route_x_at(at.y),.55),at.y+2.0)
 	return Vector2(visuals.route_x_at(36),36)
 
+func _act_frames() -> void:
+	var layout := world.layout as ExpeditionLayout
+	var visuals := world.visuals as MassifVisuals
+	for act in range(3):
+		var span := layout.span(act)
+		var tag := "act_l%d_%d_%s" % [location,act+1,span["id"]]
+		var middle := (float(span["y_start"])+float(span["y_end"]))*.5
+		frames.append({"name":tag+"_overview","at":Vector2(visuals.route_x_at(middle),middle),"size":24.0})
+		for branch in layout.branches:
+			if int(branch.get("act",-1))!=act or branch.get("choice",false): continue
+			if branch["route_tag"] in ["risky_shortcut","speed","choice"] or (branch["route_tag"]=="collection" and branch["beat"]=="fork"):
+				var grip: Vector2 = world.anchors[branch["anchor"]]["pos"]
+				frames.append({"name":tag+"_fork","at":grip+Vector2(0,1.0),"size":13.0})
+				break
+		for hazard in layout.hazards:
+			if int(hazard["act"])!=act: continue
+			var at := Vector2.ZERO
+			if hazard.has("rect"): at = (hazard["rect"] as Rect2).get_center()
+			elif hazard.has("pos"): at = hazard["pos"]
+			elif hazard.has("x"): at = Vector2(hazard["x"],(float(hazard["top"])+float(hazard["bottom"]))*.5)
+			else: at = Vector2((float(world.ledges[int(hazard["ledge"])]["left"])+float(world.ledges[int(hazard["ledge"])]["right"]))*.5,float(world.ledges[int(hazard["ledge"])]["top"]))
+			frames.append({"name":"%s_hazard_%d_%s" % [tag,int(hazard["id"]),hazard["def"]],"at":at,"size":11.0,"hazard":hazard["id"]})
+		for mark in layout.landmarks:
+			if int(mark["act"])==act:
+				frames.append({"name":"%s_landmark_%s" % [tag,mark["family"]],"mark":mark,"at":mark["pos"]+Vector2(0,1.4),"size":9.0})
+				break
+
+# A time at which the hazard shows its telegraph (or its active phase).
+func _hazard_time(hazard: Dictionary) -> float:
+	match str(hazard["kind"]):
+		"field", "contact":
+			if is_inf(float(hazard["active_time"])): return 0.0
+			return float(hazard["calm_time"])+float(hazard["telegraph_time"])+float(hazard["active_time"])*.4-float(hazard["phase"])+ActHazards.cycle(hazard)*2
+		"falling":
+			world.hazards._state(hazard)["triggered"] = 10.0
+			return 10.0+float(hazard["telegraph_time"])*.7
+		"collapse":
+			world.hazards._state(hazard)["triggered"] = 10.0
+			return 10.0+float(hazard["telegraph_time"])*.6
+	return 0.0
+
 func _plan() -> void:
+	if acts and world.layout is ExpeditionLayout:
+		_act_frames()
+		return
 	if reference and world.visuals is MassifVisuals:
 		var at := _reference_center()
 		var tag := "ref_l%d_%s" % [location,quality]
@@ -137,10 +186,22 @@ func _plan() -> void:
 func _run() -> void:
 	for frame in frames:
 		var at: Vector2 = frame["at"]
+		# A landmark frame centres on where the face actually took it.
+		if frame.has("mark"):
+			world.update_visibility(at.y,at.x)
+			if (frame["mark"] as Dictionary).has("built_at"): at = (frame["mark"]["built_at"] as Vector2)+Vector2(0,1.4)
 		camera.size = frame["size"]
 		camera.position = Vector3(at.x,at.y,28)
 		camera.look_at(Vector3(at.x,at.y,0))
 		world.update_visibility(at.y,at.x)
+		if world.hazard_visuals!=null:
+			var time := 0.0
+			var haze := 0.0
+			if frame.has("hazard"):
+				var hazard: Dictionary = world.layout.hazards[int(frame["hazard"])]
+				time = _hazard_time(hazard)
+				haze = 1.0 if bool(hazard.get("haze",false)) else 0.0
+			for repeat in range(60): world.hazard_visuals.update(time,at,haze,at)
 		var show: String = frame.get("show","bare" if frame.get("bare",false) else "full")
 		for chunk in world.chunks.values():
 			for child in chunk.get_children():

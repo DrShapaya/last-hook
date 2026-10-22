@@ -18,7 +18,9 @@ func make_world(seed_value: int, quality: String, location: int = 0, version: in
 	var world := MountainWorld.new()
 	world.visuals_enabled = false
 	root.add_child(world)
-	world.setup(seed_value,location,version)
+	# The first location's zone look (bands, ice and snow with height) is the
+	# v13 contract of saved attempts; expeditions are checked in test_levels.
+	world.setup(seed_value,location,version if version>0 or location!=0 else 13)
 	world.generate_to(126,true,120)
 	world.visual_quality = quality
 	world.visuals.set_quality(quality)
@@ -242,7 +244,7 @@ func run_tests() -> void:
 		var holder: Node3D = anchor["visual"]
 		no_pebbles = no_pebbles and holder.find_child("Сколы",false,false)==null and holder.find_child("Каменное основание",false,false)==null
 		var signature := ""
-		for child in holder.get_children(): signature += String(child.name).substr(0,6)+","
+		for child in holder.find_children("*","Node3D",true,false): signature += String(child.name).substr(0,6)+","
 		shapes[signature] = true
 	check(polygon_kept,"visual grips never change the gameplay polygon")
 	check(no_pebbles,"grips carry no pebble chips or base ring of their own")
@@ -251,8 +253,12 @@ func run_tests() -> void:
 	for node in grip_chunk.find_children("Полоса состояния*","MeshInstance3D",true,false):
 		strip_lit = strip_lit and (node as MeshInstance3D).cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	check(strip_lit,"status strips never add a second shadow line")
-	var contours := grip_chunk.find_children("Контур","MeshInstance3D",true,false).size()
-	check(contours>=a.nearby_anchors(20,70).size(),"every grip has a contrast contour")
+	# The block separates by volume: a contact seam and paint on its top
+	# chamfer, never a contrast outline.
+	var seams := grip_chunk.find_children("Каменное гнездо","MeshInstance3D",true,false).size()
+	var bands := grip_chunk.find_children("Полоса состояния","MeshInstance3D",true,false).size()
+	var outlines := grip_chunk.find_children("Контур","MeshInstance3D",true,false).size()
+	check(seams>=a.nearby_anchors(20,70).size() and bands>=a.nearby_anchors(20,70).size() and outlines==0,"every grip has a contact seam and a painted band, and no outline")
 	var dials := 0
 	var dial_ok := true
 	for anchor in a.nearby_anchors(4,110):
@@ -288,17 +294,19 @@ func run_tests() -> void:
 			if massif.stone_field(Vector2(x,y))<0: open += 1
 	var sky_share := float(open)/total
 	check(sky_share>.05 and sky_share<.6,"sky opens between the masses around the climb (%.2f)" % sky_share)
-	# Visible grip stone stays within the gameplay polygon.
-	var inside_polygon := true
+	# The block's volume follows GripVisualSpec: 1.05-1.18 of the gameplay
+	# width, 1.15-1.35 of its height, standing out of the face and running
+	# back into the rock.
+	var block_sized := true
 	for anchor in a.nearby_anchors(20,70):
 		var holder: Node3D = anchor["visual"]
-		var bounds := Rect2(anchor["polygon"][0],Vector2.ZERO)
-		for point in anchor["polygon"]: bounds = bounds.expand(point)
-		for child in holder.get_children():
-			if child.name.begins_with("Каменный выступ"):
-				var box: AABB = (child as MeshInstance3D).get_aabb()
-				inside_polygon = inside_polygon and box.position.x>=bounds.position.x-.02 and box.end.x<=bounds.end.x+.02 and box.end.y<=bounds.end.y+.02 and box.position.y>=bounds.position.y-.15
-	check(inside_polygon,"visible grip stone stays within the gameplay polygon")
+		var body := holder.find_child("Каменный выступ",true,false) as MeshInstance3D
+		var box: AABB = body.get_aabb()
+		var size: Vector2 = anchor["dimensions"]
+		var spec: GripVisualSpec = anchor["visual_spec"]
+		block_sized = block_sized and box.size.x>=size.x*1.02 and box.size.x<=size.x*1.21 and box.size.y>=size.y*1.1 and box.size.y<=size.y*1.4
+		block_sized = block_sized and box.position.z<=-spec.back_embed+.001 and box.end.z>=spec.side_depth*.95 and spec.side_depth>=size.y*.45 and spec.back_embed>=size.y*.3
+	check(block_sized,"grip blocks follow the visual contract: wider and taller than the hitbox, with depth and an embedded back")
 	# Prices: hidden by default far from the hero, shown nearby, along the aim
 	# or always when the setting asks for it.
 	var priced := MountainWorld.new()
@@ -387,12 +395,12 @@ func run_tests() -> void:
 		massif.build_anchor(anchor,mount_chunk)
 		var holder: Node3D = anchor["visual"]
 		var mount: SurfaceMount = anchor["mount"]
-		sockets = sockets and holder.find_child("Каменное гнездо",false,false)!=null
+		sockets = sockets and holder.find_child("Каменное гнездо",true,false)!=null
 		single_contact = single_contact and is_equal_approx(holder.position.z,mount.wall_z()+MountainVisuals.GRIP_STANDOFF) and is_equal_approx(mount.wall_z(),massif.wall_depth(anchor["pos"]))
 		hosted = hosted and mount.host_mass>=0 and mount.surface_class!="" and mount.socket_center.is_equal_approx(Vector3(anchor["pos"].x,anchor["pos"].y,mount.wall_z()))
 		match GripSpec.kind_of(anchor):
 			GripSpec.SPRING: if holder.find_child("Изгиб",false,false)!=null and holder.find_child("Направление выхода",true,false)!=null: cues["spring"] = true
-			GripSpec.ICE: if holder.find_child("Трещина",true,false)!=null: cues["ice"] = true
+			GripSpec.ICE: if holder.find_child("Борозда скольжения",true,false)!=null: cues["ice"] = true
 			GripSpec.CRYSTAL: if holder.find_child("Кристалл",true,false)!=null: cues["crystal"] = true
 			GripSpec.ROOT: if holder.find_child("Трещина",true,false)!=null: cues["root"] = true
 		if anchor["permanent"]: fixed_ok = fixed_ok and holder.find_children("*крепление*","MeshInstance3D",true,false).size()+holder.find_children("Кольцо*","MeshInstance3D",true,false).size()>0
@@ -407,7 +415,7 @@ func run_tests() -> void:
 	for anchor in legacy.nearby_anchors(0,24):
 		legacy.visuals.build_anchor(anchor,legacy_chunk)
 		var holder: Node3D = anchor["visual"]
-		shared = shared and holder.find_child("Прямоугольник",false,false)==null and holder.find_child("Каменное гнездо",false,false)!=null
+		shared = shared and holder.find_child("Прямоугольник",false,false)==null and holder.find_child("Каменное гнездо",true,false)!=null
 	for ledge in legacy.ledges: legacy.visuals.build_ledge(ledge,legacy_chunk)
 	check(shared and legacy_chunk.find_children("Площадка отдыха*","Node3D",false,false).size()==legacy.ledges.size(),"legacy locations build grips and shelves through the shared mount API")
 	legacy.free()
@@ -461,9 +469,10 @@ func mount_contract_checks() -> void:
 		if anchor.get("permanent",true) or not is_instance_valid(anchor.get("visual")): continue
 		a.consume_anchor(anchor["id"])
 		var holder: Node3D = anchor["visual"]
-		consumed = not holder.visible and holder.find_child("Каменное гнездо",false,false)!=null and holder.find_child("Контактная тень",false,false)!=null and not massif.has_method("_occlusion")
+		# The seam belongs to the grip; grips cast real shadows instead of a disc decal.
+		consumed = not holder.visible and holder.find_child("Каменное гнездо",true,false)!=null and holder.find_child("Контактная тень",true,false)==null and not massif.has_method("_occlusion")
 		break
-	check(consumed,"consume_anchor hides the grip with its socket and shade, nothing baked stays behind")
+	check(consumed,"consume_anchor hides the grip with its seam; no contact disc and nothing baked stays behind")
 	# Decor budgets per chunk and profile-specific decor.
 	var budget_ok := true
 	var snow_caps := 0
@@ -488,7 +497,7 @@ func mount_contract_checks() -> void:
 	check(snow_caps>0,"the snow zone grows snow cornices instead of grass (%d)" % snow_caps)
 	# Location slots 1 and 2 use the same masses and mount contract.
 	for location in [1,2]:
-		var legacy := make_world(58273,"balanced",location)
+		var legacy := make_world(58273,"balanced",location,4)
 		var visuals := legacy.visuals as MassifVisuals
 		check(visuals!=null,"location %d builds the shared rock-mass mountain" % location)
 		if visuals==null:
@@ -521,7 +530,7 @@ func mount_contract_checks() -> void:
 	# frees every mesh of the released ones.
 	var streamed := MountainWorld.new()
 	root.add_child(streamed)
-	streamed.setup(58273,0)
+	streamed.setup(58273,0,13)
 	streamed.set_visual_quality("balanced")
 	streamed.generate_to(126,true,120)
 	streamed.update_visibility(30,0)

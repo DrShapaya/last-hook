@@ -73,6 +73,27 @@ func _apply_rock_profile(material: ShaderMaterial, profile: GripBiomeProfile) ->
 	material.set_shader_parameter("detail_strength",float(rock["normal_strength"]))
 	material.set_shader_parameter("strata_scale",float(rock["strata_scale"]))
 
+# The expedition's rock carries its act's weather (moss, snow, dust) instead of
+# the first location's height bands; one material per act.
+var act_materials: Dictionary = {}
+
+func rock_material_at(height: float) -> ShaderMaterial:
+	if not layout is ExpeditionLayout: return rock_material
+	var expedition := layout as ExpeditionLayout
+	var act := expedition.act_index_at(height)
+	var profile_id := str(expedition.span(act)["def"]["biome_profile"])
+	if not act_materials.has(profile_id):
+		var material := rock_material.duplicate() as ShaderMaterial
+		var profile := GripBiomeProfile.named(profile_id)
+		_apply_rock_profile(material,profile)
+		var weather: Dictionary = profile.weathering_rules
+		material.set_shader_parameter("moss_override",clampf(float(weather["moss"])/.6,0,1))
+		material.set_shader_parameter("snow_override",float(weather["snow"]))
+		material.set_shader_parameter("dust_amount",float(weather["dust"]))
+		material.set_shader_parameter("dust_color",profile.rock_palette["warm"])
+		act_materials[profile_id] = material
+	return act_materials[profile_id]
+
 func far_layer_count() -> int:
 	return 1 if quality=="battery" else FAR_LAYERS.size()
 
@@ -92,12 +113,37 @@ func region_of(y: float) -> int:
 func landmark_zone(point: Vector2) -> int:
 	return clampi(int(point.y/20.0),0,5)
 
+# Landmark family of a place: the act's own set pieces on v14, otherwise the
+# family of the height zone (or the location's style, see Legacy).
+func landmark_family(point: Vector2, random: RandomNumberGenerator) -> String:
+	if layout is ExpeditionLayout:
+		var families: Array = (layout as ExpeditionLayout).span((layout as ExpeditionLayout).act_index_at(point.y))["def"].get("landmarks",[])
+		if not families.is_empty(): return str(families[random.randi_range(0,families.size()-1)])
+	return LandmarkVisuals.ZONE_FAMILIES[landmark_zone(point)]
+
+func _act_color(height: float) -> Color:
+	# Base rock of the act's profile, blended over a few metres at a border.
+	var expedition := layout as ExpeditionLayout
+	var act := expedition.act_index_at(height)
+	var info := expedition.span(act)
+	var here: Color = GripBiomeProfile.named(str(info["def"]["biome_profile"])).rock_material["base_color"]
+	var above := float(info["y_end"])-height
+	if above<3.0:
+		var next: Color = GripBiomeProfile.named(str(expedition.span(act+1)["def"]["biome_profile"])).rock_material["base_color"]
+		here = here.lerp(next,.5-above/6.0)
+	var below := height-float(info["y_start"])
+	if below<3.0 and act>0:
+		var previous: Color = GripBiomeProfile.named(str(expedition.span(act-1)["def"]["biome_profile"])).rock_material["base_color"]
+		here = previous.lerp(here,.5+below/6.0)
+	return here
+
 func _route_x(y: float) -> float:
 	var key := int(round(y*8.0))
 	if not route_cache.has(key): route_cache[key] = route_x_at(key/8.0)
 	return route_cache[key]
 
 func zone_color(height: float) -> Color:
+	if layout is ExpeditionLayout: return _act_color(height)
 	# Base rock of the zone's profile, blended across zone borders.
 	var t := clampf(height/20.0,0,5.0)
 	var index := mini(int(t),4)
@@ -335,6 +381,8 @@ func front_band(band: int) -> Array:
 	for ledge in layout.ledges:
 		var top_y := float(ledge["top"])
 		if top_y<low or top_y>=high: continue
+		# A sand bridge is its own slab (HazardVisuals): it must be able to fall.
+		if ledge.has("bridge"): continue
 		var middle := Vector2((float(ledge["left"])+float(ledge["right"]))*.5,top_y-.7)
 		_seat(list,band,middle,Vector2((float(ledge["right"])-float(ledge["left"]))*.4,.5),random)
 		_shelf(list,band,"ledge_shelf",float(ledge["left"])-.12,float(ledge["right"])+.12,top_y,random.randf_range(1.5,1.9),minf(_front_z(list,middle,-1.0)+1.0,FRONT_LIMIT),random)
@@ -600,7 +648,7 @@ func _build_masses(index: int, parent: Node3D) -> void:
 	var instance := MeshInstance3D.new()
 	instance.name = "Скальный массив_%d" % index
 	instance.mesh = surface.commit()
-	instance.material_override = rock_material
+	instance.material_override = rock_material_at(index*BAND+BAND*.5)
 	# Masses shade each other: overhangs, lintels and stacked blocks cast on
 	# the stone behind them. Battery has no shadow map at all.
 	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if quality!="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -711,6 +759,12 @@ func _build_decor(index: int, parent: Node3D) -> void:
 				hanging += 1
 			_:
 				if not open or not _decor_route_clear(point,.6) or _decor_blocked(point): continue
+		# On the expeditions some tops carry the act's own small props.
+		var prop := ""
+		if kind in ["grass","pebbles"] and layout is ExpeditionLayout and random.randf()<.42:
+			var expedition := layout as ExpeditionLayout
+			var props: Array = expedition.span(expedition.act_index_at(point.y))["def"].get("props",[])
+			if not props.is_empty(): prop = str(props[random.randi_range(0,props.size()-1)])
 		var holder := Node3D.new()
 		holder.name = "Процедурный декор_%d" % placed
 		parent.add_child(holder)
@@ -718,6 +772,11 @@ func _build_decor(index: int, parent: Node3D) -> void:
 		# Grow along the face: lean back with its slope, out with its side.
 		holder.rotation.x = -clampf(hit.normal.y,-.6,.6)*.5
 		var size := clampf(float(candidate[4])/2.4,.8,1.25)
+		if not prop.is_empty():
+			holder.rotation.z = clampf(-outward.x*.4,-.4,.4)
+			ActProps.build(self,prop,holder,random,profile,detail)
+			placed += 1
+			continue
 		match kind:
 			"crystal":
 				holder.rotation.z = clampf(-outward.x*.4,-.4,.4)
@@ -764,6 +823,14 @@ func _landmark_clear(point: Vector2, height: float) -> bool:
 		if _decor_blocked(probe,1.0) or not _decor_route_clear(probe,3.0): return false
 	return true
 
+# An act landmark marks a place on the route, so it may stand nearer to it
+# than an island set piece, still clear of every gameplay object.
+func _mark_clear(point: Vector2, height: float) -> bool:
+	for step in range(4):
+		var probe := point+Vector2(0,height*step/3.0)
+		if _decor_blocked(probe,.45) or not _decor_route_clear(probe,2.0): return false
+	return true
+
 func _build_landmarks(index: int, parent: Node3D) -> void:
 	# One large themed piece standing on the top face of a side island.
 	front_band(index)
@@ -782,14 +849,36 @@ func _build_landmarks(index: int, parent: Node3D) -> void:
 		var point := rim.lerp(ring,.5)
 		var hit := _on_face(best,point)
 		if hit==null: continue
-		var zone := landmark_zone(point)
-		if not _landmark_clear(point,LandmarkVisuals.height_for(zone)): continue
+		var family := landmark_family(point,random)
+		if not _landmark_clear(point,LandmarkVisuals.family_height(family)): continue
 		var holder := Node3D.new()
 		holder.name = "Крупный элемент_%d" % placed
 		parent.add_child(holder)
 		holder.position = hit.position+Vector3(0,0,.05)
-		LandmarkVisuals.build(self,zone,holder,random,quality=="high")
+		LandmarkVisuals.build_family(self,family,holder,random,quality=="high")
 		placed += 1
+	# Act landmarks (v14) mark a fork or the way into the next act; they take
+	# the nearest clear spot of the face around their planned point.
+	for mark in layout.landmarks:
+		var at: Vector2 = mark["pos"]
+		if int(floor(at.y/BAND))!=index: continue
+		var family := str(mark["family"])
+		var outward := signf(at.x-_route_x(at.y)) if absf(at.x-_route_x(at.y))>.3 else 1.0
+		var offsets: Array = []
+		for dy in [0.0,1.5,-1.5,3.0]:
+			for dx in [0.0,1.5,-1.5,3.0,-3.0,4.5,-4.5,6.0]: offsets.append(Vector2(dx,dy))
+		offsets.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.length_squared()<b.length_squared())
+		for offset in offsets:
+			var point: Vector2 = at+Vector2(offset.x*outward,offset.y)
+			var hit := surface_query(point)
+			if not hit.valid() or not _mark_clear(point,LandmarkVisuals.family_height(family)): continue
+			var holder := Node3D.new()
+			holder.name = "Ориентир акта_%s" % family
+			parent.add_child(holder)
+			holder.position = hit.position+Vector3(0,0,.05)
+			LandmarkVisuals.build_family(self,family,holder,layout.rng(int(roundf(at.y*10)),978),quality=="high")
+			mark["built_at"] = point
+			break
 
 # --- Distant ranges -----------------------------------------------------------------
 

@@ -218,7 +218,7 @@ func run_tests() -> void:
 	game.world.finds.clear()
 	game.world.obstacles.clear()
 	game.world.add_obstacle(Vector2(0,10),Vector2(.6,2))
-	game.model.profile["levels"][4] = 6
+	game.model.set_level(GameModel.MAGNET,5)
 	game.model.bag.clear()
 	game.world.finds.append({"pos":Vector2(.7,10),"picked":false,"item":{"id":990,"tier":0,"value":40}})
 	game.sim.pos = Vector2(-.7,10)

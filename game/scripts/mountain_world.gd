@@ -1,7 +1,7 @@
 class_name MountainWorld
 extends Node3D
 
-const GENERATION_VERSION := 13
+const GENERATION_VERSION := 15
 # A timed root holds this long before it breaks (see GripSpec).
 const FRAGILE_SECONDS := GripSpec.ROOT_SECONDS
 const COLORS := [Color("e3b95e"),Color("e8624d"),Color("70c995"),Color("78d8e5"),Color("a994df"),Color("f1d27b")]
@@ -28,11 +28,21 @@ var sky_backdrop: ProceduralSkyBackdrop
 var far_layers: Array[Node3D] = []
 var far_bands: Dictionary = {}
 var camera_center := Vector2(0,7)
+# Environmental hazards of the acts (v14); empty on older generators.
+var hazards: ActHazards
+var hazard_visuals: HazardVisuals
 var show_loot_prices := true
 var visual_quality := "balanced"
 
-static func generation_version_for(biome: int) -> int:
-	return GENERATION_VERSION if biome==0 else 4
+# Every location slot starts new attempts on the expedition generator (v15:
+# v14 geometry with role-based finds, coins and contracts). Saved attempts keep
+# their own: v14 anywhere, v6-v13 on the first location, v4 elsewhere.
+static func generation_version_for(_biome: int) -> int:
+	return GENERATION_VERSION
+
+static func resumable(version: int, biome: int) -> bool:
+	if version in [14,GENERATION_VERSION]: return true
+	return version in [6,7,8,9,10,11,12,13] if biome==0 else version==4
 
 func setup(world_seed: int, world_location: int, saved_version: int = 0, practice: bool = false) -> void:
 	seed_value = world_seed
@@ -40,7 +50,11 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	generation_version = saved_version if saved_version>0 else generation_version_for(location)
 	if generation_version>=10 and location==0: layout = EncounterLayout.new()
 	if generation_version>=11 and location==0: layout = MassifLayout.new()
+	# v14: acts of the level decide route, silhouette, profile and hazards.
+	if generation_version>=14: layout = ExpeditionLayout.new()
 	if practice: layout = PracticeLayout.new()
+	# v15 changes only the finds layer; v14 geometry and hazards are kept.
+	if layout is ExpeditionLayout: layout.economy_loot = generation_version>=15
 	layout.gentle_intro = generation_version>=7
 	layout.sparse_route = generation_version>=8
 	layout.safe_routes = generation_version>=9
@@ -48,7 +62,8 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	layout.scenario_routes = generation_version>=12
 	# v13 calibrates the type mix and slides ice across its grip.
 	layout.calibrated_routes = generation_version>=13
-	if location!=0: layout = LegacyMountainLayout.new()
+	# Only a saved v4 attempt still regenerates on the old generator.
+	if location!=0 and generation_version<14 and not practice: layout = LegacyMountainLayout.new()
 	layout.setup(world_seed,world_location)
 	anchors = layout.anchors
 	main_route = layout.main_route
@@ -59,8 +74,11 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	if layout is MassifLayout: visuals = MassifVisuals.new(self,layout)
 	# Locations on generator v4 and the practice route have no landforms of
 	# their own; they get the same rock-mass mountain round their route line.
-	if location!=0 or practice: visuals = LegacyMountainVisuals.new(self,layout)
-	if visuals_enabled: _build_sky()
+	if layout is LegacyMountainLayout or practice: visuals = LegacyMountainVisuals.new(self,layout)
+	hazards = ActHazards.new(self,layout)
+	if visuals_enabled:
+		_build_sky()
+		if layout is ExpeditionLayout: hazard_visuals = HazardVisuals.new(self,layout)
 
 func set_visual_quality(quality: String) -> void:
 	var selected := quality if quality in ["high","balanced","battery"] else "balanced"
@@ -210,8 +228,22 @@ func box(node_name: String, where: Vector3, dimensions: Vector3, material: Mater
 	instance.position = owner_node.to_local(where)
 	return instance
 
+# The run's contract cargo ({} when the generator places none).
+func contract_info() -> Dictionary:
+	return (layout as ExpeditionLayout).contract.duplicate() if layout is ExpeditionLayout else {}
+
 func profile_at(height: float) -> GripBiomeProfile:
-	return GripBiomeProfile.for_place(location,height)
+	return GripBiomeProfile.named(layout.profile_id_at(height))
+
+# The act at a height ({} before v14) and a compact state for logs and tests.
+func act_at(height: float) -> Dictionary:
+	return layout.act_at(height)
+
+func debug_state(point: Vector2, time: float = 0.0) -> Dictionary:
+	var act := act_at(point.y)
+	return {"location":location,"generation_version":generation_version,"layout":layout.get_script().get_global_name(),
+		"level_id":act.get("level_id",""),"act_id":act.get("id",""),"act_index":act.get("index",-1),"act_name":act.get("display_name",""),
+		"profile":layout.profile_id_at(point.y),"variant":act.get("variant",0),"hazards":hazards.debug_near(point,time)}
 
 func build_anchor(object: Dictionary, chunk: Node3D) -> void:
 	visuals.build_anchor(object,chunk)
@@ -220,42 +252,9 @@ func build_anchor(object: Dictionary, chunk: Node3D) -> void:
 	if GripSpec.timed(object) and is_instance_valid(object.get("visual")):
 		_add_timer_dial(object)
 
-# Contact after holding for `held` seconds: ice walks the hook along the drawn
-# contour in its slide direction, never uphill, and stops in the lowest corner
-# it reaches; every other type keeps the contact. The walk is continuous, so
-# the hook can neither jump across a thin grip nor leave the stone.
+# Contact after holding for `held` seconds (see GripSpec.contact_after).
 func anchor_contact_after(object: Dictionary, contact: Vector2, held: float) -> Vector2:
-	var remaining := GripSpec.slide_distance(object,held)
-	if remaining<=0: return contact
-	var outline := anchor_outline(object)
-	if outline.size()<3: return contact
-	var direction := GripSpec.slide_direction(object)
-	var count := outline.size()
-	var point := anchor_surface_point(object,contact)
-	var segment := 0
-	var best := INF
-	for index in range(count):
-		var closest := Geometry2D.get_closest_point_to_segment(point,outline[index],outline[(index+1)%count])
-		if closest.distance_squared_to(point)<best:
-			best = closest.distance_squared_to(point)
-			segment = index
-	# Walk towards whichever end of the segment lies down the slide.
-	var a := outline[segment]
-	var b := outline[(segment+1)%count]
-	var step := 1 if (b-a).dot(direction)>=(a-b).dot(direction) else -1
-	var target := (segment+1)%count if step>0 else segment
-	for guard in range(count+1):
-		var leg := outline[target]-point
-		if leg.length_squared()<.000001:
-			target = posmod(target+step,count)
-			continue
-		var heading := leg.normalized()
-		if heading.dot(direction)<=0 or heading.y>.05: break
-		if leg.length()>=remaining: return point+heading*remaining
-		remaining -= leg.length()
-		point = outline[target]
-		target = posmod(target+step,count)
-	return point
+	return GripSpec.contact_after(object,contact,held)
 
 # Visible reaction of the held grip: a spring bends towards the load and a
 # choice crystal lights its two exits. Purely visual.
@@ -269,8 +268,9 @@ func update_anchor_load(id: int, rope: Vector2, velocity: Vector2) -> void:
 		if bend!=null:
 			var pull := clampf(rope.normalized().x,-1,1) if rope.length_squared()>.01 else 0.0
 			var charge := GripSpec.spring_load(object,velocity)
-			bend.rotation.z = lerpf(bend.rotation.z,-pull*.22,.25)
-			bend.scale.y = lerpf(bend.scale.y,1.0-.18*charge,.25)
+			# The stone block leans and settles a little; it never squashes flat.
+			bend.rotation.z = lerpf(bend.rotation.z,-pull*.07,.25)
+			bend.scale.y = lerpf(bend.scale.y,1.0-.06*charge,.25)
 	for exit_id in GripSpec.choice_exits(object): _highlight_exit(int(exit_id),true)
 
 func release_anchor_load(id: int) -> void:
@@ -301,8 +301,11 @@ func _light_status(object: Dictionary, held: bool) -> StandardMaterial3D:
 	# A rebuilt chunk brings back the shared material; light a fresh copy.
 	if strip.material_override!=object.get("status_lit"):
 		object["status_rest"] = strip.material_override
+		# Held: the paint warms up a little; at rest it is plain paint.
 		var lit := (strip.material_override as StandardMaterial3D).duplicate() as StandardMaterial3D
-		lit.emission_energy_multiplier = 1.5
+		lit.emission_enabled = true
+		lit.emission = profile_at(object["pos"].y).paint_color(GripSpec.kind_of(object))
+		lit.emission_energy_multiplier = .35
 		strip.material_override = lit
 		object["status_lit"] = lit
 	return object["status_lit"]
@@ -324,7 +327,8 @@ func _highlight_exit(id: int, on: bool) -> void:
 		torus.outer_radius = torus.inner_radius+.08
 		ring.mesh = torus
 		ring.rotation.x = PI*.5
-		ring.position = Vector3(0,0,.95)
+		# A temporary hint while the crystal is held, just off the exit's face.
+		ring.position = Vector3(0,0,float((object.get("face_point",Vector3(0,0,.92)) as Vector3).z)+.03)
 		ring.material_override = mat("choice_exit",Color("bfe4ff"),true)
 		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		marker.add_child(ring)
@@ -345,22 +349,25 @@ func _add_timer_dial(object: Dictionary) -> void:
 	var dial := MeshInstance3D.new()
 	dial.name = "Таймер опоры"
 	var quad := QuadMesh.new()
-	quad.size = Vector2(.56,.56)
+	var size := float(object.get("dial_size",.56))
+	quad.size = Vector2(size,size)
 	dial.mesh = quad
 	dial.material_override = material
 	dial.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	dial.position = Vector3(0,-.04,1.05)
+	# On the block's front face, below the paint.
+	var face: Vector3 = object.get("face_point",Vector3(0,-.04,1.05))
+	dial.position = face
 	holder.add_child(dial)
 	var label := Label3D.new()
 	label.name = "Секунды опоры"
 	label.text = _timer_text(GripSpec.ROOT_SECONDS)
 	label.font_size = 56
 	label.outline_size = 0
-	label.pixel_size = .0042
+	label.pixel_size = .0042*size/.56
 	label.modulate = Color("fff4e2")
 	label.shaded = false
 	label.double_sided = true
-	label.position = Vector3(0,-.04,1.07)
+	label.position = face+Vector3(0,0,.02)
 	holder.add_child(label)
 	object["timer_dial"] = {"material":material,"label":label,"shown":-1.0}
 
@@ -383,8 +390,16 @@ func update_anchor_timer(id: int, seconds_left: float) -> void:
 	var lit := _light_status(object,true)
 	if lit!=null:
 		var alarm := clampf((GripSpec.ROOT_SECONDS-shown-GripSpec.ROOT_WARNING)/(GripSpec.ROOT_SECONDS-GripSpec.ROOT_WARNING),0,1)
-		lit.emission = MountainWorld.COLORS[GripSpec.ROOT].lerp(style["alarm"],alarm)
-		lit.albedo_color = lit.emission
+		lit.emission = profile_at(object["pos"].y).paint_color(GripSpec.ROOT).lerp(style["alarm"],alarm)
+		lit.albedo_color = Color.WHITE.lerp(style["alarm"],alarm*.6)
+	# The root's cracks open up in the same colour.
+	var cracks: StandardMaterial3D = object.get("crack_material")
+	if cracks!=null:
+		var breaking := clampf((GripSpec.ROOT_SECONDS-shown-GripSpec.ROOT_WARNING)/(GripSpec.ROOT_SECONDS-GripSpec.ROOT_WARNING),0,1)
+		cracks.albedo_color = Color.WHITE.lerp(style["alarm"],breaking)
+		cracks.emission_enabled = breaking>0
+		cracks.emission = style["alarm"]
+		cracks.emission_energy_multiplier = .6*breaking
 
 func sphere(node_name: String, where: Vector3, dimensions: Vector3, material: Material, parent: Node3D = null) -> MeshInstance3D:
 	var instance := MeshInstance3D.new()
@@ -437,32 +452,11 @@ func cast_hook(from: Vector2, to: Vector2, grip: float, ignore_anchor: int = -1)
 	return result
 
 func anchor_outline(object: Dictionary) -> PackedVector2Array:
-	var pos: Vector2 = object["pos"]
-	var outline := PackedVector2Array()
-	if object.has("surface") or object.has("polygon"):
-		for point in object["surface"] if object.has("surface") else object["polygon"]: outline.append(point+pos)
-	else:
-		var half: Vector2 = object["dimensions"]*.5
-		outline = PackedVector2Array([pos-half,pos+Vector2(half.x,-half.y),pos+half,pos+Vector2(-half.x,half.y)])
-	return outline
+	return GripSpec.outline(object)
 
-# Moves a point onto the visible grip surface: along the shot direction when
-# it still meets the stone, otherwise to the nearest point of the contour.
+# Moves a point onto the visible grip surface (see GripSpec.surface_point).
 func anchor_surface_point(object: Dictionary, point: Vector2, direction: Vector2 = Vector2.ZERO) -> Vector2:
-	var outline := anchor_outline(object)
-	if outline.size()<3 or Geometry2D.is_point_in_polygon(point,outline): return point
-	var best := outline[0]
-	for index in range(outline.size()):
-		var closest := Geometry2D.get_closest_point_to_segment(point,outline[index],outline[(index+1)%outline.size()])
-		if closest.distance_squared_to(point)<best.distance_squared_to(point): best = closest
-	if direction.length_squared()>.000001:
-		# A grazing ray may meet the stone far along its path; then the nearest
-		# point reads better than a hook sliding across the face.
-		var limit := point.distance_to(best)*2+.05
-		var reach := point+direction.normalized()*limit
-		var fraction := RopeSim.hit_polygon(point,reach,outline)
-		if fraction>=0: return point.lerp(reach,fraction)
-	return best
+	return GripSpec.surface_point(object,point,direction)
 
 func move_player(from: Vector2, to: Vector2, velocity: Vector2) -> Dictionary:
 	var position_value := from
@@ -482,6 +476,8 @@ func move_player(from: Vector2, to: Vector2, velocity: Vector2) -> Dictionary:
 				best = hit
 		if remaining.y<-.000001:
 			for ledge in ledges:
+				# A collapsed sand bridge no longer carries the hero.
+				if ledge.get("collapsed",false): continue
 				var top: float = ledge["top"]+SolidGeometry.BODY_HALF.y
 				if position_value.y<top-.004: continue
 				var fraction := (top-position_value.y)/remaining.y
@@ -637,8 +633,9 @@ func update_visibility(center_y: float, center_x: float = 0) -> void:
 	var ready_chunk := int(floor((layout.main_point(layout.row).y-2)/24))-1
 	# The massif of a chunk reads the objects of its neighbours, so a chunk is
 	# built only once the generator has passed it.
-	if location!=0: ready_chunk = int(floor((generated_height-2)/24))-1
-	if layout.finite and (layout.summit_added or (location==0 and layout.main_point(layout.row).y>=layout.summit-.8)):
+	var legacy := layout is LegacyMountainLayout
+	if legacy: ready_chunk = int(floor((generated_height-2)/24))-1
+	if layout.finite and (layout.summit_added or (not legacy and layout.main_point(layout.row).y>=layout.summit-.8)):
 		ready_chunk = int(floor(layout.summit/24))
 	var last := mini(ready_chunk,int(floor((center_y+32)/24)))
 	for key in chunks.keys():
@@ -664,6 +661,7 @@ func update_visibility(center_y: float, center_x: float = 0) -> void:
 			box("Флаг",Vector3(p.x+1.2,layout.summit+1.7,2),Vector3(.8,.5,.1),mat("flag",Color("e6b64b")),chunk)
 	for object in nearby_anchors(center_y-40,center_y+40):
 		if is_instance_valid(object.get("visual")): object["visual"].visible = not object["broken"]
+	if hazard_visuals!=null: hazard_visuals.build_near(center_y)
 	for find in finds:
 		if is_instance_valid(find.get("visual")): find["visual"].visible = not find.get("picked",false)
 func _update_far_layers() -> void:
@@ -766,6 +764,37 @@ func _crumble(object: Dictionary) -> void:
 				tween.tween_property(chip,"position",chip.position+Vector3((index-1.5)*.35,-1.4,0),.36).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 				tween.tween_property(chip,"scale",Vector3.ZERO,.36)
 				tween.chain().tween_callback(chip.queue_free)
+
+# --- Act hazards (v14) ------------------------------------------------------------
+
+# One physics step of the act hazards: drift, a knock and one-time collapses.
+func step_hazards(time: float, hero: Vector2, grounded: bool, held_anchor: int = -1, last_anchor: int = -1) -> Dictionary:
+	var result: Dictionary = hazards.step(time,hero,grounded,held_anchor,last_anchor)
+	for id in result["collapsed"]: _collapse_bridge(int(id))
+	if hazard_visuals!=null: hazard_visuals.update(time,hero,float(result["haze"]),camera_center)
+	return result
+
+func _collapse_bridge(id: int) -> void:
+	var hazard: Dictionary = layout.hazards[id]
+	var ledge: Dictionary = ledges[int(hazard["ledge"])]
+	ledge["collapsed"] = true
+	if hazard_visuals!=null: hazard_visuals.collapse(hazard)
+	# The revealed grip becomes the new way on.
+	var exit := anchor_by_id(int(hazard["reveal"]))
+	if exit.is_empty(): return
+	exit["broken"] = false
+	exit["hidden"] = false
+	GripSpec.restore(exit,false)
+	if is_instance_valid(exit.get("visual")): exit["visual"].visible = true
+
+func restore_hazards(collapsed: Array) -> void:
+	hazards.restore_collapsed(collapsed)
+	for id in collapsed:
+		if int(id)<0 or int(id)>=layout.hazards.size(): continue
+		var hazard: Dictionary = layout.hazards[int(id)]
+		if hazard["kind"]!="collapse": continue
+		ledges[int(hazard["ledge"])]["collapsed"] = true
+		if hazard_visuals!=null: hazard_visuals.collapse(hazard,false)
 
 func object_description(object: Dictionary) -> String:
 	# Type and lifetime are separate words: a permanent ice grip still reads as ice.

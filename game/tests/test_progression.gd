@@ -42,14 +42,17 @@ func run_tests() -> void:
 	old["gold"] = 1234
 	old["diamonds"] = 17
 	old["levels"] = [6,6,3,6,6,6,6]
-	old["active"] = {"id":"in-progress","bag":[{"id":23,"tier":5,"value":560}],"picked":[23],"broken":[1,2],"active_reserves":[],"seed":12345,"revive_used":true}
+	old["active"] = {"id":"in-progress","bag":[{"id":23,"tier":5,"value":560},{"id":24,"tier":0,"value":40,"kind":"coin"}],"picked":[23,24],"broken":[1,2],"active_reserves":[],"seed":12345,"revive_used":true}
 	write_profile(path,old)
 	var migrated := GameModel.new(path)
-	check(migrated.profile["gold"]==1234+27962,"maximum existing kit returns the complete net price reduction")
-	check(migrated.profile["levels"]==[6,6,4,6,6,6,6,1] and migrated.profile["diamonds"]==17,"migration preserves all equipment and maps the old maximum hook to the new final stage")
-	var migrated_active: Dictionary = migrated.profile["active"].duplicate(true)
-	migrated_active["seed"] = int(migrated_active["seed"]) # JSON decodes numbers as floats.
-	check(migrated_active==old["active"],"economic migration preserves an active run including loot and spent grips")
+	# v3 -> v5 returns 27962; v5 -> v6 returns the cheaper five-level tracks
+	# (78435); the old coin still in the bag is banked once (+40).
+	check(migrated.profile["gold"]==1234+27962+78435+40,"maximum existing kit returns the complete net price reduction of both migrations")
+	check(migrated.profile["upgrade_levels"]==[5,5,4,5,5,5,5,1] and migrated.profile["diamonds"]==17 and migrated.hook_config()==4,"migration keeps every track at its new maximum and the final hook stage selected")
+	var migrated_active: Dictionary = migrated.profile["active"]
+	check(migrated_active["id"]=="in-progress" and migrated_active["bag"].size()==1 and int(migrated_active["bag"][0]["id"])==23 and migrated_active["bag"][0]["family"]=="valuable" and migrated_active["picked"]==[23,24] and migrated_active["broken"]==[1,2] and int(migrated_active["seed"])==12345,"migration keeps the active run, its loot, spent grips and picked ids")
+	check(migrated.profile["coin_ledger"]["run"]=="in-progress" and migrated.profile["coin_ledger"]["ids"]==[24] and migrated.run_coins("in-progress")==40,"an old coin in the active bag moves to the ledger instead of the bag")
+	check(migrated.profile["reached_acts"]==1 and migrated.stock("beacon")==1,"old profiles get acts reached from their best height and the trial beacon")
 	migrated.save()
 	var reloaded := GameModel.new(path)
 	check(reloaded.profile==migrated.profile,"saving v4 makes compensation idempotent")
@@ -64,7 +67,7 @@ func run_tests() -> void:
 	old["active"] = {}
 	write_profile(path,old)
 	var middle := GameModel.new(path)
-	check(middle.profile["gold"]==1234 and middle.profile["levels"]==old["levels"]+[1],"more expensive middle levels never create debt or remove purchased equipment")
+	check(middle.profile["gold"]==1234+302 and middle.profile["upgrade_levels"]==old["levels"]+[1],"middle levels are kept; only cheaper steps are refunded and dearer ones create no debt")
 	old["levels"] = [1,1,1,1,1,1,1]
 	write_profile(path,old)
 	var starter := GameModel.new(path)
@@ -72,6 +75,7 @@ func run_tests() -> void:
 	starter.profile["gold"] = 100000
 	starter.profile["diamonds"] = 100
 	starter.profile["summit_cleared"] = true
+	starter.profile["cleared_locations"] = [0]
 	starter.profile["active"] = {"id":"ongoing"}
 	starter.purchase_location(1)
 	check(starter.profile["locations"]==[0] and starter.profile["gold"]==100000,"model refuses a location purchase during an active attempt")
@@ -85,11 +89,11 @@ func run_tests() -> void:
 	await process_frame
 	game.set_physics_process(false)
 	game.model.profile = GameModel.fresh_profile()
-	game.model.profile["gold"] = 5700
+	game.model.profile["gold"] = 3900
 	game.hud.select_menu("equipment")
 	for expected in [2,3,4]:
 		var tip_button: Button
-		var price := 900 if expected==2 else 1800 if expected==3 else 3000
+		var price := 500 if expected==2 else 1200 if expected==3 else 2200
 		for button in game.hud.content.find_children("*","Button",true,false):
 			# The price is a label inside the button and the row is named by its card.
 			if button.text=="Улучшить" and has_text(button.get_parent(),"Крюки") and has_text(button,str(price)): tip_button = button
@@ -112,7 +116,7 @@ func run_tests() -> void:
 	game.world.ledges.clear()
 	game.world.finds.clear()
 	game.sim.pos = Vector2(0,30)
-	game.model.profile["levels"][4] = 6
+	game.model.set_level(GameModel.MAGNET,5)
 	game.world.finds.append(find(1,Vector2(1,30),40))
 	game.world.finds.append(find(2,Vector2(1.8,30),200))
 	game._collect_finds()
@@ -152,12 +156,16 @@ func run_tests() -> void:
 	game.hud.select_menu("settings")
 	check(has_label(game,"Отцепись"),"touch settings display the fourth control instruction")
 	game.model.profile["gold"] = 100000
-	game.model.profile["levels"][0] = 2
+	game.model.set_level(GameModel.ROPE,2)
 	game.hud.select_menu("equipment")
-	var height_gate := false
+	var act_gate := false
 	for button in game.hud.content.find_children("*","Button",true,false):
-		if button.text=="Достигни 400 м": height_gate = button.disabled
-	check(height_gate,"locked upgrade tells the actual required height")
+		if button.text=="Пройди первый акт": act_gate = button.disabled
+	check(act_gate,"locked upgrade names the act it waits for")
+	var use_hint := false
+	for label in game.hud.content.find_children("Use","Label",true,false):
+		use_hint = use_hint or label.text=="Синяя трещина: выбор дальность/контроль"
+	check(use_hint,"each upgrade row says where its next level helps")
 	game.queue_free()
 	await process_frame
 	var report := FileAccess.open(directory.path_join("progression-test-report.json"),FileAccess.WRITE)

@@ -33,6 +33,10 @@ var scenario_routes := false
 # v13: ice slides across its grip, auxiliary grips include springs, and a
 # phrase may repeat a known risk on a second detour (see EncounterLayout).
 var calibrated_routes := false
+# v14 (ExpeditionLayout): environmental hazards and act landmarks. Older
+# generators keep both empty.
+var hazards: Array[Dictionary] = []
+var landmarks: Array[Dictionary] = []
 static var _base_kit: Dictionary = {}
 
 func setup(world_seed: int, biome: int) -> void:
@@ -70,6 +74,14 @@ func main_point(index: int) -> Vector2:
 		if absf(x)>12.5: x = previous.x-dx
 		route_points.append(Vector2(x,previous.y+rise))
 	return route_points[index]
+
+# Style of the place at a height (GripBiomeProfile id) and the act there.
+# Generators before v14 have no acts: the style follows location and zone.
+func profile_id_at(height: float) -> String:
+	return GripBiomeProfile.id_for(location,height)
+
+func act_at(_height: float) -> Dictionary:
+	return {}
 
 func outer_edge(y: float, side: int) -> float:
 	var phase := float(seed_value%997)*.017+location

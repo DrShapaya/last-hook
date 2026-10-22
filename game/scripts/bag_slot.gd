@@ -3,6 +3,8 @@ extends Control
 
 var item: Dictionary = {}
 var rare := false
+# The last slot of a full-size bag takes only materials, relics and contracts.
+var special := false
 var on_discard := Callable()
 var held_touch := -1
 var hold_time := 0.0
@@ -47,7 +49,7 @@ func _draw() -> void:
 		# Empty cells show a faint socket so capacity reads at a glance.
 		var socket := PackedVector2Array([Vector2(0,-9),Vector2(9,0),Vector2(0,9),Vector2(-9,0)])
 		for index in range(4): socket[index] *= unit
-		draw_polyline(PackedVector2Array([socket[0],socket[1],socket[2],socket[3],socket[0]]),Color("efebe1",.16),1.2*unit,true)
+		draw_polyline(PackedVector2Array([socket[0],socket[1],socket[2],socket[3],socket[0]]),Color("8fd8ee",.5) if special else Color("efebe1",.16),1.2*unit,true)
 	if not filled:
 		return
 	var hold := clampf(hold_time/HOLD_SECONDS,0,1) if held_touch!=-1 else 0.0

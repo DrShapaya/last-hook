@@ -180,6 +180,9 @@ func set_tip_count(count: int) -> void:
 		for piece in bolt_secondary.get_children():
 			if piece is MeshInstance3D and piece.get_index()>=1: piece.visible = tip_count>=3 or piece.get_index()==3
 
+func set_walk_speed(speed: float) -> void:
+	if body is ExplorerSprite: (body as ExplorerSprite).walk_speed = speed
+
 func set_hook_configuration(tips: int, count: int) -> void:
 	hook_count = clampi(count,1,2)
 	set_tip_count(tips)

@@ -37,7 +37,7 @@ func set_quality(value: String) -> void:
 	quality = value if value in ["high","balanced","battery"] else "balanced"
 
 func profile_at(height: float) -> GripBiomeProfile:
-	return GripBiomeProfile.for_place(layout.location,height)
+	return GripBiomeProfile.named(layout.profile_id_at(height))
 
 func rock_color() -> Color:
 	return ROCK_COLORS[layout.location%4]
@@ -224,20 +224,20 @@ func grip_material_name(object: Dictionary) -> String:
 	return profile_at(Vector2(object.get("pos",Vector2.ZERO)).y).material_name(GripSpec.kind_of(object))
 
 const ROUND_FAMILIES := ["bough","wet_slab","clear_ice","salt_glass","cloud_glass","ice_crust","pumice","fibrous_root","frozen_branch","rope_root","hanging_mount","cloth_band"]
-const WOOD_FAMILIES := ["fibrous_root","frozen_branch","rope_root","cracked_beam"]
-const SPRING_FAMILIES := ["bough","cloth_band","ice_crust","spring_bracket","hanging_mount"]
-const GLAZE_FAMILIES := ["wet_slab","salt_glass","clear_ice","polished_tile","cloud_glass"]
-const CRYSTAL_FAMILIES := ["quartz_cluster","amber_geode","ice_cluster","seam_mineral","glow_quartz"]
 
 func build_anchor(object: Dictionary, parent: Node3D) -> void:
-	# One builder for every location: the grip is a knob of the host rock set
-	# in a socket of the same stone, its silhouette and material come from the
-	# type in the place's profile, and lifetime adds fixings or chips on top.
+	var mount := mount_at(object["pos"],object["dimensions"],object,GRIP_STANDOFF)
+	build_grip(object,parent,mount)
+
+# One builder for every location. A grip is a broken block of stone jutting
+# out of its host rock: the gameplay polygon stays the hitbox, and the block's
+# own volume comes from GripVisualSpec. Its back runs into the rock along the
+# host face normal, the type's paint lies on the top-front chamfer, and the
+# type shows in the block's proportions, material and few embedded details.
+func build_grip(object: Dictionary, parent: Node3D, mount: SurfaceMount) -> void:
 	var p: Vector2 = object["pos"]
 	var kind := GripSpec.kind_of(object)
 	var id := int(object.get("id",0))
-	var dimensions: Vector2 = object["dimensions"]
-	var mount := mount_at(p,dimensions,object,GRIP_STANDOFF)
 	var profile := mount.profile
 	var family := profile.family(kind)
 	var holder := Node3D.new()
@@ -247,84 +247,527 @@ func build_anchor(object: Dictionary, parent: Node3D) -> void:
 	holder.rotation = mount.tilt()
 	object["visual"] = holder
 	object["mount"] = mount
-	var rock := zone_color(p.y)
-	# The type's material over the host rock: lighter than the wall so the
-	# grip separates, but still a stone of the same mountain, not a plate.
-	var stone := rock.lerp(profile.material_color(kind),grip_tint()).darkened(.08)
-	var style := posmod(id*7+kind,5)
+	# Hook contacts snap to this outline: it is gameplay and stays exactly as
+	# it was, inside the polygon; the stone block drawn around it is larger.
 	var outline := _grip_outline(object_polygon(object),id)
 	if family in ROUND_FAMILIES: outline = _rounded(outline,2)
 	elif family in ["dry_slab","cracked_beam"]: outline = _jagged(outline,id)
 	elif family=="masonry": outline = _masonry_outline(outline)
-	# Hook contacts snap to this drawn silhouette, not to the wider assist polygon.
 	object["surface"] = outline
-	var material := _grip_material(profile,kind)
-	var wall := mount.wall_local()
-	var back := clampf(wall-.25,-2.8,-.45)
-	var top := _polygon_top(outline)
-	var bottom := -_polygon_top(_mirror_y(outline))
-	var height := top-bottom
-	var width := _polygon_width(outline)
-	var front_top := top-height*.32
-	var weather: Dictionary = profile.weathering_rules
-	var top_tint := Color(0,0,0,0)
-	if family=="bough" or (kind==GripSpec.STONE and float(weather["moss"])>.5 and style==4): top_tint = profile.vegetation_set["leaf"]
-	if family in ["frosted","frozen_branch","ice_crust"]: top_tint = Color("eef4f6")
-	# A soft shade line, not a frame: the grip separates by its own volume.
-	var rim_dark := stone.darkened(.28)
-	_socket(holder,outline,mount,wall,rock)
-	# Springs carry their shell on a pivot that bends under load.
-	var shell_parent := holder
-	if family in SPRING_FAMILIES:
-		shell_parent = Node3D.new()
-		shell_parent.name = "Изгиб"
-		holder.add_child(shell_parent)
-	var squeeze := .66 if family in CRYSTAL_FAMILIES else .74
-	if family in ["dry_slab","masonry"] or (family in ["angular","layered"] and style==2 and width>1.2):
-		# Split outcrop: blocks with dark joints between them.
-		var cuts := [-width*.18,width*.18] if family=="dry_slab" else [0.0]
-		var edges := [-INF]+cuts+[INF]
-		for piece in range(edges.size()-1):
-			var part := PackedVector2Array()
-			for point in outline: part.append(Vector2(clampf(point.x,float(edges[piece])+.03,float(edges[piece+1])-.03),point.y))
-			_outcrop(shell_parent,_dedupe(part),back,.30-piece*.02,.72-piece*.04,height*.32,height*.34,squeeze,stone.darkened(piece*.04),material,top_tint)
-	else:
-		_outcrop(shell_parent,outline,back,.32,.76,height*.32,height*.34,squeeze,stone,material,top_tint)
-	# A dark contour with a sunlit upper lip, drawn inside the outline: the
-	# silhouette separates from the rock behind without growing the grip.
-	_contour(shell_parent,outline,.055,.98,rim_dark,stone.lightened(float(profile.light_and_shadow_tuning["rim"])))
-	_grip_details(object,shell_parent,family,profile,stone,top,bottom,width,height,front_top,wall,style)
-	if GripSpec.lifetime(object)=="permanent": _hardware(holder,profile,width,height,front_top,wall)
-	if not baked_contact(): _contact_shade(holder,Vector2(width,height)+Vector2(.9,.8),wall+.03,float(profile.light_and_shadow_tuning["contact"]))
-	# Short status strip inset in the front face just under the top bevel:
-	# inside the silhouette, on the shell's own centre line.
-	var strip_color: Color = MountainWorld.COLORS[kind]
-	var strip_material: StandardMaterial3D = world.mat("grip_strip_%d" % kind,strip_color,false)
-	strip_material.emission_enabled = true
-	strip_material.emission = strip_color
-	strip_material.emission_energy_multiplier = .45
-	var middle := 0.0
-	for point in outline: middle += point.x
-	middle /= maxf(1,outline.size())
-	var strip: MeshInstance3D = world.box("Полоса состояния",holder.position,Vector3(minf(width*.4,.7),.075,.03),strip_material,shell_parent)
-	strip.position = Vector3(middle*.7,top-height*.40,.86)
-	strip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var spec := GripVisualSpec.for_grip(object,profile)
+	object["visual_spec"] = spec
+	# Two frames on the host face: the socket stays with the wall, the block
+	# sits on a pivot that a spring bends under load.
+	var frame := _block_frame(holder,mount)
+	var socket := Node3D.new()
+	socket.name = "Опора"
+	socket.transform = frame
+	holder.add_child(socket)
+	var pivot := Node3D.new()
+	pivot.name = "Изгиб" if kind==GripSpec.SPRING else "Наклон"
+	holder.add_child(pivot)
+	var block := Node3D.new()
+	block.name = "Блок"
+	block.transform = frame
+	pivot.add_child(block)
+	var rock := zone_color(p.y)
+	# Lighter than the wall and leaning to the type's stone, so the block
+	# separates by its own volume, not by an outline.
+	var stone := rock.lightened(.06).lerp(profile.material_color(kind),.16)
+	var front := _block_mesh(block,spec,stone,profile,kind)
+	_contact_seam(socket,spec,rock,profile,id)
+	_paint_band(block,spec,stone,id)
+	_block_cracks(object,block,spec,stone,front,profile)
+	match kind:
+		GripSpec.ROOT: _root_details(object,block,spec,profile,front)
+		GripSpec.SPRING: _spring_details(object,block,spec,profile,front)
+		GripSpec.ICE: _ice_details(object,block,spec,profile,front)
+		GripSpec.CRYSTAL: _crystal_details(object,block,spec,profile,front)
+	if GripSpec.lifetime(object)=="permanent": _hardware(block,spec,profile,front)
+	# Where a dial or marker sits on the front face, in holder space.
+	var face := Vector2(spec.front_ring()[0].x*.15,(spec.front_ring()[0].y+spec.bounds().position.y)*.5)
+	object["face_point"] = frame*Vector3(face.x,face.y,_face_z(front,face,spec.protrusion())+.03)
+	object["dial_size"] = clampf((spec.front_ring()[0].y-spec.bounds().position.y)*.78,.34,.5)
 
-func _grip_material(profile: GripBiomeProfile, kind: int) -> Material:
-	var gloss := profile.gloss(kind)
-	if gloss<.3: return stone_material
-	var key := "grip_gloss_%s_%d" % [profile.id,kind]
-	var material := _vertex_material(key)
-	material.roughness = lerpf(.5,.1,gloss)
-	material.metallic_specular = lerpf(.5,.9,gloss)
-	material.rim_enabled = true
-	material.rim = float(profile.light_and_shadow_tuning["rim"])
-	material.rim_tint = .3
-	if kind==GripSpec.CRYSTAL:
-		material.emission_enabled = true
-		material.emission = profile.crystal_set["emission"]
-		material.emission_energy_multiplier = float(profile.crystal_set["energy"])*float(profile.light_and_shadow_tuning["emission_scale"])*1.5
-	return material
+# Block axes in holder space: Z along the host face normal (kept facing the
+# camera enough to read), X along the face, origin on the host face.
+func _block_frame(holder: Node3D, mount: SurfaceMount) -> Transform3D:
+	var normal := mount.socket_normal if mount.host_mass>=0 else mount.normal
+	normal = holder.basis.inverse()*normal.normalized()
+	if normal.z<.6: normal = Vector3(normal.x,normal.y,.6).normalized()
+	var across := Vector3.RIGHT-normal*normal.x
+	across = across.normalized()
+	var up := normal.cross(across).normalized()
+	return Transform3D(Basis(across,up,normal),Vector3(0,0,mount.wall_local()))
+
+# Four rings of the outline - back in the rock, at the host face, the full
+# shoulder and the chamfered front - joined by side faces, plus a front face
+# split into a few large facets. Returns the front triangles for placing
+# paint, cracks and details on the real surface.
+func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: GripBiomeProfile, kind: int) -> Array:
+	var depth := spec.protrusion()
+	var rings := [spec.ring(spec.rear_scale*.94,.04),spec.ring(spec.rear_scale),spec.outline,spec.front_ring()]
+	var depths := [-spec.back_embed,0.0,spec.shoulder(),depth]
+	var weather: Dictionary = profile.weathering_rules
+	var top_color := stone.lightened(.10)
+	if float(weather["snow"])>.5: top_color = Color("eef3f6")
+	elif float(weather["dust"])>.5: top_color = stone.lerp(profile.rock_palette["warm"],.45)
+	elif float(weather["moss"])>.5: top_color = stone.lerp(profile.vegetation_set["leaf"],.18)
+	var points := PackedVector3Array()
+	var colors := PackedColorArray()
+	var cap_points := PackedVector3Array()
+	var cap_colors := PackedColorArray()
+	var center := Vector3(0,0,(depth-spec.back_embed)*.5)
+	var count := spec.outline.size()
+	var ice := kind==GripSpec.ICE
+	var front: PackedVector2Array = rings[3]
+	var top := front[spec.top_left].y
+	var low := spec.bounds().position.y
+	# Front face: a fan from 1-3 raised points, each owning the edges nearest
+	# to it, and a rim of uneven depth, so the face breaks into a few large
+	# planes. The chamfers meet the same rim.
+	var random := layout.rng(spec.seed_value,941)
+	var apexes: Array[Vector3] = []
+	var apex_count := clampi(spec.facet_count-2,1,3)
+	for index in range(apex_count):
+		var t := (index+.5)/apex_count-.5
+		apexes.append(Vector3(t*spec.front_width*.62+random.randf_range(-.06,.06),lerpf(low,top,random.randf_range(.36,.6)),depth+random.randf_range(.09,.16)))
+	var rims: Array[float] = []
+	for index in range(count): rims.append(depth+(0.0 if index in [spec.top_left,spec.top_right] else random.randf_range(-.07,.02)))
+	for layer in range(3):
+		var a: PackedVector2Array = rings[layer]
+		var b: PackedVector2Array = rings[layer+1]
+		for i in range(count):
+			var j := (i+1)%count
+			var edge := spec.outline[j]-spec.outline[i]
+			var facing := Vector2(edge.y,-edge.x).normalized()
+			var tone := stone
+			if facing.y>.55: tone = top_color
+			elif facing.y<-.45: tone = stone.darkened(.30)
+			else: tone = stone.darkened(.08+.06*clampf(-facing.x,0,1))
+			if layer==2 and facing.y>.55: tone = stone.lightened(.04)
+			var zi: float = rims[i] if layer==2 else depths[layer+1]
+			var zj: float = rims[j] if layer==2 else depths[layer+1]
+			var quad := [Vector3(a[i].x,a[i].y,depths[layer]),Vector3(a[j].x,a[j].y,depths[layer]),Vector3(b[j].x,b[j].y,zj),Vector3(b[i].x,b[i].y,zi)]
+			var target := cap_points if ice and layer==2 else points
+			var target_colors := cap_colors if ice and layer==2 else colors
+			target.append_array(PackedVector3Array([quad[0],quad[1],quad[2]]))
+			target_colors.append(tone)
+			target.append_array(PackedVector3Array([quad[0],quad[2],quad[3]]))
+			target_colors.append(tone.darkened(.02))
+	var triangles: Array = []
+	var owner_of := func(point: Vector2) -> int:
+		var best := 0
+		for index in range(apexes.size()):
+			if absf(apexes[index].x-point.x)<absf(apexes[best].x-point.x): best = index
+		return best
+	for i in range(count):
+		var j := (i+1)%count
+		var here: int = owner_of.call((front[i]+front[j])*.5)
+		var next: int = owner_of.call((front[j]+front[(j+1)%count])*.5)
+		triangles.append([apexes[here],Vector3(front[i].x,front[i].y,rims[i]),Vector3(front[j].x,front[j].y,rims[j]),here])
+		if next!=here: triangles.append([apexes[here],Vector3(front[j].x,front[j].y,rims[j]),apexes[next],next])
+	for index in range(triangles.size()):
+		var triangle: Array = triangles[index]
+		var shade := (facet_hash(int(triangle[3]),spec.seed_value,3.1)-.5)*.10+(facet_hash(index,spec.seed_value,7.7)-.5)*.05
+		# The lower front turns away from the light, as on a real ledge.
+		var middle_y := (float((triangle[0] as Vector3).y)+float((triangle[1] as Vector3).y)+float((triangle[2] as Vector3).y))/3.0
+		shade -= clampf((top-middle_y)/maxf(.01,top-low)-.5,0,1)*.10
+		var face := stone.lightened(shade) if shade>0 else stone.darkened(-shade)
+		var target := cap_points if ice else points
+		var target_colors := cap_colors if ice else colors
+		target.append_array(PackedVector3Array([triangle[0],triangle[1],triangle[2]]))
+		target_colors.append(face)
+	var body := _solid(block,"Каменный выступ",points,colors,stone_material,true,center)
+	body.set_meta("visual_spec_bounds",spec.bounds())
+	if ice:
+		# Clear ice over the stone where it freezes; a dusty salt crust where
+		# the place is dry.
+		var glaze := profile.material_color(GripSpec.ICE)
+		var cover := .45 if float(weather["dust"])>.5 else .78
+		for index in range(cap_colors.size()): cap_colors[index] = cap_colors[index].lerp(glaze,cover)
+		_solid(block,"Ледяной скол",cap_points,cap_colors,_ice_material(),true,center)
+	return triangles
+
+# Faceted mesh with outward normals, for closed volumes seen from any side.
+func _solid(parent: Node3D, mesh_name: String, points: PackedVector3Array, colors: PackedColorArray, material: Material, shadows: bool, center: Vector3) -> MeshInstance3D:
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(0,points.size(),3):
+		var normal := (points[i+2]-points[i]).cross(points[i+1]-points[i]).normalized()
+		if normal.dot((points[i]+points[i+1]+points[i+2])/3.0-center)<0: normal = -normal
+		for k in range(3):
+			surface.set_color(colors[i/3])
+			surface.set_normal(normal)
+			surface.add_vertex(points[i+k])
+	var mesh := MeshInstance3D.new()
+	mesh.name = mesh_name
+	mesh.mesh = surface.commit()
+	mesh.material_override = material
+	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mesh)
+	return mesh
+
+# Height of the faceted front face at a point (block space).
+func _face_z(triangles: Array, point: Vector2, fallback: float) -> float:
+	for triangle in triangles:
+		var a: Vector3 = triangle[0]
+		var b: Vector3 = triangle[1]
+		var c: Vector3 = triangle[2]
+		var weights := _barycentric(point,Vector2(a.x,a.y),Vector2(b.x,b.y),Vector2(c.x,c.y))
+		if weights.x>=-.001 and weights.y>=-.001 and weights.z>=-.001: return a.z*weights.x+b.z*weights.y+c.z*weights.z
+	return fallback
+
+static func _barycentric(p: Vector2, a: Vector2, b: Vector2, c: Vector2) -> Vector3:
+	var v0 := b-a
+	var v1 := c-a
+	var v2 := p-a
+	var d := v0.x*v1.y-v1.x*v0.y
+	if absf(d)<.000001: return Vector3(-1,-1,-1)
+	var v := (v2.x*v1.y-v1.x*v2.y)/d
+	var w := (v0.x*v2.y-v2.x*v0.y)/d
+	return Vector3(1.0-v-w,v,w)
+
+# Lines laid on the front face, following its facets.
+func _face_strip(triangles: Array, path: PackedVector2Array, width: float, lift: float, depth: float) -> PackedVector3Array:
+	var result := PackedVector3Array()
+	for i in range(path.size()-1):
+		var a := path[i]
+		var b := path[i+1]
+		var taper := 1.0-float(i)/path.size()*.55
+		var n := Vector2(-(b-a).y,(b-a).x).normalized()*width*taper
+		var corners := [a+n,b+n*.7,b-n*.7,a-n]
+		var lifted: Array[Vector3] = []
+		for corner in corners: lifted.append(Vector3(corner.x,corner.y,_face_z(triangles,corner,depth)+lift))
+		result.append_array(PackedVector3Array([lifted[0],lifted[1],lifted[2],lifted[0],lifted[2],lifted[3]]))
+	return result
+
+# The contact with the host rock: an uneven seam along the rear footprint,
+# darker than the wall without an outline, with a few chips running off
+# into the face. No ring of equal width and no disc.
+func _contact_seam(socket: Node3D, spec: GripVisualSpec, rock: Color, profile: GripBiomeProfile, id: int) -> void:
+	var random := layout.rng(id,943)
+	var rear := spec.ring(spec.rear_scale)
+	var center := Vector2.ZERO
+	for point in rear: center += point
+	center /= rear.size()
+	var points := PackedVector3Array()
+	var colors := PackedColorArray()
+	var shade := float(profile.light_and_shadow_tuning["socket"])
+	var widths: Array[float] = []
+	for index in range(rear.size()): widths.append(random.randf_range(.03,.11)*(1.4 if rear[index].y<center.y else 1.0))
+	for i in range(rear.size()):
+		var j := (i+1)%rear.size()
+		var oi := rear[i]+(rear[i]-center).normalized()*widths[i]
+		var oj := rear[j]+(rear[j]-center).normalized()*widths[j]
+		var deep := rock.darkened(shade*random.randf_range(.75,1.05))
+		points.append_array(PackedVector3Array([Vector3(rear[i].x,rear[i].y,.004),Vector3(rear[j].x,rear[j].y,.004),Vector3(oj.x,oj.y,.016)]))
+		colors.append(deep)
+		points.append_array(PackedVector3Array([Vector3(rear[i].x,rear[i].y,.004),Vector3(oj.x,oj.y,.016),Vector3(oi.x,oi.y,.016)]))
+		colors.append(deep.lerp(rock,.45))
+	# Two or three breaks of the host face running from the seam.
+	for chip in range(random.randi_range(2,3)):
+		var at := rear[random.randi_range(0,rear.size()-1)]
+		var away := (at-center).normalized().rotated(random.randf_range(-.6,.6))
+		var a := at+away*.03
+		var b := a+away*random.randf_range(.14,.30)
+		var n := Vector2(-away.y,away.x)*.012
+		points.append_array(PackedVector3Array([Vector3(a.x+n.x,a.y+n.y,.018),Vector3(b.x,b.y,.018),Vector3(a.x-n.x,a.y-n.y,.018)]))
+		colors.append(rock.darkened(shade*.8))
+	var seam := _flat_surface(socket,"Каменное гнездо",points,colors,stone_material,false)
+	seam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Moss or snow collects in the seam above the block.
+	var weather: Dictionary = profile.weathering_rules
+	var fill := Color(0,0,0,0)
+	if float(weather["snow"])>.5: fill = Color("f2f6f8")
+	elif float(weather["moss"])>.5: fill = profile.vegetation_set["leaf"]
+	if fill.a==0: return
+	var tufts := PackedVector3Array()
+	var tuft_colors := PackedColorArray()
+	var top := rear[spec.top_left].y
+	for index in range(random.randi_range(3,5)):
+		var x := lerpf(rear[spec.top_left].x,rear[spec.top_right].x,random.randf_range(.05,.95))
+		var size := random.randf_range(.05,.10)
+		tufts.append_array(PackedVector3Array([Vector3(x-size,top+.01,.03),Vector3(x+size,top+.01,.03),Vector3(x+random.randf_range(-.03,.03),top+size*1.1,.04)]))
+		tuft_colors.append(fill.darkened(random.randf_range(0,.15)))
+	_flat_surface(socket,"Мох и снег в шве" if fill.a>0 else "Шов",tufts,tuft_colors,_vertex_material("grip_seam_fill"),false)
+
+# Paint on the top-front chamfer: most of the block's width, ragged ends,
+# a worn lower edge and a few spots where the stone shows through. It lies on
+# the chamfer itself, never in front of the block.
+func _paint_band(block: Node3D, spec: GripVisualSpec, stone: Color, id: int) -> void:
+	var random := layout.rng(id,947)
+	var back_a := spec.outline[spec.top_left]
+	var back_b := spec.outline[spec.top_right]
+	var front := spec.front_ring()
+	var front_a := front[spec.top_left]
+	var front_b := front[spec.top_right]
+	var paint: Color = spec.paint_profile["color"]
+	var half := spec.front_width*float(spec.paint_profile["width"])*.5
+	var middle := (back_a.x+back_b.x)*.5
+	var left := maxf(middle-half,maxf(back_a.x,front_a.x)+.02)
+	var right := minf(middle+half,minf(back_b.x,front_b.x)-.02)
+	var on_chamfer := func(x: float, v: float) -> Vector3:
+		var s := back_a.lerp(back_b,(x-back_a.x)/(back_b.x-back_a.x))
+		var f := front_a.lerp(front_b,(x-front_a.x)/(front_b.x-front_a.x))
+		var shoulder := Vector3(x,s.y,spec.shoulder())
+		var face := Vector3(x,f.y,spec.protrusion())
+		var along := face-shoulder
+		var normal := Vector3.RIGHT.cross(along).normalized()
+		if normal.y<0: normal = -normal
+		return shoulder.lerp(face,v)+normal*.007
+	# Edges are shared between strokes, so the ragged border is continuous:
+	# the top edge wavers a little, the lower edge has a few worn notches and
+	# both ends are chipped back.
+	var segments := 16
+	var tops: Array[float] = []
+	var bottoms: Array[float] = []
+	var xs: Array[float] = []
+	for edge in range(segments+1):
+		xs.append(lerpf(left,right,float(edge)/segments))
+		tops.append(random.randf_range(.02,.08))
+		bottoms.append(random.randf_range(.9,.99) if random.randf()>.28 else random.randf_range(.72,.84))
+	xs[0] += random.randf_range(.01,.05)
+	xs[segments] -= random.randf_range(.01,.05)
+	tops[0] += random.randf_range(.12,.3)
+	bottoms[0] -= random.randf_range(.08,.25)
+	tops[segments] += random.randf_range(.1,.3)
+	bottoms[segments] -= random.randf_range(.05,.22)
+	var points := PackedVector3Array()
+	var colors := PackedColorArray()
+	var worn := 0
+	for segment in range(segments):
+		var tone := paint.lightened(random.randf_range(0,.04)) if random.randf()<.5 else paint.darkened(random.randf_range(0,.06))
+		var x0 := xs[segment]
+		var x1 := xs[segment+1]
+		var upper := [tops[segment],tops[segment+1]]
+		var lower := [bottoms[segment],bottoms[segment+1]]
+		# Worn patch: the stone shows through the lower part of one stroke.
+		if worn<2 and segment>1 and segment<segments-2 and random.randf()<.12:
+			worn += 1
+			lower = [random.randf_range(.45,.6),random.randf_range(.45,.6)]
+		var a: Vector3 = on_chamfer.call(x0,upper[0])
+		var b: Vector3 = on_chamfer.call(x1,upper[1])
+		var c: Vector3 = on_chamfer.call(x1,lower[1])
+		var d: Vector3 = on_chamfer.call(x0,lower[0])
+		points.append_array(PackedVector3Array([a,b,c,a,c,d]))
+		colors.append(tone)
+		colors.append(tone.darkened(.03))
+	var material := _vertex_material("grip_paint")
+	material.roughness = .62
+	material.metallic_specular = .35
+	var band := _flat_surface(block,"Полоса состояния",points,colors,material,false)
+	band.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+# Natural cracks from the lower corners towards the middle; roots get deep,
+# longer ones that can turn to the alarm colour before the break.
+func _block_cracks(object: Dictionary, block: Node3D, spec: GripVisualSpec, stone: Color, front: Array, profile: GripBiomeProfile) -> void:
+	var random := layout.rng(spec.seed_value,951)
+	var ring := spec.front_ring()
+	var count := ring.size()
+	var center := Vector2(0,(ring[spec.top_left].y+spec.bounds().position.y)*.5)
+	var starts: Array[Vector2] = []
+	var lowest := 0
+	for index in range(count):
+		if ring[index].y<ring[lowest].y: lowest = index
+	starts.append(ring[posmod(lowest-1,count)])
+	starts.append(ring[(lowest+1)%count])
+	var reach := .38
+	var width := .016
+	if spec.crack_pattern=="deep":
+		starts.append(ring[lowest])
+		starts.append(ring[posmod(lowest-2,count)])
+		reach = .58
+		width = .026
+	var points := PackedVector3Array()
+	for start in starts:
+		var path := PackedVector2Array([start.lerp(center,.04)])
+		var at := path[0]
+		for step in range(3):
+			at = at.lerp(center,reach/3.0)+Vector2(random.randf_range(-.05,.05),random.randf_range(-.03,.03))
+			path.append(at)
+		points.append_array(_face_strip(front,path,width,.006,spec.protrusion()))
+	var colors := PackedColorArray()
+	for index in range(points.size()/3): colors.append(stone.darkened(.5))
+	var material := _vertex_material("grip_crack")
+	if spec.crack_pattern=="deep":
+		# Its own copy: the root's cracks redden in the last half second.
+		material = material.duplicate() as StandardMaterial3D
+		object["crack_material"] = material
+	var cracks := _flat_surface(block,"Трещина",points,colors,material,false)
+	cracks.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+func _root_details(_object: Dictionary, block: Node3D, spec: GripVisualSpec, profile: GripBiomeProfile, front: Array) -> void:
+	# In the forest a root breaks out of the seam and holds the block; other
+	# places keep the bare cracked stone.
+	if float(profile.weathering_rules["moss"])<.5: return
+	var random := layout.rng(spec.seed_value,953)
+	var points := PackedVector3Array()
+	var low := spec.bounds().position.y
+	for strand in range(2):
+		var x := spec.front_width*(-.3 if strand==0 else .22)+random.randf_range(-.05,.05)
+		var path := PackedVector2Array([Vector2(x,low+.02),Vector2(x+random.randf_range(-.08,.08),low+spec.front_height*.25),Vector2(x+random.randf_range(-.1,.1),low+spec.front_height*.42)])
+		points.append_array(_face_strip(front,path,.03,.012,spec.protrusion()))
+	var colors := PackedColorArray()
+	for index in range(points.size()/3): colors.append(profile.material_color(GripSpec.ROOT).darkened(.1*(index%2)))
+	_flat_surface(block,"Корень",points,colors,_vertex_material("grip_root"),false)
+
+func _spring_details(object: Dictionary, block: Node3D, spec: GripVisualSpec, profile: GripBiomeProfile, front: Array) -> void:
+	# A fixing set into the top face, and a short relief arrow cut into the
+	# face below the paint, pointing where the spring throws.
+	var hardware: Dictionary = profile.attachment_hardware
+	var metal: StandardMaterial3D = world.mat("grip_spring_%s" % profile.id,hardware["metal"],false)
+	metal.metallic = .6
+	metal.roughness = .35
+	var top := spec.outline[spec.top_left].y
+	var plate: MeshInstance3D = world.box("Пружинное крепление",Vector3.ZERO,Vector3(.26,.05,.2),metal,block)
+	plate.position = Vector3(spec.front_width*.18,top+.012,spec.shoulder()*.45)
+	var bolt: MeshInstance3D = world.box("Пружинное крепление_болт",Vector3.ZERO,Vector3(.07,.12,.07),metal,block)
+	bolt.position = plate.position+Vector3(0,.04,0)
+	var direction := GripSpec.exit_direction(object)
+	var ring := spec.front_ring()
+	var anchor := Vector2(0,ring[spec.top_left].y-spec.front_height*.22)
+	var side := Vector2(-direction.y,direction.x)
+	var tail := anchor-direction*.15
+	var neck := anchor+direction*.05
+	var tip := anchor+direction*.18
+	var shape := PackedVector2Array([tail+side*.035,neck+side*.035,neck+side*.09,tip,neck-side*.09,neck-side*.035,tail-side*.035])
+	var points := PackedVector3Array()
+	var colors := PackedColorArray()
+	var paint: Color = spec.paint_profile["color"]
+	for lift_index in range(2):
+		# A dark rim offset down-right reads as the relief's own shadow.
+		var offset := Vector2(.012,-.012) if lift_index==0 else Vector2.ZERO
+		var lift := .006 if lift_index==0 else .014
+		var tone := paint.darkened(.6) if lift_index==0 else paint.darkened(.28)
+		for index in [[0,1,5],[0,5,6],[2,3,4]]:
+			var tri := PackedVector3Array()
+			for k in index:
+				var at: Vector2 = shape[k]+offset
+				tri.append(Vector3(at.x,at.y,_face_z(front,at,spec.protrusion())+lift))
+			points.append_array(tri)
+			colors.append(tone)
+	_flat_surface(block,"Направление выхода",points,colors,_vertex_material("grip_arrow"),false).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+func _ice_details(object: Dictionary, block: Node3D, spec: GripVisualSpec, profile: GripBiomeProfile, front: Array) -> void:
+	# A shallow groove across the ice where the hook travels, with a pale
+	# polished lip; dust streaks in the desert, icicles only in snow.
+	var direction := GripSpec.slide_direction(object)
+	var ring := spec.front_ring()
+	var start := Vector2(-direction.x*spec.front_width*.18,ring[spec.top_left].y-spec.front_height*.16)
+	var path := PackedVector2Array([start,start+direction*spec.front_width*.22,start+direction*spec.front_width*.44])
+	var points := _face_strip(front,path,.026,.008,spec.protrusion())
+	var colors := PackedColorArray()
+	var glaze := profile.material_color(GripSpec.ICE)
+	for index in range(points.size()/3): colors.append(glaze.darkened(.28))
+	var lip := PackedVector2Array()
+	for point in path: lip.append(point+Vector2(0,.03))
+	var shine := _face_strip(front,lip,.008,.012,spec.protrusion())
+	points.append_array(shine)
+	for index in range(shine.size()/3): colors.append(glaze.lightened(.4))
+	if float(profile.weathering_rules["dust"])>.5:
+		for offset in [-.06,.07]:
+			var dust := PackedVector2Array()
+			for point in path: dust.append(point+Vector2(0,offset))
+			var streak := _face_strip(front,dust,.01,.01,spec.protrusion())
+			points.append_array(streak)
+			for index in range(streak.size()/3): colors.append(profile.rock_palette["warm"])
+	_flat_surface(block,"Борозда скольжения",points,colors,_vertex_material("grip_groove"),false).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if float(profile.weathering_rules["snow"])>.5:
+		_icicles(block,spec.bounds().position.y+spec.front_height*.12,spec.front_width*.7,spec.seed_value,spec.protrusion()*.8)
+
+func _crystal_details(object: Dictionary, block: Node3D, spec: GripVisualSpec, profile: GripBiomeProfile, front: Array) -> void:
+	var random := layout.rng(spec.seed_value,957)
+	var palette: Dictionary = profile.crystal_set
+	var top := spec.outline[spec.top_left].y
+	# Mineral vein: from a lower corner through the face to the top edge.
+	var ring := spec.front_ring()
+	var low := spec.bounds().position.y
+	var vein := PackedVector2Array([Vector2(-spec.front_width*.30,low+spec.front_height*.12),Vector2(-spec.front_width*.12,low+spec.front_height*.45),Vector2(-spec.front_width*.02,ring[spec.top_left].y-.02)])
+	var points := _face_strip(front,vein,.03,.008,spec.protrusion())
+	var colors := PackedColorArray()
+	for index in range(points.size()/3): colors.append((palette["body"] as Color).lerp(palette["lit"],float(index%2)*.5))
+	_flat_surface(block,"Минеральная жила",points,colors,_crystal_material(profile),false)
+	# The cluster grows out of the seam behind the top face.
+	var cluster := Node3D.new()
+	cluster.position = Vector3(-spec.front_width*.05,top-.04,spec.shoulder()*.35)
+	cluster.scale = Vector3.ONE*.3
+	cluster.rotation.x = -.35
+	block.add_child(cluster)
+	_build_crystal(cluster,random,false,3,profile)
+	# Two crystal spurs on the top-front edge, each pointing at one verified
+	# exit, half sunk into the stone.
+	var exits := GripSpec.choice_exits(object)
+	if exits.size()<2: return
+	var spurs := PackedVector3Array()
+	var spur_colors := PackedColorArray()
+	var origin: Vector2 = object["pos"]
+	for exit_id in exits:
+		if int(exit_id)>=layout.anchors.size(): continue
+		var direction: Vector2 = (layout.anchors[int(exit_id)]["pos"]-origin).normalized()
+		var base := Vector3(signf(direction.x)*spec.front_width*.28,top-spec.top_band_height*.5,spec.shoulder())
+		var axis := Vector3(direction.x,direction.y,.35).normalized()
+		var side := Vector3(-axis.y,axis.x,0).normalized()
+		var up := axis.cross(side).normalized()
+		var tip := base+axis*.34
+		for corner in range(6):
+			var a0 := TAU*corner/6.0
+			var a1 := TAU*(corner+1)/6.0
+			var o0 := side*cos(a0)*.05+up*sin(a0)*.05
+			var o1 := side*cos(a1)*.05+up*sin(a1)*.05
+			spurs.append_array(PackedVector3Array([base+o0,base+axis*.24+o0,base+axis*.24+o1,base+o0,base+axis*.24+o1,base+o1,base+axis*.24+o0,tip,base+axis*.24+o1]))
+			var face := (palette["body"] as Color).lerp(palette["lit"],clampf(cos(a0)*.5+.5,0,1))
+			spur_colors.append_array(PackedColorArray([face,face.darkened(.08),face.lerp(palette["pale"],.4)]))
+	_flat_surface(block,"Выходы кристалла",spurs,spur_colors,_crystal_material(profile),false)
+
+func _hardware(block: Node3D, spec: GripVisualSpec, profile: GripBiomeProfile, front: Array) -> void:
+	# Fixings of a permanent grip: set into the lower front face and running
+	# back into the stone, in the style of the place.
+	var hardware: Dictionary = profile.attachment_hardware
+	var metal: StandardMaterial3D = world.mat("grip_hw_%s" % profile.id,hardware["metal"],false)
+	metal.metallic = .55
+	metal.roughness = .38
+	var accent: StandardMaterial3D = world.mat("grip_hw_accent_%s" % profile.id,hardware["accent"],false)
+	accent.metallic = .7
+	accent.roughness = .3
+	var y := spec.bounds().position.y+spec.front_height*.3
+	var reach := spec.protrusion()+spec.back_embed
+	var face_z := func(x: float) -> float: return _face_z(front,Vector2(x,y),spec.protrusion())
+	match str(hardware["style"]):
+		"ring":
+			var x := spec.front_width*.3
+			var ring := MeshInstance3D.new()
+			ring.name = "Кольцо крепления"
+			var torus := TorusMesh.new()
+			torus.inner_radius = .07
+			torus.outer_radius = .11
+			ring.mesh = torus
+			ring.material_override = metal
+			ring.position = Vector3(x,y-.07,face_z.call(x)+.03)
+			ring.rotation.x = PI*.5
+			block.add_child(ring)
+			var pin: MeshInstance3D = world.box("Металлическое крепление",Vector3.ZERO,Vector3(.06,.06,reach),metal,block)
+			pin.position = Vector3(x,y,face_z.call(x)-reach*.5+.02)
+		"rivets":
+			for x in [-.28,0.0,.28]:
+				var rivet: MeshInstance3D = world.box("Металлическое крепление",Vector3.ZERO,Vector3(.06,.06,reach),accent,block)
+				rivet.position = Vector3(spec.front_width*x,y,face_z.call(spec.front_width*x)-reach*.5+.02)
+		"dowel":
+			for x in [-.3,.3]:
+				var dowel: MeshInstance3D = world.box("Золотое крепление",Vector3.ZERO,Vector3(.07,.07,reach),accent,block)
+				dowel.position = Vector3(spec.front_width*x,y,face_z.call(spec.front_width*x)-reach*.5+.025)
+		"lashing":
+			for x in [-.26,.26]:
+				var lash: MeshInstance3D = world.box("Канатное крепление",Vector3.ZERO,Vector3(.05,spec.front_height*.9,.05),accent,block)
+				lash.position = Vector3(spec.front_width*x,y+spec.front_height*.1,face_z.call(spec.front_width*x)+.02)
+				lash.rotation.z = .3*signf(x)
+		_:
+			for side in [-1,1]:
+				var x: float = side*spec.front_width*.32
+				var plate: MeshInstance3D = world.box("Металлическое крепление",Vector3.ZERO,Vector3(.1,spec.front_height*.4,.04),metal,block)
+				plate.position = Vector3(x,y,face_z.call(x)+.02)
+				var bolt: MeshInstance3D = world.box("Золотое крепление",Vector3.ZERO,Vector3(.05,.05,reach),accent,block)
+				bolt.position = Vector3(x,y+.05,face_z.call(x)-reach*.5+.03)
 
 func _masonry_outline(outline: PackedVector2Array) -> PackedVector2Array:
 	# Dressed stone: the knob's bounds with small chamfers, inside the outline.
@@ -387,181 +830,6 @@ func _contact_shade(holder: Node3D, size: Vector2, z: float, opacity: float) -> 
 	# Offset down-right with the sun, so the object reads as attached.
 	shade.position = Vector3(.12,-.16,z)
 	holder.add_child(shade)
-
-func _grip_details(object: Dictionary, holder: Node3D, family: String, profile: GripBiomeProfile, stone: Color, top: float, bottom: float, width: float, height: float, front_top: float, wall: float, style: int) -> void:
-	var id := int(object.get("id",0))
-	var dark := stone.darkened(.55)
-	match family:
-		"angular", "frosted":
-			if style in [0,3,4]:
-				var start := Vector2(width*(-.16 if style!=3 else .14),front_top-.02)
-				_crack(holder,PackedVector2Array([start,start+Vector2(.07,-height*.18),start+Vector2(.02,-height*.36),start+Vector2(.08,-height*.5)]),.026,.77,dark)
-		"layered":
-			# Bedding planes of sandstone across the face.
-			for band in [.3,.62]:
-				var y: float = bottom+height*float(band)
-				_crack(holder,PackedVector2Array([Vector2(-width*.36,y),Vector2(-width*.05,y+.02),Vector2(width*.34,y-.01)]),.018,.77,stone.darkened(.3))
-		"masonry":
-			_crack(holder,PackedVector2Array([Vector2(-width*.42,bottom+height*.5),Vector2(width*.42,bottom+height*.5)]),.02,.77,stone.lightened(.25))
-			for x in [-.18,.2]:
-				_crack(holder,PackedVector2Array([Vector2(width*x,bottom+height*.52),Vector2(width*x,front_top+.02)]),.02,.77,stone.lightened(.25))
-		"pumice":
-			var pores := layout.rng(id,917)
-			for pore in range(5):
-				var at := Vector2(pores.randf_range(-.35,.35)*width,pores.randf_range(bottom+height*.25,front_top))
-				_crack(holder,PackedVector2Array([at,at+Vector2(.05,-.03)]),.03,.77,dark)
-		"dry_slab":
-			for crack in [-.3,.3]:
-				var start := Vector2(width*crack,front_top-.02)
-				_crack(holder,PackedVector2Array([start,start+Vector2(.05,-height*.2),start+Vector2(-.02,-height*.42)]),.024,.77,dark)
-			var crumbs := Node3D.new()
-			crumbs.position = Vector3(0,bottom-.12,wall+.1)
-			crumbs.scale = Vector3.ONE*.55
-			holder.add_child(crumbs)
-			_build_pebbles(crumbs,layout.rng(id,913),stone,false)
-		"fibrous_root", "frozen_branch", "rope_root", "cracked_beam":
-			# Wood, not stone: fibres along the length and both ends driven into
-			# cracks of the host rock, which crumbles when the root gives way.
-			var fibre := stone.lightened(.28) if family!="frozen_branch" else Color("e8f2f6")
-			for lane in range(3):
-				var y := bottom+height*(.3+lane*.18)
-				_crack(holder,PackedVector2Array([Vector2(-width*.42,y),Vector2(-width*.1,y+.03),Vector2(width*.2,y-.01),Vector2(width*.42,y+.02)]),.012,.80,fibre)
-			for side in [-1.0,1.0]:
-				var end := Vector2(side*width*.5,bottom+height*.45)
-				_crack(holder,PackedVector2Array([end,end+Vector2(side*.16,-.12),end+Vector2(side*.22,-.32)]),.03,.5,stone.darkened(.7))
-			if family=="rope_root":
-				for x in [-.22,.22]:
-					_crack(holder,PackedVector2Array([Vector2(width*x-.08,bottom+.04),Vector2(width*x+.08,front_top)]),.025,.82,Color("e6d3a6"))
-			var crumbs := Node3D.new()
-			crumbs.position = Vector3(0,bottom-.12,wall+.1)
-			crumbs.scale = Vector3.ONE*.5
-			holder.add_child(crumbs)
-			_build_pebbles(crumbs,layout.rng(id,913),zone_color(object["pos"].y),false)
-		"bough", "cloth_band", "ice_crust", "spring_bracket", "hanging_mount":
-			match family:
-				"bough":
-					var tuft := Node3D.new()
-					tuft.position = Vector3(width*(.28 if id%2==0 else -.28),top-.06,.36)
-					tuft.scale = Vector3.ONE*.6
-					holder.add_child(tuft)
-					_build_grass(tuft,layout.rng(id,914),false,.7,profile)
-				"cloth_band":
-					_crack(holder,PackedVector2Array([Vector2(-width*.45,front_top-.05),Vector2(0,front_top-.12),Vector2(width*.45,front_top-.05)]),.05,.82,Color("efe2bf"))
-				"spring_bracket":
-					for turn in range(4):
-						var x := lerpf(-width*.25,width*.25,turn/3.0)
-						_crack(holder,PackedVector2Array([Vector2(x-.06,bottom+height*.25),Vector2(x+.06,bottom+height*.7)]),.022,.82,Color("c9ced3"))
-				"hanging_mount":
-					for x in [-.3,.3]:
-						_crack(holder,PackedVector2Array([Vector2(width*x,top),Vector2(width*x*.6,top+.32)]),.02,.6,Color("e6d3a6"))
-			_exit_chevrons(holder,GripSpec.exit_direction(object),front_top,profile)
-		"wet_slab", "salt_glass", "clear_ice", "polished_tile", "cloud_glass":
-			if family=="clear_ice" or (family=="wet_slab" and float(profile.weathering_rules["snow"])>.5): _icicles(holder,bottom,width,id)
-			_slide_track(holder,GripSpec.slide_direction(object),top,height,stone)
-			# A dry slide reads through dust: pale streaks blown along the slope.
-			if float(profile.weathering_rules["dust"])>.5:
-				var along := GripSpec.slide_direction(object)
-				for offset in [-.12,.12]:
-					var start := Vector2(offset*width,top-height*.3)
-					_crack(holder,PackedVector2Array([start,start+along*width*.3,start+along*width*.55]),.018,.99,profile.rock_palette["warm"])
-		"quartz_cluster", "amber_geode", "ice_cluster", "seam_mineral", "glow_quartz":
-			var shards := Node3D.new()
-			shards.position = Vector3(width*.30,top-.18,.40)
-			shards.scale = Vector3.ONE*.38
-			holder.add_child(shards)
-			_build_crystal(shards,layout.rng(id,915),false,3,profile)
-			_choice_prongs(holder,object,front_top)
-
-func _exit_chevrons(holder: Node3D, direction: Vector2, front_top: float, profile: GripBiomeProfile) -> void:
-	# Two flat chevrons point where the bough throws: the deformation reads
-	# before the first catch.
-	var points := PackedVector3Array()
-	var colors := PackedColorArray()
-	var side := Vector2(-direction.y,direction.x)
-	for step in range(2):
-		var tip := direction*(.16+step*.15)+Vector2(0,front_top*.4)
-		var back := tip-direction*.13
-		points.append_array(PackedVector3Array([Vector3(tip.x,tip.y,.99),Vector3(back.x+side.x*.1,back.y+side.y*.1,.99),Vector3(back.x,back.y,.99)]))
-		points.append_array(PackedVector3Array([Vector3(tip.x,tip.y,.99),Vector3(back.x,back.y,.99),Vector3(back.x-side.x*.1,back.y-side.y*.1,.99)]))
-		colors.append(profile.vegetation_set["tip"])
-		colors.append(profile.vegetation_set["tip"])
-	var material := _vertex_material("grip_chevron")
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_flat_surface(holder,"Направление выхода",points,colors,material,false)
-
-func _slide_track(holder: Node3D, direction: Vector2, top: float, height: float, stone: Color) -> void:
-	# A polished groove from the top of the grip along its downslope: where
-	# the hook will travel while it is held.
-	var start := Vector2(0,top-.06)
-	var path := PackedVector2Array([start])
-	for step in range(1,4): path.append(start+direction*height*.28*step)
-	_crack(holder,path,.03,.99,stone.lightened(.38))
-
-func _choice_prongs(holder: Node3D, object: Dictionary, front_top: float) -> void:
-	# A choice crystal shows two short spurs, one towards each verified exit.
-	var exits := GripSpec.choice_exits(object)
-	if exits.size()<2: return
-	for exit_id in exits:
-		if int(exit_id)>=layout.anchors.size(): continue
-		var direction: Vector2 = (layout.anchors[int(exit_id)]["pos"]-object["pos"]).normalized()
-		var start := Vector2(0,front_top*.3)
-		_crack(holder,PackedVector2Array([start+direction*.12,start+direction*.42]),.035,1.0,Color("e6f4ff"),"choice_prong")
-
-func _hardware(holder: Node3D, profile: GripBiomeProfile, width: float, height: float, front_top: float, wall: float) -> void:
-	# Fixings of a permanent grip run from its face back into the socket, so
-	# they read as set into the rock; the grip keeps its own material.
-	var hardware: Dictionary = profile.attachment_hardware
-	var metal: StandardMaterial3D = world.mat("grip_hw_%s" % profile.id,hardware["metal"],false)
-	metal.metallic = .55
-	metal.roughness = .38
-	var accent: StandardMaterial3D = world.mat("grip_hw_accent_%s" % profile.id,hardware["accent"],false)
-	accent.metallic = .7
-	accent.roughness = .3
-	var origin := holder.position
-	var reach := absf(wall)+.8
-	match str(hardware["style"]):
-		"ring":
-			var ring := MeshInstance3D.new()
-			ring.name = "Кольцо крепления"
-			var torus := TorusMesh.new()
-			torus.inner_radius = .09
-			torus.outer_radius = .14
-			ring.mesh = torus
-			ring.material_override = metal
-			ring.position = Vector3(width*.36,front_top-height*.35,.8)
-			ring.rotation.x = PI*.5
-			holder.add_child(ring)
-			var pin: MeshInstance3D = world.box("Металлическое крепление",origin,Vector3(.07,.07,reach),metal,holder)
-			pin.name = "Металлическое крепление_%d" % holder.get_child_count()
-			pin.position = Vector3(width*.36,front_top-height*.2,.8-reach*.5)
-		"rivets":
-			for x in [-.3,0.0,.3]:
-				var rivet: MeshInstance3D = world.box("Металлическое крепление",origin,Vector3(.07,.07,reach),accent,holder)
-				rivet.name = "Металлическое крепление_%d" % holder.get_child_count()
-				rivet.position = Vector3(width*x,front_top-height*.42,.82-reach*.5)
-		"dowel":
-			var band: MeshInstance3D = world.box("Металлическое крепление",origin,Vector3(width*.8,.06,.06),metal,holder)
-			band.name = "Металлическое крепление_%d" % holder.get_child_count()
-			band.position = Vector3(0,front_top-height*.42,.8)
-			for x in [-.32,.32]:
-				var dowel: MeshInstance3D = world.box("Золотое крепление",origin,Vector3(.08,.08,reach),accent,holder)
-				dowel.name = "Золотое крепление_%d" % holder.get_child_count()
-				dowel.position = Vector3(width*x,front_top-height*.42,.82-reach*.5)
-		"lashing":
-			for x in [-.28,.28]:
-				var lash: MeshInstance3D = world.box("Канатное крепление",origin,Vector3(.06,height*1.1,.06),accent,holder)
-				lash.name = "Канатное крепление_%d" % holder.get_child_count()
-				lash.position = Vector3(width*x,front_top-height*.3,.84)
-				lash.rotation.z = .35*signf(x)
-		_:
-			for side in [-1,1]:
-				var plate: MeshInstance3D = world.box("Металлическое крепление",origin,Vector3(.12,height*.5,.05),metal,holder)
-				plate.name = "Металлическое крепление_%d" % holder.get_child_count()
-				plate.position = Vector3(side*width*.34,front_top-height*.32,.76)
-				plate.rotation.z = side*.12
-				var bolt: MeshInstance3D = world.box("Золотое крепление",origin,Vector3(.06,.06,reach),accent,holder)
-				bolt.name = "Золотое крепление_%d" % holder.get_child_count()
-				bolt.position = Vector3(side*width*.34,front_top-height*.2,.80-reach*.5)
 
 func _chips(holder: Node3D, stone: Color, bottom: float, width: float, wall: float, id: int) -> void:
 	# A disposable grip already shows where it will break: a few chips at its
@@ -974,7 +1242,7 @@ func _jagged(points: PackedVector2Array, seed_value: int) -> PackedVector2Array:
 			result.append(notch+(center-notch)*random.randf_range(.12,.24))
 	return result
 
-func _icicles(holder: Node3D, bottom: float, width: float, seed_value: int) -> void:
+func _icicles(holder: Node3D, bottom: float, width: float, seed_value: int, z: float = .30) -> void:
 	var random := layout.rng(seed_value,916)
 	var points := PackedVector3Array()
 	var colors := PackedColorArray()
@@ -982,7 +1250,7 @@ func _icicles(holder: Node3D, bottom: float, width: float, seed_value: int) -> v
 		var x := (index-1)*width*.24+random.randf_range(-.05,.05)
 		var length := random.randf_range(.18,.32)
 		var r := .05
-		var base := Vector3(x,bottom+.06,.30)
+		var base := Vector3(x,bottom+.06,z)
 		var tip := base+Vector3(0,-length,0)
 		points.append_array(PackedVector3Array([base+Vector3(-r,0,0),tip,base+Vector3(r,0,0)]))
 		colors.append(Color("cfeeff"))

@@ -43,6 +43,11 @@ func route_x(height: float) -> float:
 func spine_x(height: float) -> float:
 	return route_x(height-7)*.25+route_x(height)*.5+route_x(height+7)*.25
 
+# Width of the face relative to the first location's massif (acts of v14
+# narrow a ridge or widen a saddle).
+func width_scale(_y: float) -> float:
+	return 1.0
+
 static func pulse(y: float, center: float, radius: float) -> float:
 	var t := absf(y-center)/radius
 	return 0.0 if t>=1 else (1-t*t)*(1-t*t)
@@ -75,6 +80,12 @@ func _profile_sample(index: int) -> Vector2:
 				edge = 1.8*pulse(y,cy+2,5)-2.5*pulse(y,cy-3,3)
 		left += (both+(edge if side<0 else 0))*strength
 		right += (both+(edge if side>0 else 0))*strength
+	# An act narrows or widens the far flank of the face; the near flank keeps
+	# room for grips beside the route.
+	var scale := width_scale(y)
+	if scale!=1.0:
+		if massif_side>0: right *= scale
+		else: left *= scale
 	left = maxf(2.8,left)
 	right = maxf(2.8,right)
 	left += grain_noise.get_noise_2d(y*1.8,21)*.25

@@ -9,6 +9,15 @@ extends RefCounted
 # Closest two grips may stand: nearer, a hook aimed at one catches the other.
 const GRIP_SPACING := 1.45
 
+# An exit judged from where the grip really leaves the hook: ice from every
+# contact its slide can produce on the drawn stone; other types as the
+# generator placed them.
+static func exit_after_effect(layout: MountainLayout, grip: Dictionary, target: Vector2) -> bool:
+	if GripSpec.kind_of(grip)!=GripSpec.ICE: return layout.exit_reachable(grip,target)
+	for contact in GripSpec.slide_contacts(grip):
+		if contact.distance_to(target)>=MountainLayout.LINK_REACH or not layout.transition_clear(contact,target): return false
+	return true
+
 static func audit(layout: MountainLayout) -> Dictionary:
 	var problems: Array[String] = []
 	var stats := {}
@@ -43,8 +52,12 @@ static func audit(layout: MountainLayout) -> Dictionary:
 			problems.append("branch %d records a stale entry lifetime" % grip["id"])
 		var entry_row := int(row_of.get(branch["entry"],-1))
 		for exit in branch.get("candidate_exits",[{"row":branch["exit_row"],"pos":branch["exit_pos"],"kind":"main"}]):
-			if not layout.exit_reachable(grip,exit["pos"]):
-				problems.append("branch %d (%s) has no %s exit after its effect" % [grip["id"],GripSpec.type_of(grip),exit["kind"]])
+			if not exit_after_effect(layout,grip,exit["pos"]):
+				# Frozen generators (saved attempts only) keep the check they
+				# were built against; their real-slide gaps are only counted.
+				if layout is ExpeditionLayout or not layout.exit_reachable(grip,exit["pos"]):
+					problems.append("branch %d (%s) has no %s exit after its effect" % [grip["id"],GripSpec.type_of(grip),exit["kind"]])
+				else: stats["legacy_ice_exit"] = int(stats.get("legacy_ice_exit",0))+1
 			if exit.has("row") and entry_row>=0 and not entry["permanent"] and int(exit["row"])<=entry_row:
 				problems.append("branch %d rejoins behind its consumed entry" % grip["id"])
 		if branch.has("hazard_state"):
@@ -75,7 +88,7 @@ static func audit(layout: MountainLayout) -> Dictionary:
 				if layout.scenario_routes and exits.size()!=2:
 					problems.append("crystal %d offers %d exits" % [grip["id"],exits.size()])
 				for exit_id in exits:
-					if not layout.exit_reachable(grip,anchors[int(exit_id)]["pos"]):
+					if not exit_after_effect(layout,grip,anchors[int(exit_id)]["pos"]):
 						problems.append("crystal %d exit %d unreachable" % [grip["id"],int(exit_id)])
 	# Every grip a route names keeps its own space (reserves sit under their
 	# grip by design and stay dormant until a revival).

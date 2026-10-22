@@ -29,6 +29,9 @@ static func build(world: MountainWorld, find: Dictionary, holder: Node3D, qualit
 		"chalice": _chalice(world,holder,shadows)
 		"idol": _idol(world,holder,shadows)
 		"star", "crystal": _crystal(world,holder,Color("8fd8ee") if kind=="crystal" else Color("cfe9ff"),shadows)
+		"material":
+			var tint: Color = LootIcon.MATERIAL_COLORS.get(str(item.get("set_id","")),Color("c9a46a"))
+			_gem(world,holder,tint.darkened(.2),tint.lightened(.3),shadows)
 		_: _relic(world,holder,shadows)
 	if quality!="battery":
 		_sparkle(world,holder,Vector3(.20,.20,.34),.30 if not rare else .42,float(int(item.get("id",0))%7)*.37)

@@ -166,13 +166,13 @@ func run_tests() -> void:
 	var real: GameModel = game.model
 	real.profile["gold"] = 1234
 	real.profile["diamonds"] = 40
-	real.profile["levels"] = [6,6,3,6,6,6,6]
+	real.set_levels([5,5,3,5,5,5,5,4])
 	real.save()
 	var real_profile: Dictionary = real.profile.duplicate(true)
 	var real_file := FileAccess.get_file_as_string(real.save_path)
 	game.start_practice()
 	check(game.world.layout is PracticeLayout and game.world.main_route.size()==16,"training provides a fixed short route of sixteen primary grips")
-	check(game.model!=real and game.model.profile["levels"]==[1,1,1,1,1,1,1,1],"training uses base equipment in a separate model")
+	check(game.model!=real and game.model.profile["upgrade_levels"]==[1,1,1,1,1,1,1,1],"training uses base equipment in a separate model")
 	var first: Vector2 = game.world.anchor_by_id(game.world.main_route[0])["pos"]
 	game.fire_hook(game.direction_to_target(first))
 	for frame in range(120):

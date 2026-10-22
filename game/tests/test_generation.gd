@@ -145,11 +145,15 @@ func run_tests() -> void:
 		for j in range(i): distinct = distinct and masks[i]!=masks[j]
 	check(distinct,"seeds change geometry and hole topology, not only materials")
 	for biome in [1,2]:
-		var world := make_world(58273,126,true,biome)
-		var partial_legacy := make_world(58273,15,true,biome)
+		# Saved v4 attempts keep their generator and rectangles; new attempts
+		# climb the location's expedition (test_levels).
+		var world := make_world(58273,126,true,biome,4)
+		var partial_legacy := make_world(58273,15,true,biome,4)
 		partial_legacy.generate_to(126,true,120)
-		check(world.layout is LegacyMountainLayout and MountainWorld.generation_version_for(biome)==4 and world.anchors[0]["shape"]=="rectangle","other location keeps generator v4 and old hook geometry: %d" % biome)
+		var fresh := make_world(58273,30,true,biome)
+		check(world.layout is LegacyMountainLayout and world.anchors[0]["shape"]=="rectangle" and fresh.layout is ExpeditionLayout and MountainWorld.generation_version_for(biome)==15,"a saved v4 attempt keeps generator v4 and its hook geometry, a new one is an expedition: %d" % biome)
 		check(signature(world)==signature(partial_legacy),"legacy location remains deterministic across generation requests: %d" % biome)
+		fresh.free()
 		partial_legacy.free()
 		world.free()
 	# Independent obstacle cases: ray blocking, swept body collision and sliding.

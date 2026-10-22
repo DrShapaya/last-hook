@@ -102,7 +102,7 @@ func run_tests() -> void:
 	# Stage four launches two slightly fanned lines. The first valid contact
 	# wins; the other line must wind back without creating a second attachment.
 	game.model.profile = GameModel.fresh_profile()
-	game.model.profile["levels"][2] = 4
+	game.model.set_level(GameModel.HOOKS,4)
 	game.start_run(false)
 	clear_shot(game)
 	var dual_target := Vector2(4,22)
@@ -143,7 +143,7 @@ func run_tests() -> void:
 	var slid: Vector2 = game.world.anchor_surface_point(grip,grip["pos"]+Vector2(0,-1.2-grip["dimensions"].y))
 	check(Geometry2D.is_point_in_polygon(slid,outline) or slid.y>=grip["pos"].y-grip["dimensions"].y,"a slipping hook stops at the grip's lower edge")
 	clear_shot(game)
-	game.model.profile["levels"][2] = 1
+	game.model.set_level(GameModel.HOOKS,1)
 	game.fire_hook(Vector2.RIGHT)
 	game._update_bolt(.8)
 	check(not game.bolt_active and game.bolt_returning and game.bolt_pos.distance_to(game.sim.pos)<=5.501,"a miss stops at the live rope limit and begins winding back")
@@ -168,6 +168,39 @@ func run_tests() -> void:
 	game.save_snapshot()
 	game.resume_run()
 	check(game.bolt_returning and not game.bolt_active and game.bolt_pos==saved_position,"save and resume preserve recovery without spawning a new shot")
+	# Aim preview cost: a jittering finger does not rebuild the arc every frame,
+	# a real turn does at once, and a steady aim still follows the moving hero.
+	game.bolt_active = false
+	game.bolt_returning = false
+	game.sim.attached = false
+	game.pressed = true
+	game.touch_gesture = false
+	game.aim_direction = Vector2.UP
+	game.hud.shot_preview.clear()
+	var refreshes := 0
+	var last_refresh: float = game.hud.shot_preview_time
+	for frame in range(60):
+		game.elapsed += 1.0/60
+		game.aim_direction = game.aim_direction.rotated(deg_to_rad(.3))
+		game.hud.update_play()
+		if game.hud.shot_preview_time!=last_refresh:
+			refreshes += 1
+			last_refresh = game.hud.shot_preview_time
+	check(refreshes<=21,"a jittering aim rebuilds the arc preview at most about 20 times a second (%d)" % refreshes)
+	game.elapsed += 1.0/60
+	game.aim_direction = game.aim_direction.rotated(deg_to_rad(10))
+	game.hud.update_play()
+	check(is_equal_approx(game.hud.shot_preview_time,game.elapsed),"a real change of aim rebuilds the preview on the next frame")
+	refreshes = 0
+	last_refresh = game.hud.shot_preview_time
+	for frame in range(60):
+		game.elapsed += 1.0/60
+		game.hud.update_play()
+		if game.hud.shot_preview_time!=last_refresh:
+			refreshes += 1
+			last_refresh = game.hud.shot_preview_time
+	check(refreshes>=15,"a steady aim still refreshes the preview as the hero moves (%d)" % refreshes)
+	game.pressed = false
 	game.queue_free()
 	await process_frame
 	var report := FileAccess.open(directory.path_join("hook-test-report.json"),FileAccess.WRITE)

@@ -21,6 +21,15 @@ var turn := 0.0
 var lean := 0.0
 var impact := 0.0
 var stride := 0.0 # Walk cycle advanced by distance, so steps match the ground.
+# Ground speed the walk cycle is authored for; main.gd sets it from balance.json.
+var walk_speed := 2.6
+# Stride phase per unit walked: one full leg cycle covers 2*PI/STRIDE_PER_UNIT.
+const STRIDE_PER_UNIT := 3.4
+# Walk starts above WALK_ENTER and ends below WALK_EXIT, so easing in and out
+# of a stop never flickers between idle and walk.
+const WALK_ENTER := .35
+const WALK_EXIT := .18
+var last_vertical_speed := 0.0
 var previous_grounded := true
 var previous_attached := false
 
@@ -78,7 +87,9 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	var turn_target := 0.0 if facing>0 else PI
 	turn = lerpf(turn,turn_target,1-exp(-dt*13))
 	rotation.y = turn
-	if sim.grounded and not previous_grounded: impact = .075
+	# Touchdown compression scales with how fast the hero came down.
+	if sim.grounded and not previous_grounded: impact = lerpf(.04,.09,clampf(-last_vertical_speed/8.0,0,1))
+	last_vertical_speed = sim.vel.y
 	if sim.attached and not previous_attached: impact = -.028
 	previous_grounded = sim.grounded
 	previous_attached = sim.attached
@@ -88,11 +99,15 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	elif tether:
 		state = "throw"
 	elif sim.grounded:
-		state = "land" if impact>.006 else "walk" if absf(sim.vel.x)>.35 else "idle"
+		var moving := absf(sim.vel.x)>(WALK_EXIT if state=="walk" else WALK_ENTER)
+		state = "land" if impact>.006 else "walk" if moving else "idle"
 	else:
 		state = "fall" if sim.vel.y<-.6 else "flight"
 	var speed := clampf(sim.vel.length()/9,0,1)
-	if state=="walk": stride += absf(sim.vel.x)*dt*3.4
+	if state=="walk": stride += absf(sim.vel.x)*dt*STRIDE_PER_UNIT
+	elif sim.grounded:
+		# Settle the gait to the nearest planted pose instead of freezing mid-step.
+		stride = lerpf(stride,roundf(stride/PI)*PI,1-exp(-dt*8))
 	var step_bob := 0.0
 	var cycle := sin(phase*3.6)
 	var desired := Vector4(-.07,.015*cycle,0,.012*sin(phase*1.9))
@@ -115,7 +130,7 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 			# Legs alternate with the stride, the free arm swings against them
 			# and the body bobs once per step.
 			var gait := sin(stride)
-			var pace := clampf(absf(sim.vel.x)/2.6,0,1)
+			var pace := clampf(absf(sim.vel.x)/maxf(.1,walk_speed),0,1)
 			desired = Vector4(-.07-.07*gait*pace,.17*gait*pace,.02*pace,.014*absf(gait))
 			desired_lean += -signf(sim.vel.x)*.05*pace
 			step_bob = .022*absf(sin(stride))*pace

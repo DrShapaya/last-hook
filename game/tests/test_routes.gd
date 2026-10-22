@@ -31,6 +31,22 @@ func signature(world: MountainWorld) -> Array:
 	result.append(world.route_edges.duplicate())
 	return result
 
+# A one-branch layout: a disposable entry under a 1.3 x 0.6 m ice grip that
+# slides left and down, with one candidate exit.
+func ice_branch_layout(exit_pos: Vector2, current: bool = true) -> MountainLayout:
+	var layout: MountainLayout = ExpeditionLayout.new() if current else MountainLayout.new()
+	layout.anchors.append({"id":0,"kind":GripSpec.STONE,"pos":Vector2(0,15),"dimensions":Vector2(1.8,.65),"permanent":false,"primary":true,"broken":false})
+	layout.anchors.append({"id":1,"kind":GripSpec.ICE,"pos":Vector2(0,20),"dimensions":Vector2(1.3,.6),"slide_dir":Vector2(-.943858,-.33035),"permanent":false,"role":"branch","broken":false})
+	layout.main_route.append(0)
+	layout.branches.append({"entry":0,"anchor":1,"entry_consumed":true,"exit_row":-1,"exit_pos":exit_pos,"candidate_exits":[{"pos":exit_pos,"kind":"main"}]})
+	return layout
+
+# True when the audit of the current generator flags the ice exit.
+func ice_exit_flagged(exit_pos: Vector2) -> bool:
+	for problem in RouteGraph.audit(ice_branch_layout(exit_pos))["problems"]:
+		if str(problem).contains("has no main exit"): return true
+	return false
+
 func run_tests() -> void:
 	# --- The contract table ---------------------------------------------------
 	var stone := {"kind":0,"permanent":false,"pos":Vector2.ZERO}
@@ -111,14 +127,24 @@ func run_tests() -> void:
 	check(walk_ok and travelled>.4,"ice walks the hook continuously along the stone, never uphill (%.2f m in 3 s)" % travelled)
 	check(ice_world.anchor_contact_after({"kind":0,"pos":Vector2(0,20)},contact,100)==contact,"other types never move the contact")
 	ice_world.free()
+	# The route audit judges an ice exit from the contacts the slide really
+	# produces on the stone, not from points past its edge.
+	var past_edge_only := Vector2(4.0,21.5)
+	check(not ice_exit_flagged(past_edge_only),"an ice exit reachable from every real contact passes even if the straight slide line leaves the stone")
+	var far_corner_blocked := Vector2(-4.9,19.0)
+	check(ice_exit_flagged(far_corner_blocked),"an ice exit out of reach from a corner the hook can really hold is reported")
+	var legacy_audit := RouteGraph.audit(ice_branch_layout(far_corner_blocked,false))
+	check(legacy_audit["problems"].is_empty() and int(legacy_audit["stats"].get("legacy_ice_exit",0))==1,"a frozen generator keeps its own check; the real-slide gap is only counted")
 
-	# --- v12 scenario routes ----------------------------------------------------
-	var first := make_world(58273)
-	var partial := make_world(58273,0,0,20)
+	# --- v12/v13 scenario routes ------------------------------------------------
+	# New attempts climb the expeditions (v14, test_levels); v13 stays the
+	# generator of saved first-location attempts and keeps its whole contract.
+	var first := make_world(58273,13)
+	var partial := make_world(58273,13,0,20)
 	partial.generate_to(64,true,120)
 	partial.generate_to(126,true,120)
 	check(signature(first)==signature(partial),"scenario routes are identical for any request size")
-	var again := make_world(58273)
+	var again := make_world(58273,13)
 	check(signature(first)==signature(again),"the same seed recreates every scenario, type, role and choice exit")
 	again.free()
 	partial.free()
@@ -157,7 +183,7 @@ func run_tests() -> void:
 	var auxiliary_springs := 0
 	var lateral_ice := true
 	for seed_number in range(100):
-		var world := make_world(seed_number)
+		var world := make_world(seed_number,13)
 		var layout: EncounterLayout = world.layout
 		var report := RouteGraph.audit(layout)
 		for problem in report["problems"]:

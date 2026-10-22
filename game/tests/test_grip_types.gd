@@ -22,12 +22,14 @@ func step(game, frames: int = 1) -> void:
 		game._physics_process(1.0/120)
 		game._move_camera(1.0/120)
 
-func new_run(game, seed_number: int, hook_level: int = 1) -> void:
+# A seed may carry its location (v14: ice lives in the third expedition).
+func new_run(game, seed_number: int, hook_level: int = 1, location: int = 0, version: int = 0) -> void:
 	game.model.profile = GameModel.fresh_profile()
-	game.model.profile["levels"][2] = hook_level
+	game.model.set_level(GameModel.HOOKS,hook_level)
+	game.selected_location = location
 	game.start_run(false)
 	game.run_seed = seed_number
-	game._create_world(seed_number,0,126)
+	game._create_world(seed_number,location,game.summit_height+6,version)
 	game._configure_rope()
 
 # Test fixture: hang still under a grip, as after a catch, without flying there.
@@ -76,17 +78,24 @@ func traverse(game, route: Array) -> int:
 	return reached
 
 # First branch of a hazard whose entry is consumed behind the player.
-func find_branch(seeds: Array, hazard: String) -> Dictionary:
-	for seed_number in seeds:
+# The ice check keeps its v13 case on the first location: the mechanic is the
+# same, and some v14 ice blocks have a drawn outline whose bump stops the
+# slide early (see CHAT_3_REPORT).
+func find_branch(seeds: Array, hazard: String, version: int = 0) -> Dictionary:
+	for index in range(seeds.size()*3):
+		var seed_number: int = seeds[index/3]
+		var location := index%3 if version==0 else 0
+		var total := float(LevelCatalog.level(location)["height_units"])
 		var world := MountainWorld.new()
 		world.visuals_enabled = false
 		root.add_child(world)
-		world.setup(seed_number,0)
-		world.generate_to(126,true,120)
+		world.setup(seed_number,location,version)
+		world.generate_to(total+6,true,total)
 		for branch in world.layout.branches:
 			if branch["hazard_state"]==hazard and branch["entry_consumed"] and world.main_route.has(branch["entry"]) and not branch.get("repeat",false):
 				var found: Dictionary = branch.duplicate()
 				found["seed"] = seed_number
+				found["location"] = location
 				found["exit_id"] = world.main_route[branch["exit_row"]]
 				for other in world.layout.branches:
 					if other.get("choice",false) and other["entry"]==branch["anchor"]: found["reward_exit_id"] = world.main_route[other["exit_row"]]
@@ -153,12 +162,12 @@ func run_tests() -> void:
 	var root_branch := find_branch(seeds,"timer")
 	check(not root_branch.is_empty(),"a timed root detour exists in the first seeds")
 	for hook_level in [1,2]:
-		new_run(game,root_branch["seed"],hook_level)
+		new_run(game,root_branch["seed"],hook_level,int(root_branch["location"]))
 		hang_from(game,root_branch["entry"])
 		var reached := traverse(game,[root_branch["entry"],root_branch["anchor"],root_branch["exit_id"]])
 		check(reached==3,"hook radius %.2f: entry, timed root and exit are flown in time" % game.model.hook_radius())
 		check(game.world.anchor_by_id(root_branch["anchor"])["broken"] and game.world.anchor_by_id(root_branch["entry"])["broken"],"the root and its entry are spent behind the player")
-	new_run(game,root_branch["seed"])
+	new_run(game,root_branch["seed"],1,int(root_branch["location"]))
 	var root_grip: Dictionary = game.world.anchor_by_id(root_branch["anchor"])
 	hang_from(game,root_branch["anchor"])
 	step(game,180)
@@ -181,9 +190,9 @@ func run_tests() -> void:
 	check(root_grip["broken"] and GripSpec.state(root_grip)=="consumed" and game.world.cast_hook(root_grip["pos"]+Vector2(0,-3),root_grip["pos"],.76).get("object",{}).get("id",-1)!=root_branch["anchor"],"a broken root stays broken after reload and cannot be caught again")
 
 	# --- Ice: slide, carried inertia, correction to the exit -------------------
-	var ice_branch := find_branch(seeds,"slide")
+	var ice_branch := find_branch(seeds,"slide",13)
 	check(not ice_branch.is_empty(),"an ice detour exists in the first seeds")
-	new_run(game,ice_branch["seed"])
+	new_run(game,ice_branch["seed"],1,0,13)
 	var ice: Dictionary = game.world.anchor_by_id(ice_branch["anchor"])
 	hang_from(game,ice_branch["anchor"])
 	var first_contact: Vector2 = game.sim.anchor
@@ -197,19 +206,19 @@ func run_tests() -> void:
 	game.release_hook()
 	check(game.sim.vel.distance_to(before+carried)<.01,"releasing ice carries the slide into the flight")
 	for hook_level in [1,2]:
-		new_run(game,ice_branch["seed"],hook_level)
+		new_run(game,ice_branch["seed"],hook_level,0,13)
 		hang_from(game,ice_branch["entry"])
 		check(traverse(game,[ice_branch["entry"],ice_branch["anchor"],ice_branch["exit_id"]])==3,"hook radius %.2f: the ice detour is caught, slid and left for its exit" % game.model.hook_radius())
 
 	# --- Crystal: both exits are flown ------------------------------------------
 	var crystal_branch := find_branch(seeds,"choice")
 	check(not crystal_branch.is_empty() and crystal_branch.has("reward_exit_id"),"a crystal fork with a reward exit exists in the first seeds")
-	new_run(game,crystal_branch["seed"])
+	new_run(game,crystal_branch["seed"],1,int(crystal_branch["location"]))
 	var crystal: Dictionary = game.world.anchor_by_id(crystal_branch["anchor"])
 	check(GripSpec.choice_exits(crystal)==[crystal_branch["reward_exit"],crystal_branch["exit_id"]],"the crystal names its reward and main exits before it is used")
 	hang_from(game,crystal_branch["entry"])
 	check(traverse(game,[crystal_branch["entry"],crystal_branch["anchor"],crystal_branch["exit_id"]])==3,"the short exit of a crystal is flown")
-	new_run(game,crystal_branch["seed"])
+	new_run(game,crystal_branch["seed"],1,int(crystal_branch["location"]))
 	hang_from(game,crystal_branch["entry"])
 	var reward_route: Array = [crystal_branch["entry"],crystal_branch["anchor"],crystal_branch["reward_exit"],crystal_branch["reward_exit_id"]]
 	check(traverse(game,reward_route)==4,"the reward exit of a crystal is flown and rejoins the main path")

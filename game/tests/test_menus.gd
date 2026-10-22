@@ -89,7 +89,7 @@ func run_tests() -> void:
 				check(has_delay,"touch settings expose the vertical hold delay at %s" % dimensions)
 				game.hud.touch_controls_hint = false
 		game.start_run(false)
-		game.model.profile["levels"][3] = 6
+		game.model.set_level(GameModel.BAG,5)
 		game.model.bag.clear()
 		for tier in range(6):
 			game.model.bag.append({"id":tier,"tier":tier,"value":int(game.model.balance["loot_values"][tier])*2})

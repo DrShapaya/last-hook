@@ -502,57 +502,6 @@ func move_player(from: Vector2, to: Vector2, velocity: Vector2) -> Dictionary:
 			rest = bool(best["object"].get("rest",false))
 	return {"position":position_value,"velocity":velocity,"grounded":grounded,"rest":rest,"impact":impact,"contacts":contacts}
 
-func _loot_material(key: String, color: Color, metallic: float, roughness: float, glow: Color = Color.TRANSPARENT) -> StandardMaterial3D:
-	var material := mat(key,color,false)
-	material.metallic = metallic
-	material.roughness = roughness
-	if glow.a>0:
-		material.emission_enabled = true
-		material.emission = glow
-		material.emission_energy_multiplier = .55
-	return material
-
-func _loot_mesh(parent: Node3D, mesh: Mesh, material: Material, at: Vector3 = Vector3.ZERO, scale_value: Vector3 = Vector3.ONE) -> MeshInstance3D:
-	var instance := MeshInstance3D.new()
-	instance.mesh = mesh
-	instance.material_override = material
-	instance.position = at
-	instance.scale = scale_value
-	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	parent.add_child(instance)
-	return instance
-
-func _loot_shadow(parent: Node3D) -> MeshInstance3D:
-	var quad := QuadMesh.new()
-	quad.size = Vector2(.82,.34)
-	var shader := Shader.new()
-	shader.code = "shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_never; void fragment(){ vec2 p=UV*2.0-1.0; float d=length(p); float a=smoothstep(1.0,.08,d)*.22; ALBEDO=vec3(.015,.025,.045); ALPHA=a; }"
-	var material := ShaderMaterial.new()
-	material.shader = shader
-	var shadow := _loot_mesh(parent,quad,material,Vector3(0,-.04,-.11),Vector3(1,1,1))
-	shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	return shadow
-
-func _loot_polygon(parent: Node3D, points: PackedVector2Array, material: Material, z: float = .08) -> MeshInstance3D:
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var indices := Geometry2D.triangulate_polygon(points)
-	for index in range(0,indices.size(),3):
-		for vertex_index in [indices[index],indices[index+1],indices[index+2]]:
-			surface.set_normal(Vector3(0,0,1))
-			surface.add_vertex(Vector3(points[vertex_index].x,points[vertex_index].y,z))
-	var instance := MeshInstance3D.new()
-	instance.mesh = surface.commit()
-	if material is StandardMaterial3D:
-		var flat_material := material.duplicate() as StandardMaterial3D
-		flat_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-		instance.material_override = flat_material
-	else:
-		instance.material_override = material
-	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	parent.add_child(instance)
-	return instance
-
 func _build_find(find: Dictionary, parent: Node3D) -> void:
 	var holder := Node3D.new()
 	parent.add_child(holder)

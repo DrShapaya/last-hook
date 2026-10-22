@@ -41,9 +41,7 @@
 
 ## Проверка темпа
 
-Обновлённый `tools/economy_probe.py`: 100 воспроизводимых прогонов для каждого из трёх условных уровней навыка и двух приоритетов покупок, сравнение до/после на одинаковых seed. [Полный отчёт](validation/progression-economy.json) содержит все допущения, цены и промежуточные этапы.
-
-Повтор расчёта: `python tools/economy_probe.py --compare docs/validation/balance-v11.json --output docs/validation/progression-economy.json`.
+Расчёт экономики v13 (`tools/economy_probe.py`, 100 прогонов на уровень навыка) сохранён как [отчёт](validation/progression-economy.json); сам скрипт удалён 22.10.2026 — он читал уже несуществующие поля баланса. Действующая модель экономики v15 — `python tools/economy_table.py --output docs/validation/chat4-economy.json` (см. [отчёт чата 4](CHAT_4_REPORT.md), раздел P8).
 
 | Сценарий, приоритет движения | Первая покупка | 50% покупок | 75% покупок | Весь комплект до → после |
 |---|---:|---:|---:|---:|

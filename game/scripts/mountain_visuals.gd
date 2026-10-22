@@ -831,16 +831,6 @@ func _contact_shade(holder: Node3D, size: Vector2, z: float, opacity: float) -> 
 	shade.position = Vector3(.12,-.16,z)
 	holder.add_child(shade)
 
-func _chips(holder: Node3D, stone: Color, bottom: float, width: float, wall: float, id: int) -> void:
-	# A disposable grip already shows where it will break: a few chips at its
-	# foot, cut from the same stone.
-	var chips := Node3D.new()
-	chips.name = "Сколы"
-	chips.position = Vector3(width*(.22 if id%2==0 else -.22),bottom-.06,wall+.12)
-	chips.scale = Vector3.ONE*.4
-	holder.add_child(chips)
-	_build_pebbles(chips,layout.rng(id,918),stone,false)
-
 # --- Hazards and shelves ------------------------------------------------------
 
 func build_obstacle(object: Dictionary, parent: Node3D) -> void:

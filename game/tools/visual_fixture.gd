@@ -20,6 +20,8 @@ var frames: Array = []
 # --reference: the acceptance screen only, in three variants.
 var reference := false
 var acts := false
+# --gameplay: four frames at the play camera size round finds and grips.
+var gameplay := false
 
 func _initialize() -> void:
 	call_deferred("setup")
@@ -32,6 +34,7 @@ func setup() -> void:
 		if argument.begins_with("--seed="): seed_value = int(argument.trim_prefix("--seed="))
 		if argument=="--reference": reference = true
 		if argument=="--acts": acts = true
+		if argument=="--gameplay": gameplay = true
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	root.size = Vector2i(540,960)
 	var stage := Node3D.new()
@@ -142,6 +145,17 @@ func _plan() -> void:
 	if acts and world.layout is ExpeditionLayout:
 		_act_frames()
 		return
+	if gameplay:
+		# Gameplay framing (camera_base_size 24) round finds that share the
+		# screen with grips: platforms, strips and loot read together.
+		var last := -INF
+		for find in world.finds:
+			var at: Vector2 = find["pos"]
+			if at.y<8 or at.y-last<22 or frames.size()>=8: continue
+			last = at.y
+			frames.append({"name":"play_l%d_%s_s%d_%d" % [location,quality,seed_value,frames.size()/2],"at":Vector2(at.x,at.y+3.0),"size":24.0})
+			frames.append({"name":"play_l%d_%s_s%d_%d_close" % [location,quality,seed_value,frames.size()/2],"at":Vector2(at.x,at.y+1.5),"size":11.0})
+		return
 	if reference and world.visuals is MassifVisuals:
 		var at := _reference_center()
 		var tag := "ref_l%d_%s" % [location,quality]
@@ -209,11 +223,14 @@ func _run() -> void:
 				var decor := node_name.begins_with("Процедурный декор") or node_name.begins_with("Крупный элемент")
 				var rock := node_name.begins_with("Скальный массив")
 				child.visible = show=="full" or rock or (show=="objects" and not decor)
+		# Dormant reserve and hidden grips stay hidden, as in the game.
+		for object in world.anchors:
+			if is_instance_valid(object.get("visual")) and object["broken"]: object["visual"].visible = false
 		for wait in range(4): await process_frame
 		await RenderingServer.frame_post_draw
 		var path := out_dir.path_join(str(frame["name"])+".png")
 		root.get_texture().get_image().save_png(path)
-		print("FIXTURE ",path)
+		print("FIXTURE ",path," at=",at)
 	world.queue_free()
 	await process_frame
 	quit()

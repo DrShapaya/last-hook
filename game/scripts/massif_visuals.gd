@@ -7,7 +7,7 @@ extends MountainVisuals
 #   body      larger blocks behind them, the mountain's depth
 #   fill      slabs that keep the route corridor on stone
 #   seat      a block for a grip, find or hazard no other mass carries
-#   shelf     ledges and find shelves, built out of the face
+#   shelf     rest ledges, built out of the face (finds get none)
 #   island    side clusters and pillars, with sky between them and the trunk
 #   overhang  a block jutting out over open space, deep underside
 #   arch      two pillars and a lintel round a real opening
@@ -44,7 +44,6 @@ var band_masses: Dictionary = {}
 var band_islands: Dictionary = {}
 var mass_bins: Dictionary = {}
 var masses_by_id: Dictionary = {}
-var find_shelves: Dictionary = {}
 var query_cache: Dictionary = {}
 var route_cache: Dictionary = {}
 var mass_signature := Vector4i(-1,-1,-1,-1)
@@ -162,7 +161,6 @@ func _refresh_masses() -> void:
 	band_islands.clear()
 	mass_bins.clear()
 	masses_by_id.clear()
-	find_shelves.clear()
 	arch_openings.clear()
 	query_cache.clear()
 
@@ -263,7 +261,7 @@ func _seat(list: Array, band: int, point: Vector2, half: Vector2, random: Random
 	var host: RockMassSpec = null
 	var best := INF
 	for mass in list:
-		if mass.role in ["find_shelf","ledge_shelf","rubble"]: continue
+		if mass.role in ["ledge_shelf","rubble"]: continue
 		var distance: float = -mass.inside(point)
 		if distance<best:
 			best = distance
@@ -371,10 +369,13 @@ func front_band(band: int) -> Array:
 				var mass := _block(list,band,"fill","slab",point+Vector2(-offset*.35,.6),Vector2(random.randf_range(3.2,4.0),random.randf_range(2.6,3.2))*(1.0+attempt*.2),random.randf_range(-2.1,-1.7),random)
 				if mass!=null and mass.inside(point)>=.05: break
 				if mass!=null: list.erase(mass)
-	# Seats for every gameplay object, then shelves for ledges and finds.
+	# Seats for every gameplay object, then shelves for ledges.
 	for anchor in layout.anchors:
 		var p: Vector2 = anchor["pos"]
-		if p.y>=low and p.y<high: _seat(list,band,p,anchor["dimensions"]*.5,random)
+		# The grip's outcrop drops about a metre below its hitbox (see
+		# GripVisualSpec): the stone behind it reaches that far down too.
+		var size: Vector2 = anchor["dimensions"]
+		if p.y>=low and p.y<high: _seat(list,band,p-Vector2(0,.5),Vector2(size.x*.68,size.y*.5+.5),random)
 	for obstacle in layout.obstacles:
 		var p: Vector2 = obstacle["pos"]
 		if p.y>=low and p.y<high: _seat(list,band,p,obstacle["dimensions"]*.5+Vector2(.3,.3),random)
@@ -389,12 +390,9 @@ func front_band(band: int) -> Array:
 	for find in layout.finds:
 		var p: Vector2 = find["pos"]
 		if p.y<low or p.y>=high: continue
+		# A find lies on the host face itself: no shelf or ledge of its own,
+		# so loot never reads as a platform of the route.
 		_seat(list,band,p,Vector2(.6,.6),random)
-		# A small natural ledge of the host face carries the find: wide,
-		# lopsided and standing out only a little, so it continues the relief.
-		var front := minf(_front_z(list,p,-1.0)+.45,FRONT_LIMIT)
-		var shelf := _shelf(list,band,"find_shelf",p.x-random.randf_range(.8,1.3),p.x+random.randf_range(.8,1.3),p.y-.4,random.randf_range(.9,1.2),front,random)
-		if shelf!=null: find_shelves[p] = shelf
 	# Side islands: separate clusters off the route, sky between them.
 	var islands: Array = []
 	for cluster in range(1 if kind in [2,3] else 2):
@@ -581,21 +579,18 @@ func mount_at(point: Vector2, footprint: Vector2, object: Dictionary = {}, stand
 	mount.exposure = hit.exposure
 	return mount
 
-func provides_find_shelves() -> bool:
-	return true
+# Every mass over the area counts with its full front, bevels and dome
+# included, not only the face a gameplay point sees.
+func _stone_front(area: Rect2) -> float:
+	var front := -INF
+	for bin in range(int(floor(area.position.y/BIN)),int(floor(area.end.y/BIN))+1):
+		_masses_near(Vector2(area.get_center().x,bin*BIN+BIN*.5))
+		for mass in mass_bins.get(bin,[]):
+			if mass.bounds.intersects(area): front = maxf(front,mass.front_z)
+	return front if front>-INF else super._stone_front(area)
 
-func mount_find(find: Dictionary) -> SurfaceMount:
-	# A find stands on its own shelf of the face; without one (the generator
-	# added it after the band was laid out) it keeps the old depth rule.
-	var point: Vector2 = find["pos"]
-	front_band(int(floor(point.y/BAND)))
-	var shelf: RockMassSpec = find_shelves.get(point)
-	if shelf==null: return super.mount_find(find)
-	var wall := wall_depth(point)
-	var mount := mount_at(point,Vector2(.9,.7),{},shelf.front_z+.05-wall)
-	mount.host_mass = shelf.id
-	mount.surface_class = RockMassSpec.TOP
-	return mount
+func finds_without_pedestal() -> bool:
+	return true
 
 # --- Chunk build --------------------------------------------------------------------
 

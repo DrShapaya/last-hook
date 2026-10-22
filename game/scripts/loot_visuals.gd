@@ -19,8 +19,9 @@ static func build(world: MountainWorld, find: Dictionary, holder: Node3D, qualit
 	var rare := bool(find.get("rare",false))
 	var kind := kind_of(item)
 	var shadows := quality!="battery"
-	# Every find rests on stone: a narrow shelf for coins and gems, a pedestal
-	# for crown and chalice, a ledge for idols and relics, with a tuft beside.
+	# On the rock-mass mountain a find hangs on the face with a soft contact
+	# shade only: no shelf of its own, so loot never reads as a platform.
+	# Older mountains keep their pedestals.
 	_pedestal(world,holder,wall_local_z,int(item.get("id",0)),shadows,kind,quality)
 	match kind:
 		"coin": _coin(world,holder,shadows)
@@ -243,8 +244,9 @@ const PEDESTALS := {"coin":[.34,.12,-.47],"amber":[.30,.11,-.40],"crown":[.44,.1
 static func _pedestal(world: MountainWorld, holder: Node3D, wall_local_z: float, id: int, shadows: bool, kind: String, quality: String) -> void:
 	if world.visuals==null: return
 	var visuals: MountainVisuals = world.visuals
-	# The rock-mass mountain builds a shelf of the face under every find.
-	if visuals.provides_find_shelves(): return
+	if visuals.finds_without_pedestal():
+		visuals._contact_shade(holder,Vector2(.62,.5),minf(-.1,wall_local_z+.02),.2)
+		return
 	var size: Array = PEDESTALS.get(kind,[.32,.11,-.42])
 	var random := RandomNumberGenerator.new()
 	random.seed = id*271+5

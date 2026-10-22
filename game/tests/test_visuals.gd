@@ -123,7 +123,7 @@ func run_tests() -> void:
 			if mass.role=="lobe":
 				lobes += 1
 				fused = fused and mass.group!=mass.id
-			if mass.role in ["ledge_shelf","find_shelf"]:
+			if mass.role=="ledge_shelf":
 				fused = fused and mass.group!=mass.id
 				var top_width := 0.0
 				var bottom_width := 0.0
@@ -184,8 +184,8 @@ func run_tests() -> void:
 		world.free()
 	check(silhouettes["high"]==silhouettes["battery"],"every preset builds the same masses: %s" % str(silhouettes))
 
-	# Loot: lit models; on the rock-mass mountain a find stands on a shelf of
-	# the face, older mountains keep pedestals.
+	# Loot: lit models; on the rock-mass mountain a find lies on the face with
+	# no shelf of its own, older mountains keep pedestals.
 	var holder_parent := Node3D.new()
 	a.add_child(holder_parent)
 	var kinds := ["coin","amber","crown","chalice","idol","star","relic",""]
@@ -217,19 +217,28 @@ func run_tests() -> void:
 		if holder.find_child("Каменный постамент",false,false)!=null or holder.find_child("Каменная полка",false,false)!=null: pedestals += 1
 	check(pedestals==3,"older mountains still stand finds on pedestals")
 	old.free()
-	var shelves_ok := true
-	var shelved := 0
+	# No shelf, ledge or seat-shaped platform under loot: the only shelves of
+	# the face are rest ledges, so a coin never reads as a route platform.
+	var loot_clear := true
+	var checked := 0
+	for band in range(0,5):
+		for mass in massif.front_band(band):
+			loot_clear = loot_clear and mass.role!="find_shelf" and (mass.landform!="shelf" or mass.role=="ledge_shelf")
 	for find in a.finds:
 		var p: Vector2 = find["pos"]
 		if p.y<4 or p.y>110: continue
+		checked += 1
 		var mount := massif.mount_find(find)
-		var shelf: RockMassSpec = massif.masses_by_id.get(mount.host_mass)
-		if shelf==null or shelf.role!="find_shelf":
-			shelves_ok = false
-			continue
-		shelved += 1
-		shelves_ok = shelves_ok and absf(shelf.bounds.end.y-(p.y-.4))<.05 and shelf.bounds.size.x>=1.5 and is_equal_approx(mount.holder_position().z,shelf.front_z+.05)
-	check(shelved>0 and shelves_ok,"every find stands on a wide shelf of the face, at its front (%d)" % shelved)
+		var host: RockMassSpec = massif.masses_by_id.get(mount.host_mass)
+		loot_clear = loot_clear and (host==null or host.landform!="shelf") and mount.holder_position().z>massif.wall_depth(p)+.3
+	check(checked>0 and loot_clear,"finds lie on the face with no shelf of their own (%d)" % checked)
+	var loot_holder := Node3D.new()
+	a.add_child(loot_holder)
+	LootVisuals.build(a,{"item":{"id":3,"tier":0,"kind":"coin","value":10},"pos":Vector2.ZERO,"rare":false},loot_holder,"balanced",-.8)
+	var stone_meshes := 0
+	for node in loot_holder.find_children("*","MeshInstance3D",true,false):
+		if (node as MeshInstance3D).material_override==massif.stone_material: stone_meshes += 1
+	check(stone_meshes==0 and loot_holder.find_child("Контактная тень",true,false)!=null,"a coin carries no stone of its own, only a soft contact shade")
 
 	# Grip shells: several visual variants, collision polygon untouched.
 	var grip_chunk := Node3D.new()
@@ -248,6 +257,36 @@ func run_tests() -> void:
 		shapes[signature] = true
 	check(polygon_kept,"visual grips never change the gameplay polygon")
 	check(no_pebbles,"grips carry no pebble chips or base ring of their own")
+	# Boulder grips: a few chips and moss at the foot, never a heap; wide
+	# blocks break into two stones; the paint is a band along the top edge.
+	var footing_ok := true
+	var split := 0
+	var paint_on_top := true
+	for anchor in a.nearby_anchors(20,70):
+		var holder: Node3D = anchor["visual"]
+		var spec: GripVisualSpec = anchor["visual_spec"]
+		if spec.split: split += 1
+		var seam := holder.find_child("Каменное гнездо",true,false) as MeshInstance3D
+		var growth := holder.find_child("Мох и снег в шве",true,false) as MeshInstance3D
+		footing_ok = footing_ok and int(seam.get_meta("chips",0)) in [2,3,4] and growth!=null and int(growth.get_meta("footing_tufts",0))>=3
+		var strip := holder.find_child("Полоса состояния",true,false) as MeshInstance3D
+		var box: AABB = strip.get_aabb()
+		var block := spec.bounds()
+		paint_on_top = paint_on_top and box.end.y>=block.end.y-.12 and box.size.y<=block.size.y*.36 and box.size.x>=spec.front_width*.6
+	check(footing_ok,"each grip has a few chips and moss at its foot (balanced), never a heap")
+	check(split>0 and split<a.nearby_anchors(20,70).size(),"some wide grips break into two stones, not all (%d)" % split)
+	check(paint_on_top,"the status paint is a wide band along the top of the boulder, not a plate over it")
+	var lean := make_world(58273,"battery")
+	var lean_chunk := Node3D.new()
+	lean.add_child(lean_chunk)
+	var lean_ok := true
+	for anchor in lean.nearby_anchors(20,40):
+		lean.visuals.build_anchor(anchor,lean_chunk)
+		var holder: Node3D = anchor["visual"]
+		var lean_seam := holder.find_child("Каменное гнездо",true,false)
+		lean_ok = lean_ok and int(lean_seam.get_meta("chips",0))==0 and holder.find_child("Контактная тень",true,false)!=null
+	check(lean_ok,"battery drops the chips and keeps a soft contact shade instead of real shadows")
+	lean.free()
 	check(shapes.size()>=4,"grips have several distinct visual builds (%d)" % shapes.size())
 	var strip_lit := true
 	for node in grip_chunk.find_children("Полоса состояния*","MeshInstance3D",true,false):
@@ -294,19 +333,41 @@ func run_tests() -> void:
 			if massif.stone_field(Vector2(x,y))<0: open += 1
 	var sky_share := float(open)/total
 	check(sky_share>.05 and sky_share<.6,"sky opens between the masses around the climb (%.2f)" % sky_share)
-	# The block's volume follows GripVisualSpec: 1.05-1.18 of the gameplay
-	# width, 1.15-1.35 of its height, standing out of the face and running
-	# back into the rock.
+	# The outcrop follows GripVisualSpec: 1.1-1.3 of the gameplay width, its
+	# top on the hitbox top, a body dropping 0.22-1.0 m below the hitbox into
+	# the mountain, a top face the camera sees (it carries the paint), real
+	# depth and a back running into the rock; its front stays well behind the
+	# hero's plane (z 3.2).
 	var block_sized := true
+	var clear_of_loot := true
+	var before_hero := true
 	for anchor in a.nearby_anchors(20,70):
 		var holder: Node3D = anchor["visual"]
 		var body := holder.find_child("Каменный выступ",true,false) as MeshInstance3D
 		var box: AABB = body.get_aabb()
 		var size: Vector2 = anchor["dimensions"]
 		var spec: GripVisualSpec = anchor["visual_spec"]
-		block_sized = block_sized and box.size.x>=size.x*1.02 and box.size.x<=size.x*1.21 and box.size.y>=size.y*1.1 and box.size.y<=size.y*1.4
-		block_sized = block_sized and box.position.z<=-spec.back_embed+.001 and box.end.z>=spec.side_depth*.95 and spec.side_depth>=size.y*.45 and spec.back_embed>=size.y*.3
-	check(block_sized,"grip blocks follow the visual contract: wider and taller than the hitbox, with depth and an embedded back")
+		var drop := spec.front_height-size.y-.05
+		block_sized = block_sized and box.size.x>=size.x*1.08 and box.size.x<=size.x*1.32 and drop>=GripVisualSpec.MIN_DROP-.001 and drop<=1.0
+		block_sized = block_sized and absf(spec.bounds().end.y-(size.y*.5+.05))<=.06 and spec.top_band_height>=.2 and spec.side_depth>=.7
+		block_sized = block_sized and box.position.z<=-spec.back_embed+.001 and box.end.z>=spec.side_depth*.9 and spec.back_embed>=.4
+		before_hero = before_hero and (holder.global_transform*body.transform*box.end).z<3.0
+		# The body never reaches down onto a find under the grip.
+		var p: Vector2 = anchor["pos"]
+		var foot := p.y+spec.bounds().position.y
+		for find in a.finds:
+			var q: Vector2 = find["pos"]
+			if q.y<p.y and absf(q.x-p.x)<spec.front_width*.5 and q.y+.45>foot: clear_of_loot = false
+	check(block_sized,"grip outcrops follow the visual contract: a little wider than the hitbox, a body below it, a visible top face, depth and an embedded back")
+	check(clear_of_loot,"no grip outcrop reaches down onto a find below it")
+	check(before_hero,"grip outcrops stay behind the hero's plane")
+	var simple := true
+	for id in range(300):
+		for kind in range(5):
+			var object := {"id":id,"kind":kind,"dimensions":Vector2(1.15+fposmod(id*.37,.9),.45+fposmod(id*.13,.35))}
+			var shape := GripVisualSpec.for_grip(object,GripBiomeProfile.named("forest"),1.0 if id%2==0 else .2)
+			simple = simple and not GripVisualSpec.crosses(shape.outline) and not GripVisualSpec.crosses(shape.front)
+	check(simple,"outcrop silhouettes and front rims never cross themselves (no holes in the face)")
 	# Prices: hidden by default far from the hero, shown nearby, along the aim
 	# or always when the setting asks for it.
 	var priced := MountainWorld.new()

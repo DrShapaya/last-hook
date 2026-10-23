@@ -294,9 +294,10 @@ func build_grip(object: Dictionary, parent: Node3D, mount: SurfaceMount) -> void
 	block.transform = frame
 	pivot.add_child(block)
 	var rock := zone_color(p.y)
-	# Lighter than the wall and leaning to the type's stone, so the block
-	# separates by its own volume, not by an outline.
-	var stone := rock.lightened(.08).lerp(profile.material_color(kind),.14)
+	# The host's own stone, a touch lighter and barely leaning to the type's
+	# material: the block separates by its volume and light, never as a pale
+	# plate laid on the face.
+	var stone := rock.lightened(.04).lerp(profile.material_color(kind),.06)
 	var front := _block_mesh(block,spec,stone,profile,kind)
 	_contact_seam(socket,spec,rock,profile,id,_grip_footing(socket,spec,rock,profile,id))
 	_paint_band(block,spec,front,id)
@@ -369,7 +370,9 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 	var height := maxf(.01,top-low)
 	var random := layout.rng(spec.seed_value,941)
 	var weather: Dictionary = profile.weathering_rules
-	var top_color := stone.lightened(.14)
+	# The sun and the form light already brighten the top face a lot; its
+	# own tone stays a little under the stone so it reads as a lit cap.
+	var top_color := stone.darkened(.05)
 	if float(weather["snow"])>.5: top_color = Color("eef3f6")
 	elif float(weather["dust"])>.5: top_color = stone.lerp(profile.rock_palette["warm"],.45)
 	elif float(weather["moss"])>.5: top_color = stone.lightened(.12).lerp(profile.vegetation_set["leaf"],.08)
@@ -391,10 +394,17 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 		var own: Dictionary = stone_at.call(point.x)
 		var z := depth*lerpf(1.0,.94,clampf((top-point.y)/height,0,1))+float(own["offset"])
 		return z+float(own["turn"])*(point.x-float(own["x"]))+float(own["pitch"])*(point.y-middle_y)
+	# The front face domes like the boulders of the face: it falls back
+	# towards its rim, most at the flanks, so its facets turn to all sides.
+	var face_mid := Vector2(bounds.get_center().x,(top+low)*.5+height*.08)
+	var face_half := bounds.size*.5
+	var crown := func(point: Vector2) -> float:
+		var d := (point-face_mid)/face_half
+		return depth*.30*clampf(d.x*d.x*1.1+d.y*d.y*.4,0,1.2)
 	var groove := func(x: float) -> float:
 		var dip := 0.0
 		for crack in spec.cracks: dip = maxf(dip,clampf(1.0-absf(x-float(crack))/.16,0,1))
-		return dip*.12
+		return dip*.07
 	var back: Array = []
 	for point in spec.ring(spec.rear_scale*.94,.04): back.append(Vector3(point.x,point.y,-spec.back_embed))
 	var wall: Array = []
@@ -402,13 +412,13 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 	var silhouette: Array = []
 	for point in spec.outline:
 		var t := clampf((top-point.y)/height,0,1)
-		silhouette.append(Vector3(point.x,point.y,depth*lerpf(.3,.48,sin(t*PI))*random.randf_range(.92,1.08)))
+		silhouette.append(Vector3(point.x,point.y,depth*lerpf(.42,.5,sin(t*PI))*random.randf_range(.92,1.08)))
 	var rim: Array = []
 	for point in spec.front:
 		# The lower rim stands nearly as far out as the face: the foot of the
 		# face looks forward, not down into shade.
 		var t := clampf((top-point.y)/height,0,1)
-		rim.append(Vector3(point.x,point.y,float(plane_z.call(point))+random.randf_range(-.07,.03)*(1.0-t*.6)-float(groove.call(point.x))))
+		rim.append(Vector3(point.x,point.y,float(plane_z.call(point))-float(crown.call(point))+random.randf_range(-.07,.03)*(1.0-t*.6)-float(groove.call(point.x))))
 	# Front face: the rim, a few raised points and the crack grooves,
 	# triangulated together so the face breaks into large planes.
 	var face_points := PackedVector2Array(spec.front)
@@ -422,14 +432,14 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 			at = front_box.get_center().lerp(at,.8)
 			if not Geometry2D.is_point_in_polygon(at,spec.front): continue
 			face_points.append(at)
-			face_z.append(float(plane_z.call(at))+spec.bulge*random.randf_range(.3,.8)-float(groove.call(at.x))*.6)
+			face_z.append(float(plane_z.call(at))-float(crown.call(at))+spec.bulge*random.randf_range(.3,.8)-float(groove.call(at.x))*.6)
 			break
 	for crack in spec.cracks:
 		for step in range(1,4):
 			var at := Vector2(float(crack)+random.randf_range(-.05,.05),lerpf(front_box.end.y,front_box.position.y,step/4.0))
 			if not Geometry2D.is_point_in_polygon(at,spec.front): continue
 			face_points.append(at)
-			face_z.append(float(plane_z.call(at))-.08)
+			face_z.append(float(plane_z.call(at))-float(crown.call(at))-.06)
 	var points := PackedVector3Array()
 	var colors := PackedColorArray()
 	var cap_points := PackedVector3Array()
@@ -441,8 +451,11 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 	var shade_of := func(a: Vector3, b: Vector3, c: Vector3, salt: int) -> Color:
 		var normal := (c-a).cross(b-a).normalized()
 		if normal.z<0: normal = -normal
-		# The top face is the lightest plane, the front a step under it.
+		# The top face is the lightest plane in the light, the front a step
+		# under it; faces turned up and to the left get the most sun and form
+		# light, so their own tone is held back to keep them stone, not chalk.
 		var tone := stone.darkened(.07).lerp(top_color,clampf((normal.y-.25)/.35,0,1))
+		tone = tone.darkened(clampf(normal.y-.2,0,.8)*.18+clampf(-normal.x-.3,0,.6)*.10)
 		tone = tone.darkened(clampf(-normal.y-.2,0,.8)*.22)
 		tone = tone.darkened(clampf(normal.x*.6-normal.y*.3,0,.6)*.16)
 		var jitter := (facet_hash(salt,spec.seed_value,7.7)-.5)*.09

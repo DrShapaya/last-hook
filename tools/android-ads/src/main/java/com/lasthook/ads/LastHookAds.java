@@ -9,6 +9,8 @@ import com.yandex.mobile.ads.banner.*;
 import com.yandex.mobile.ads.common.*;
 import com.yandex.mobile.ads.interstitial.*;
 import com.yandex.mobile.ads.rewarded.*;
+import io.appmetrica.analytics.AppMetrica;
+import io.appmetrica.analytics.AppMetricaConfig;
 import org.godotengine.godot.Godot;
 import org.godotengine.godot.plugin.GodotPlugin;
 import org.godotengine.godot.plugin.SignalInfo;
@@ -19,6 +21,8 @@ import java.util.Set;
 /** All SDK work runs on Android's UI thread. Godot receives queued signals. */
 public final class LastHookAds extends GodotPlugin {
     private boolean ready, initializing, destroyed, fullscreen, bannerWanted;
+    private String appMetricaApiKey = "";
+    private boolean appMetricaActivated;
     private BannerAdView banner;
     private FrameLayout bannerContainer;
     private RewardedAdLoader rewardedLoader;
@@ -48,12 +52,28 @@ public final class LastHookAds extends GodotPlugin {
     }
     private void failed(String kind, String message) { emitSignal("ad_failed", kind, message); }
 
+    @UsedByGodot public void setAppMetricaApiKey(String apiKey) {
+        if (apiKey != null) appMetricaApiKey = apiKey.trim();
+    }
+
+    private void activateAppMetrica() {
+        if (appMetricaActivated || appMetricaApiKey.isEmpty()) return;
+        try {
+            AppMetricaConfig config = AppMetricaConfig.newConfigBuilder(appMetricaApiKey).build();
+            AppMetrica.activate(getActivity().getApplicationContext(), config);
+            appMetricaActivated = true;
+        } catch (Throwable error) {
+            failed("appmetrica_initialize", error.toString());
+        }
+    }
+
     @UsedByGodot public void initialize() {
         ui(() -> {
             if (ready) { emitSignal("initialized"); return; }
             if (initializing) return;
             initializing = true;
             try {
+                activateAppMetrica();
                 YandexAds.initialize(getActivity(), () -> ui(() -> {
                     try {
                         ready = true;
@@ -174,7 +194,10 @@ public final class LastHookAds extends GodotPlugin {
     @UsedByGodot public void setBannerVisible(boolean visible) {
         ui(() -> {
             bannerWanted = visible;
-            if (bannerContainer != null) bannerContainer.setVisibility(visible ? View.VISIBLE : View.GONE);
+            if (bannerContainer != null) {
+                bannerContainer.setVisibility(visible ? View.VISIBLE : View.GONE);
+                if (visible) bannerContainer.bringToFront();
+            }
         });
     }
 
@@ -195,10 +218,17 @@ public final class LastHookAds extends GodotPlugin {
                     ViewGroup.LayoutParams.MATCH_PARENT, size.getHeightInPixels(activity));
             params.gravity = Gravity.BOTTOM;
             parent.addView(bannerContainer, params);
+            // Godot's render surface can be a SurfaceView/TextureView. Keep the
+            // banner in the decor overlay and explicitly raise it after every
+            // load so it cannot end up behind the game surface.
+            bannerContainer.setElevation(1000f);
+            bannerContainer.setTranslationZ(1000f);
+            bannerContainer.setClipChildren(false);
             FrameLayout.LayoutParams childParams = new FrameLayout.LayoutParams(
                     size.getWidthInPixels(activity), size.getHeightInPixels(activity), Gravity.CENTER);
             bannerContainer.addView(banner, childParams);
             bannerContainer.setVisibility(bannerWanted ? View.VISIBLE : View.GONE);
+            if (bannerWanted) bannerContainer.bringToFront();
             emitSignal("banner_height_changed", size.getHeightInPixels(activity));
             banner.setBannerAdEventListener(new BannerAdEventListener() {
                 @Override public void onAdLoaded() {}

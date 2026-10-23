@@ -27,6 +27,8 @@ var contract_label: Label
 var item_buttons: Array[ItemButton] = []
 var beacon_marks: BeaconMarks
 var swap_panel: Panel
+var boosts_panel: Panel
+var lobby_view: LobbyView
 var shown_height := 0.0
 var shown_bag_total := 0.0
 var flying_value := 0
@@ -38,7 +40,7 @@ var last_zone := -1
 var slowmo_indicator: SlowmoIndicator
 var slowmo_vignette: SlowmoVignette
 var seen_focus_serial := 0
-var bag_panel: HBoxContainer
+var bag_panel: VBoxContainer
 var pause_button: Button
 var aim_overlay: AimOverlay
 var base_theme: Theme
@@ -341,9 +343,6 @@ func setup(controller) -> void:
 
 func fit_viewport() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
-	if layout_mode=="menu":
-		var banner_pixels: int = game.ads.menu_banner_height()
-		viewport_size.y -= banner_pixels*viewport_size.y/maxf(1,DisplayServer.window_get_size().y)
 	wide = viewport_size.x/viewport_size.y>=1.2
 	var design := Vector2(1080,660) if wide else Vector2(540,960)
 	var factor := minf(viewport_size.x/design.x,viewport_size.y/design.y)
@@ -357,13 +356,14 @@ func fit_viewport() -> void:
 	backdrop.visible = layout_mode!="play"
 	backdrop.veil = layout_mode in ["pause","revive"]
 	backdrop.queue_redraw()
+	if layout_mode=="menu" and is_instance_valid(lobby_view):
+		lobby_view.update_layout()
 	place_toast()
 
 func _resize() -> void:
 	if game.state=="play": game._reset_input()
 	fit_viewport()
-	if layout_mode=="menu": show_menu()
-	elif layout_mode=="play": show_play()
+	if layout_mode=="play": show_play()
 	elif layout_mode=="pause": show_pause()
 	elif layout_mode=="revive": show_revive(revive_reason)
 	elif layout_mode=="result": show_result(result_data)
@@ -538,6 +538,7 @@ func clear() -> void:
 	bag_tray = null
 	bag_total_label = null
 	bag_full_chip = null
+	boosts_panel = null
 	slowmo_indicator = null
 	wallet_plate = null
 	wallet_label = null
@@ -545,16 +546,23 @@ func clear() -> void:
 	item_buttons.clear()
 	beacon_marks = null
 	swap_panel = null
+	lobby_view = null
 	aim_overlay.active = false
 	aim_overlay.control_active = false
 	aim_overlay.queue_redraw()
 
 func show_menu() -> void:
+	if layout_mode=="menu" and is_instance_valid(lobby_view):
+		game.ads.set_main_menu(true)
+		fit_viewport()
+		lobby_view.refresh_screen()
+		return
 	clear()
 	layout_mode = "menu"
 	game.ads.set_main_menu(true)
 	fit_viewport()
 	var lobby := LobbyView.new()
+	lobby_view = lobby
 	content.add_child(lobby)
 	lobby.setup(self)
 
@@ -674,19 +682,36 @@ func show_play() -> void:
 	beacon_marks.size = root.size
 	beacon_marks.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(beacon_marks)
+	boosts_panel = Panel.new()
+	boosts_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	boosts_panel.add_theme_stylebox_override("panel",slab_style(Color("18252ed9"),MenuSurface.SLATE_LIP,3,10))
+	boosts_panel.position = Vector2(root.size.x-112,clampf(root.size.y*.38,210,360))
+	boosts_panel.size = Vector2(92,42+game.run_items.size()*66)
+	content.add_child(boosts_panel)
+	var boosts_title := label(boosts_panel,"УСИЛЕНИЯ",11,MUTED)
+	boosts_title.add_theme_font_override("font",strong_font)
+	boosts_title.position = Vector2(8,5)
+	boosts_title.size = Vector2(76,18)
+	var boosts_column := VBoxContainer.new()
+	boosts_column.position = Vector2(8,28)
+	boosts_column.size = Vector2(76,maxf(0,boosts_panel.size.y-32))
+	boosts_column.add_theme_constant_override("separation",8)
+	boosts_column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	boosts_panel.add_child(boosts_column)
 	for index in range(game.run_items.size()):
 		var entry: Dictionary = game.run_items[index]
 		var definition := ItemCatalog.consumable(str(entry["id"]))
 		var item_button := ItemButton.new()
 		item_button.index = index
-		item_button.title = str(definition.get("short",definition["name"])).get_slice(" ",0)
+		var short_names := {"beacon":"Маяк", "booster":"Бустер", "glide":"Падение", "tape":"Лента"}
+		item_button.title = str(short_names.get(str(entry["id"]),str(definition.get("short",definition["name"])).get_slice(" ",0)))
 		item_button.passive = entry["id"]=="tape"
 		item_button.text_font = strong_font
 		item_button.on_press = game.activate_item
-		item_button.size = Vector2(64,58)
-		item_button.position = Vector2(root.size.x-20-64,root.size.y-84-14-(index+1)*64)
+		item_button.custom_minimum_size = Vector2(76,58)
+		item_button.size = Vector2(76,58)
 		item_button.tooltip_text = str(definition["name"])+" · "+str(definition.get("hint",""))
-		content.add_child(item_button)
+		boosts_column.add_child(item_button)
 		item_buttons.append(item_button)
 	bag_tray = Panel.new()
 	bag_tray.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -704,7 +729,7 @@ func show_play() -> void:
 	bag_full_chip = chip(content,MenuSurface.SLATE)
 	label(bag_full_chip,"Рюкзак полон: удержи находку, чтобы выбросить",13,CORAL).add_theme_font_override("font",strong_font)
 	bag_full_chip.visible = false
-	bag_panel = HBoxContainer.new()
+	bag_panel = VBoxContainer.new()
 	bag_panel.add_theme_constant_override("separation",8)
 	bag_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(bag_panel)
@@ -739,18 +764,19 @@ func refresh_bag() -> void:
 			cell.custom_minimum_size = Vector2(54,54)
 			cell.value_font = heading_font
 			bag_panel.add_child(cell)
-	var width: float = capacity*54+(capacity-1)*8
-	var tray_width := width+16+92
-	var tray_at := Vector2((root.size.x-tray_width)*.5,root.size.y-84)
+	var height: float = capacity*54+(capacity-1)*8
+	var tray_width := 70.0
+	var tray_height := height+52
+	var tray_at := Vector2(18,clampf((root.size.y-tray_height)*.5,132,root.size.y-tray_height-18))
 	bag_tray.position = tray_at
-	bag_tray.size = Vector2(tray_width,70)
-	bag_tray.get_node("Coin").position = Vector2(width+24,15)
-	bag_total_label.position = Vector2(width+22,36)
-	bag_total_label.size = Vector2(84,24)
+	bag_tray.size = Vector2(tray_width,tray_height)
+	bag_tray.get_node("Coin").position = Vector2(12,height+14)
+	bag_total_label.position = Vector2(32,height+12)
+	bag_total_label.size = Vector2(34,24)
 	bag_panel.position = tray_at+Vector2(8,8)
-	bag_panel.size = Vector2(width,54)
+	bag_panel.size = Vector2(54,height)
 	bag_full_chip.reset_size()
-	bag_full_chip.position = Vector2((root.size.x-bag_full_chip.size.x)*.5,tray_at.y-bag_full_chip.size.y-48)
+	bag_full_chip.position = Vector2(tray_at.x+tray_width+10,tray_at.y)
 	# Cells are updated in place so their animations survive a pickup.
 	for index in range(capacity):
 		var cell: BagSlot = bag_panel.get_child(index)
@@ -775,26 +801,10 @@ func animate_coin(value: int, world_position: Vector2) -> void:
 	content.add_child(rise)
 	pulse(wallet_plate,.06)
 
-# Full bag, a find worth a decision: take it instead of the cheapest item, or
-# leave it. Nothing is replaced automatically.
+# Kept as a compatibility entry point for older callers. Full-bag finds are
+# resolved automatically by the run controller before this can be shown.
 func show_swap(item: Dictionary, cheapest: Dictionary) -> void:
 	hide_swap()
-	if layout_mode!="play": return
-	swap_panel = Panel.new()
-	swap_panel.add_theme_stylebox_override("panel",slab_style(MenuSurface.SLATE,MenuSurface.SLATE_LIP,4,10))
-	swap_panel.size = Vector2(minf(420,root.size.x-40),104)
-	swap_panel.position = Vector2((root.size.x-swap_panel.size.x)*.5,root.size.y-84-swap_panel.size.y-56)
-	content.add_child(swap_panel)
-	var text := label(swap_panel,"Взять «%s» (%d) вместо «%s» (%d)?" % [ItemCatalog.name_of(item),int(item["value"]),ItemCatalog.name_of(cheapest),int(cheapest["value"])],14,WHITE)
-	text.position = Vector2(14,8)
-	text.size = Vector2(swap_panel.size.x-28,40)
-	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	var take := button(swap_panel,"Взять",game.accept_swap,true)
-	take.position = Vector2(14,54)
-	take.size = Vector2((swap_panel.size.x-38)*.5,40)
-	var leave := button(swap_panel,"Оставить",game.close_swap)
-	leave.position = Vector2(24+(swap_panel.size.x-38)*.5,54)
-	leave.size = Vector2((swap_panel.size.x-38)*.5,40)
 
 func hide_swap() -> void:
 	if is_instance_valid(swap_panel): swap_panel.queue_free()
@@ -938,7 +948,7 @@ func update_play() -> void:
 	aim_overlay.walk_progress = float(game.touch_controls.get("walk_progress",0))
 	aim_overlay.origin = game.camera.unproject_position(Vector3(game.sim.pos.x,game.sim.pos.y,0))
 	var point: Vector2 = game.sim.pos+game.aim_direction*game.model.shot_range()
-	aim_label.text = "Крюки: "+GameModel.HOOK_NAMES[game.model.hook_config()-1]
+	aim_label.text = ""
 	# Rope length now lives in the side gauge; the chip only says what the
 	# current grip will do.
 	var reel := 0
@@ -1004,7 +1014,7 @@ func update_play() -> void:
 		aim_overlay.branches.clear()
 		if game.pressed and game.touch_gesture and not game.sim.attached:
 			aim_label.text = "Потяни от места касания — выбери направление"
-	if game.bolt_active: aim_label.text = GameModel.HOOK_NAMES[game.model.hook_config()-1]+" · в полёте"
+	if game.bolt_active: aim_label.text = "Крюк в полёте"
 	elif game.bolt_returning: aim_label.text = "Крюк возвращается · можно бросать снова"
 	aim_overlay.target = game.camera.unproject_position(Vector3(point.x,point.y,0))
 	aim_overlay.queue_redraw()
@@ -1024,7 +1034,7 @@ func update_play() -> void:
 	var total := float(game.model.bag_value()-flying_value)
 	shown_bag_total = move_toward(shown_bag_total,total,maxf(40,absf(total-shown_bag_total)*6)*delta)
 	bag_total_label.text = str(int(round(shown_bag_total)))
-	show_chip(bag_full_chip,game.model.bag.size()>=game.model.bag_capacity() and not is_instance_valid(swap_panel))
+	bag_full_chip.visible = false
 	var gold := float(game.model.profile["gold"])
 	shown_wallet = move_toward(shown_wallet,gold,maxf(30,absf(gold-shown_wallet)*5)*delta)
 	wallet_label.text = str(int(round(shown_wallet)))
@@ -1057,7 +1067,7 @@ func tutorial_hint() -> String:
 	if "aim" not in learned:
 		return "Коснись где удобно, потяни как стик и отпусти" if mobile else "Зажми ЛКМ, прицелься в выступ и отпусти"
 	if not game.sim.attached:
-		return ("Новое касание → направление стиком → отпустить" if mobile else "В полёте прицелься и поймай следующую опору") if game.catches<2 else ""
+		return ("Потяни от места касания и отпусти" if mobile else "В полёте прицелься и поймай следующую опору") if game.catches<2 else ""
 	if "swing" not in learned:
 		return "Удерживай палец и веди влево/вправо: раскачайся" if mobile else "A / D: раскачайся в такт движению"
 	if "rope" not in learned:

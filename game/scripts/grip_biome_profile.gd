@@ -36,7 +36,7 @@ var rock_material: Dictionary = {}
 const DATA := {
 	"forest":{
 		"paint_colors":[Color("e9a332"),Color("57b84a"),Color("e8652a"),Color("5cc0ea"),Color("9a5ae0")],
-		"rock_material":{"base_color":Color("6f6e66"),"facet_palette":[Color("75746a"),Color("6a6a63"),Color("7a776b")],"roughness":.94,"normal_strength":.45,"strata_scale":.6,"cavity_strength":.32,"top_light_tint":Color("e6dfc4"),"underside_tint":Color("4f5d68"),"weathering_mask":{"moss":.6,"snow":0.0,"dust":0.0},"decor_palette":[Color("6fae3a"),Color("3f3527")]},
+		"rock_material":{"base_color":Color("767571"),"facet_palette":[Color("7d7c77"),Color("6f6e6a"),Color("807e77")],"roughness":.94,"normal_strength":.45,"strata_scale":.6,"cavity_strength":.32,"top_light_tint":Color("e4e1d6"),"underside_tint":Color("4f5d68"),"weathering_mask":{"moss":.6,"snow":0.0,"dust":0.0},"decor_palette":[Color("6fae3a"),Color("3f3527")]},
 		"title":"Лес и обычная гора",
 		"rock_palette":{"base":Color("6d6d63"),"warm":Color("e4dcc4"),"cool":Color("5d6a70")},
 		"surface_material":[["известняк",Color("cfc7af"),.0],["живой корень",Color("7a5636"),.05],["гибкая ветка",Color("8a6a44"),.05],["мокрая плита",Color("6f8d96"),.75],["кварц",Color("5f8fe0"),.8]],
@@ -115,7 +115,7 @@ const DATA := {
 # weather and hardware. Grip mechanics stay identical.
 const DERIVED := {
 	"ridge":["forest",{"title":"Ветровой хребет",
-		"rock_material":{"base_color":Color("7a7a70"),"facet_palette":[Color("82827a"),Color("727269"),Color("88857a")],"roughness":.92,"normal_strength":.5,"strata_scale":.9,"cavity_strength":.28,"top_light_tint":Color("eef0dc"),"underside_tint":Color("56636e"),"weathering_mask":{"moss":.3,"snow":0.0,"dust":.1},"decor_palette":[Color("8ab45a"),Color("4a4232")]},
+		"rock_material":{"base_color":Color("7a7975"),"facet_palette":[Color("82817c"),Color("73726e"),Color("85837b")],"roughness":.92,"normal_strength":.5,"strata_scale":.9,"cavity_strength":.30,"top_light_tint":Color("ebe9e0"),"underside_tint":Color("56636e"),"weathering_mask":{"moss":.3,"snow":0.0,"dust":.1},"decor_palette":[Color("8ab45a"),Color("4a4232")]},
 		"rock_palette":{"base":Color("777870"),"warm":Color("e8e2c8"),"cool":Color("5f6c74")},
 		"vegetation_set":{"grass":true,"moss":.3,"leaf":Color("8ab45a"),"tip":Color("c4d97a"),"root":Color("6a8f3a"),"soil":Color("4a4232"),"dry":false,"sparse":true},
 		"weathering_rules":{"moss":.3,"snow":0.0,"dust":.1,"strata":.5,"cracks":.6},

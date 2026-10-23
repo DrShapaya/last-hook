@@ -107,6 +107,11 @@ var capture_left := false
 var capture_grip := 12
 var capture_seed := 58273
 var capture_quality := ""
+var loot_price_refresh_timer := 0.0
+var last_loot_price_hero := Vector2.INF
+var last_loot_price_aim := Vector2.INF
+var last_loot_price_playing := false
+var last_loot_price_always := false
 var audio: AudioStreamPlayer
 var preview := false
 var run_seconds := 0.0
@@ -172,7 +177,7 @@ func _ready() -> void:
 	hud = GameHud.new()
 	add_child(hud)
 	hud.setup(self)
-	_create_world(58273,0,36)
+	_create_world(58273,0,36,0,true)
 	sim.pos = Vector2(-.7,8.9)
 	sim.anchor = world.anchor_by_id(world.main_route[2])["pos"]
 	sim.attached = true
@@ -448,7 +453,11 @@ func _apply_graphics_quality(quality: String, save: bool = true) -> void:
 		# again by the next menu change or when the scene is ready.
 		if model!=null: model.profile["graphics_quality"] = selected
 		return
-	Engine.max_fps = 30 if selected=="battery" else 60
+	# Economy changes the render workload, never the responsiveness target. An
+	# uncapped engine follows the display's refresh rate (including 90/120 Hz)
+	# while VSync prevents an unnecessary uncapped busy loop.
+	Engine.max_fps = 0 if selected=="battery" else 60
+	if selected=="battery": DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 	_apply_shadow_preset(selected)
 	if is_instance_valid(world): world.set_visual_quality(selected)
 	if is_instance_valid(explorer): explorer.set_visual_quality(selected)
@@ -460,22 +469,24 @@ func set_graphics_quality(quality: String) -> void:
 	_apply_graphics_quality(quality)
 	if is_instance_valid(hud): hud.show_menu()
 
-func _create_world(seed_number: int, location_number: int, height: float, saved_version: int = 0) -> void:
+func _create_world(seed_number: int, location_number: int, height: float, saved_version: int = 0, menu_preview: bool = false) -> void:
 	if is_instance_valid(world):
 		world.queue_free()
 	if is_instance_valid(explorer):
 		explorer.queue_free()
 	world = MountainWorld.new()
+	world.visuals_enabled = not menu_preview
 	add_child(world)
 	world.setup(seed_number,location_number,saved_version,run_mode=="practice")
 	world.set_visual_quality(str(model.profile.get("graphics_quality","balanced")))
 	scene_environment.background_color = Color("88bfd9") if location_number==0 else Color("142438")
 	world.generate_to(height,run_mode in ["summit","practice"],summit_height)
-	explorer = ExplorerView.new()
-	add_child(explorer)
-	explorer.setup(world,model.hook_tips())
-	explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
-	explorer.set_walk_speed(WALK_SPEED)
+	if not menu_preview:
+		explorer = ExplorerView.new()
+		add_child(explorer)
+		explorer.setup(world,model.hook_tips())
+		explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
+		explorer.set_walk_speed(WALK_SPEED)
 
 func start_run(endless: bool) -> void:
 	if ads.fullscreen: return
@@ -536,6 +547,8 @@ func start_run(endless: bool) -> void:
 	zone_diamonds = 0
 	_reset_input()
 	hud.show_play()
+	if is_instance_valid(world): world.visible = true
+	if is_instance_valid(explorer): explorer.visible = true
 	if "aim" not in model.profile["learned_controls"]:
 		toast("Коснись где удобно, потяни как стик и отпусти" if hud.touch_controls_hint else "Прицелься мышью и отпусти ЛКМ",4,"controls")
 	save_snapshot()
@@ -645,6 +658,9 @@ func resume_run() -> void:
 				safe_anchor_id = id
 				safe_contact = candidate["pos"]
 				safe_position = safe_contact+Vector2(0,-2.8)
+	# Rebuild the beacon preview after loading a run so an active effect keeps
+	# showing the same reachable exits as it did before the save.
+	if item_effect_id()=="beacon": beacon_targets = reachable_exits()
 	bolt_active = bool(snapshot.get("bolt_active",false))
 	bolt_pos = Vector2(snapshot.get("bolt_x",0),snapshot.get("bolt_y",0))
 	bolt_origin = Vector2(snapshot.get("bolt_ox",0),snapshot.get("bolt_oy",0))
@@ -1434,7 +1450,10 @@ func _collect_finds() -> void:
 				find["picked"] = true
 			continue
 		if not model.can_fit(item):
-			if model.worth_prompt(item) and swap_offer.is_empty() and not swap_declined.has(int(item["id"])): _offer_swap(find)
+			# A full bag is silent: replace the cheapest eligible treasure only
+			# when the incoming find is strictly more valuable.
+			if _auto_swap_if_better(find):
+				save_snapshot()
 			continue
 		if model.try_pick(item):
 			_hide_find(find)
@@ -1451,13 +1470,23 @@ func _hide_find(find: Dictionary) -> void:
 	find["picked"] = true
 	if is_instance_valid(find.get("visual")): find["visual"].visible = false
 
-# Full bag and a find worth a decision: compare it with the cheapest item.
-# Nothing is replaced unless the player takes it.
+# Full bag handling is automatic. The cheapest eligible slot is replaced only
+# when the incoming treasure is strictly more valuable.
+func _auto_swap_if_better(find: Dictionary) -> bool:
+	var item: Dictionary = find["item"]
+	var index := model.cheapest_index(item)
+	if index<0 or int(item.get("value",0))<=int(model.bag[index].get("value",0)):
+		return false
+	if not model.swap_in(item,index):
+		return false
+	_hide_find(find)
+	_sound(1000,.08)
+	hud.refresh_bag()
+	hud.animate_pickup(model.bag[-1],find["pos"])
+	return true
+
 func _offer_swap(find: Dictionary) -> void:
-	var index := model.cheapest_index(find["item"])
-	if index<0: return
-	swap_offer = {"find":find,"index":index}
-	hud.show_swap(find["item"],model.bag[index])
+	_auto_swap_if_better(find)
 
 func _swap_in_reach() -> bool:
 	if swap_offer.is_empty(): return false
@@ -1806,6 +1835,8 @@ func show_menu() -> void:
 		camera_y = 7
 	camera_dip = 0.0
 	hud.show_menu()
+	if is_instance_valid(world): world.visible = false
+	if is_instance_valid(explorer): explorer.visible = false
 
 func go_back() -> void:
 	if ads.fullscreen: return
@@ -1836,13 +1867,18 @@ func cycle_location(direction: int) -> bool:
 		return false
 	hud.menu_slide = direction
 	lobby_location = next
-	_create_world(58273,lobby_location,36)
+	_create_world(58273,lobby_location,36,0,true)
 	if model.profile["locations"].has(lobby_location):
 		selected_location = lobby_location
 		model.profile["selected_location"] = selected_location
 		if not preview:
 			model.save()
-	hud.show_menu()
+	if hud.layout_mode=="menu" and is_instance_valid(hud.lobby_view) and hud.lobby_view.refresh_location_card(direction):
+		hud.menu_slide = 0
+	else:
+		hud.show_menu()
+	if is_instance_valid(world): world.visible = false
+	if is_instance_valid(explorer): explorer.visible = false
 	return true
 
 func lobby_action() -> void:
@@ -1962,12 +1998,25 @@ func _process(delta: float) -> void:
 			save_snapshot()
 	_move_camera(delta)
 	_refresh_aim()
-	world.update_visibility(camera_y,camera_x)
+	world.update_visibility(camera_y,camera_x,1)
 	if is_instance_valid(world.sky_backdrop): world.sky_backdrop.advance(animation_time,delta)
 	# Prices show near the hero and along the aim, unless the player asked
 	# for them always. Only the labels change; pickup rules are untouched.
 	var aim_at := aim_point if pressed and not sim.attached and not bolt_active else Vector2.INF
-	world.update_loot_prices(state=="play",str(model.profile.get("loot_prices","near"))=="always",sim.pos,aim_at)
+	var prices_playing := state=="play"
+	var prices_always := str(model.profile.get("loot_prices","near"))=="always"
+	loot_price_refresh_timer -= delta
+	var price_input_changed := (prices_playing!=last_loot_price_playing
+		or prices_always!=last_loot_price_always
+		or sim.pos.distance_squared_to(last_loot_price_hero)>.16
+		or aim_at.distance_squared_to(last_loot_price_aim)>.16)
+	if loot_price_refresh_timer<=0.0 or price_input_changed:
+		world.update_loot_prices(prices_playing,prices_always,sim.pos,aim_at)
+		loot_price_refresh_timer = .08
+		last_loot_price_hero = sim.pos
+		last_loot_price_aim = aim_at
+		last_loot_price_playing = prices_playing
+		last_loot_price_always = prices_always
 	var target := sim.anchor if sim.attached else bolt_pos
 	var held_grip := world.anchor_by_id(anchor_id) if sim.attached and anchor_id>=0 else {}
 	var fragile := not held_grip.is_empty() and GripSpec.timed(held_grip)
@@ -1985,8 +2034,9 @@ func _process(delta: float) -> void:
 			volley_visual.append({"state":shot["state"],"position":volley_flight.position,"velocity":volley_flight.velocity,
 				"age":volley_flight.age,"trail":volley_flight.trail,"returning":shot["state"]=="returning"})
 		shot_visual["volley"] = volley_visual
-	explorer.draw(sim,target,sim.attached or bolt_active or bolt_returning,bolt_active or bolt_returning,animation_time,warning,model.hook_tips(),shot_visual)
-	hud.update_play()
+	if is_instance_valid(explorer):
+		explorer.draw(sim,target,sim.attached or bolt_active or bolt_returning,bolt_active or bolt_returning,animation_time,warning,model.hook_tips(),shot_visual)
+		hud.update_play()
 	if not capture_path.is_empty() and elapsed>1.1 and not capture_queued:
 		capture_queued = true
 		_capture_frame()

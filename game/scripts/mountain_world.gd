@@ -33,6 +33,12 @@ var hazards: ActHazards
 var hazard_visuals: HazardVisuals
 var show_loot_prices := true
 var visual_quality := "balanced"
+const MAX_CHUNK_BUILDS_PER_UPDATE := 1
+const MAX_FAR_BAND_BUILDS_PER_UPDATE := 1
+const STREAM_MOVE_THRESHOLD := .28
+var stream_center := Vector2.INF
+var stream_pending := true
+var stream_dirty := true
 
 # Every location slot starts new attempts on the expedition generator (v15:
 # v14 geometry with role-based finds, coins and contracts). Saved attempts keep
@@ -89,6 +95,8 @@ func set_visual_quality(quality: String) -> void:
 	# Decor density, loot glints and shadow casters are baked per chunk.
 	if changed and visuals_enabled and not chunks.is_empty():
 		for key in chunks.keys(): _release_chunk(key)
+		stream_pending = true
+		stream_dirty = true
 		update_visibility(camera_center.y,camera_center.x)
 
 func seeded_rng(index: int, stream: int) -> RandomNumberGenerator:
@@ -105,6 +113,8 @@ func generate_to(height: float, finite: bool, summit: float = 120) -> void:
 	layout.generate_to(target,finite,summit)
 	route_edges = layout.edges
 	generated_height = maxf(generated_height,target)
+	stream_pending = true
+	stream_dirty = true
 	# The top chunk changes when the summit is added; refresh it if loaded.
 	if layout.summit_added:
 		var key := int(floor(summit/24))
@@ -573,11 +583,20 @@ func _release_chunk(key: int) -> void:
 	chunk.queue_free()
 	chunks.erase(key)
 
-func update_visibility(center_y: float, center_x: float = 0) -> void:
+func update_visibility(center_y: float, center_x: float = 0, build_budget: int = -1) -> void:
 	camera_center = Vector2(center_x,center_y)
 	if is_instance_valid(sky_backdrop): sky_backdrop.set_view(camera_center)
 	if not visuals_enabled: return
-	_update_far_layers()
+	var moved := stream_center==Vector2.INF or stream_center.distance_to(camera_center)>=STREAM_MOVE_THRESHOLD
+	if not moved and not stream_pending and not stream_dirty:
+		# Keep parallax transforms smooth even while mesh streaming is idle.
+		_update_far_layers(build_budget<0)
+		_update_dynamic_visibility(center_y)
+		return
+	var stream_was_dirty := stream_dirty
+	stream_center = camera_center
+	stream_dirty = false
+	var far_pending := _update_far_layers(build_budget<0)
 	var first := maxi(0,int(floor((center_y-32)/24)))
 	var ready_chunk := int(floor((layout.main_point(layout.row).y-2)/24))-1
 	# The massif of a chunk reads the objects of its neighbours, so a chunk is
@@ -589,35 +608,64 @@ func update_visibility(center_y: float, center_x: float = 0) -> void:
 	var last := mini(ready_chunk,int(floor((center_y+32)/24)))
 	for key in chunks.keys():
 		if key<first or key>last: _release_chunk(key)
+	var missing_keys: Array[int] = []
 	for key in range(first,last+1):
-		if chunks.has(key): continue
-		var chunk := Node3D.new()
-		chunk.name = "Участок_%d" % key
-		add_child(chunk)
-		chunks[key] = chunk
-		visuals.build_chunk(key,chunk)
-		for object in nearby_anchors(key*24,(key+1)*24-.001):
-			if int(floor(object["pos"].y/24))==key: build_anchor(object,chunk)
-		for object in obstacles:
-			if int(floor(object["pos"].y/24))==key: visuals.build_obstacle(object,chunk)
-		for object in ledges:
-			if int(floor(object["top"]/24))==key: visuals.build_ledge(object,chunk)
-		for find in finds:
-			if int(floor(find["pos"].y/24))==key: _build_find(find,chunk)
-		if layout.summit_added and int(floor(layout.summit/24))==key:
-			var p: Vector2 = anchors[main_route[-1]]["pos"]
-			box("Флагшток",Vector3(p.x+.8,layout.summit+1,2),Vector3(.08,2,.1),mat("flagpole",Color("d8d8c3")),chunk)
-			box("Флаг",Vector3(p.x+1.2,layout.summit+1.7,2),Vector3(.8,.5,.1),mat("flag",Color("e6b64b")),chunk)
+		if not chunks.has(key): missing_keys.append(key)
+	# Building the closest section first keeps the current view populated while
+	# spreading the expensive mesh/decor work over later frames.
+	var effective_budget := MAX_CHUNK_BUILDS_PER_UPDATE if build_budget<0 else maxi(0,build_budget)
+	if build_budget<0: effective_budget = missing_keys.size()
+	for pass_index in range(effective_budget):
+		if missing_keys.is_empty(): break
+		var closest_index := 0
+		var closest_distance := absf(float(missing_keys[0])-center_y/24.0)
+		for index in range(1,missing_keys.size()):
+			var distance := absf(float(missing_keys[index])-center_y/24.0)
+			if distance<closest_distance:
+				closest_index = index
+				closest_distance = distance
+		var key: int = missing_keys[closest_index]
+		missing_keys.remove_at(closest_index)
+		_build_chunk(key)
+	stream_pending = not missing_keys.is_empty() or far_pending
+	_update_dynamic_visibility(center_y)
+	if hazard_visuals!=null and (moved or stream_was_dirty): hazard_visuals.build_near(center_y)
+
+func _build_chunk(key: int) -> void:
+	var chunk := Node3D.new()
+	chunk.name = "Участок_%d" % key
+	add_child(chunk)
+	chunks[key] = chunk
+	visuals.build_chunk(key,chunk)
+	_build_chunk_objects(key,chunk)
+
+func _build_chunk_objects(key: int, chunk: Node3D) -> void:
+	for object in nearby_anchors(key*24,(key+1)*24-.001):
+		if int(floor(object["pos"].y/24))==key: build_anchor(object,chunk)
+	for object in obstacles:
+		if int(floor(object["pos"].y/24))==key: visuals.build_obstacle(object,chunk)
+	for object in ledges:
+		if int(floor(object["top"]/24))==key: visuals.build_ledge(object,chunk)
+	for find in finds:
+		if int(floor(find["pos"].y/24))==key: _build_find(find,chunk)
+	if layout.summit_added and int(floor(layout.summit/24))==key:
+		var p: Vector2 = anchors[main_route[-1]]["pos"]
+		box("Флагшток",Vector3(p.x+.8,layout.summit+1,2),Vector3(.08,2,.1),mat("flagpole",Color("d8d8c3")),chunk)
+		box("Флаг",Vector3(p.x+1.2,layout.summit+1.7,2),Vector3(.8,.5,.1),mat("flag",Color("e6b64b")),chunk)
+
+func _update_dynamic_visibility(center_y: float) -> void:
 	for object in nearby_anchors(center_y-40,center_y+40):
 		if is_instance_valid(object.get("visual")): object["visual"].visible = not object["broken"]
-	if hazard_visuals!=null: hazard_visuals.build_near(center_y)
 	for find in finds:
 		if is_instance_valid(find.get("visual")): find["visual"].visible = not find.get("picked",false)
-func _update_far_layers() -> void:
+func _update_far_layers(build_all: bool = false) -> bool:
 	# Distant cliffs live in their own parallax space: each layer follows a
 	# share of the camera motion, so it drifts slower than the climbing face.
-	if not visuals is MassifVisuals: return
+	if not visuals is MassifVisuals: return false
 	var massif := visuals as MassifVisuals
+	var built_count := 0
+	var pending := false
+	var far_budget := 999999 if build_all else MAX_FAR_BAND_BUILDS_PER_UPDATE
 	for far in range(1,MassifVisuals.FAR_LAYERS.size()+1):
 		var settings: Dictionary = MassifVisuals.FAR_LAYERS[far-1]
 		if far_layers.size()<far:
@@ -640,11 +688,16 @@ func _update_far_layers() -> void:
 		for band in range(first,last+1):
 			var key := Vector2i(far,band)
 			if far_bands.has(key): continue
+			if built_count>=far_budget:
+				pending = true
+				continue
 			var node := Node3D.new()
 			node.name = "Дальние скалы_%d" % band
 			holder.add_child(node)
 			far_bands[key] = node
 			massif.build_far_band(far,band,node)
+			built_count += 1
+	return pending
 
 func anchor_by_id(id: int) -> Dictionary:
 	return anchors[id] if id>=0 and id<anchors.size() else {}

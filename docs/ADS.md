@@ -3,6 +3,10 @@
 Приложение в РСЯ: **Last Hook**, ID **20238117**.
 Идентификаторы предоставлены владельцем 18 октября 2026 года.
 
+AppMetrica подключена для приложения с API key
+`23c6243b-cc83-4d98-8955-b474f0093fd5`. Ключ передаётся в нативный Android-мост
+до инициализации SDK и хранится в `game/data/appmetrica.json`.
+
 | Место показа | Формат | ID рекламного блока |
 |---|---|---|
 | Возрождение после смерти | Реклама с вознаграждением | `R-M-20238117-1` |
@@ -16,10 +20,12 @@
 
 ## Состояние подключения
 
-Подключён **Yandex Mobile Ads 8.5.0** через собственный Godot Android v2
+Подключены **Yandex Mobile Ads 8.5.0** и **AppMetrica Android SDK 8.6.0** через собственный Godot Android v2
 плагин `LastHookAds`. Исходники Android-модуля — `tools/android-ads/`,
 собранный AAR и плагин экспорта — `game/addons/last_hook_ads/`.
 Игровой сервис — `game/scripts/ads_service.gd`.
+
+- AppMetrica активируется на Android до инициализации рекламного SDK и автоматически собирает сессии, сведения об устройстве и сбои. На Windows и в тестовом fake-backend вызов отсутствует.
 
 - Возрождение запускается кнопкой «Смотреть рекламу · возродиться».
   Сервис принимает событие SDK `onRewarded` только в ходе запрошенного
@@ -85,6 +91,7 @@ SDK и встроенные проверки интеграции трёх фо�
 продолжена, 10 алмазов остались в кошельке. Физический телефон и живые
 рекламные блоки владельца пока не проверялись.
 
-Официальная документация: [интеграция SDK](https://ads.yandex.com/helpcenter/ru/dev/android/quick-start),
+Официальная документация: [интеграция AppMetrica](https://appmetrica.yandex.com/docs/en/sdk/android/analytics/quick-start),
+[интеграция SDK рекламы](https://ads.yandex.com/helpcenter/ru/dev/android/quick-start),
 [реклама с вознаграждением](https://ads.yandex.com/helpcenter/ru/dev/android/rewarded),
 [миграция API 8](https://ads.yandex.com/helpcenter/ru/dev/android/release/8-0-0-migration).

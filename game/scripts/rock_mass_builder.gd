@@ -17,20 +17,18 @@ static func emit(surface: SurfaceTool, mass: RockMassSpec, palette: Dictionary, 
 		var face: Dictionary = mass.faces[index]
 		var face_class: String = face["class"]
 		if face_class==RockMassSpec.WALL and not walls: continue
-		var tone: Color
+		# Every visible face of a boulder is the same stone: the rim ring takes
+		# a facet tone too and only leans towards its class, so the light, not
+		# a pale frame, shows where the boulder turns away.
+		var tone: Color = facets[(index+mass.id)%facets.size()]
+		var jitter := (_hash(mass.id,index)-.5)*.13+(mass.tone-.5)*.09
+		tone = tone.lightened(jitter) if jitter>0 else tone.darkened(-jitter)
 		match face_class:
-			RockMassSpec.FACE:
-				tone = (facets[(index+mass.id)%facets.size()] as Color)
-				var jitter := (_hash(mass.id,index)-.5)*.13+(mass.tone-.5)*.09
-				tone = tone.lightened(jitter) if jitter>0 else tone.darkened(-jitter)
-			RockMassSpec.TOP: tone = palette["top"]
-			RockMassSpec.UNDERSIDE: tone = palette["under"]
+			RockMassSpec.TOP: tone = tone.lerp(palette["top"],.25)
+			RockMassSpec.UNDERSIDE: tone = tone.lerp(palette["under"],.55)
 			RockMassSpec.INNER: tone = palette["inner"]
 			RockMassSpec.WALL: tone = palette["under"]
-			_: tone = palette["side"]
-		if face_class!=RockMassSpec.FACE:
-			var jitter := (_hash(mass.id,index>>1)-.5)*.05
-			tone = tone.lightened(jitter) if jitter>0 else tone.darkened(-jitter)
+			RockMassSpec.SIDE: tone = tone.lerp(palette["side"],.35)
 		var a: Vector3 = face["a"]
 		var b: Vector3 = face["b"]
 		var c: Vector3 = face["c"]

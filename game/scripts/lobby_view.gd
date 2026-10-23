@@ -42,27 +42,51 @@ class Backdrop extends Control:
 # Horizontal swipes: over the route card they pick the neighbouring route,
 # anywhere else they switch sections. Distances are in design pixels, so the
 # feel is the same on every screen size.
-const SWIPE_DISTANCE := 72.0
+const SWIPE_DISTANCE := 64.0
 const SWIPE_FLICK_DISTANCE := 36.0
-const SWIPE_FLICK_SPEED := 600.0
-const SWIPE_MAX_SECONDS := .8
+const SWIPE_FLICK_SPEED := 500.0
+const SWIPE_MAX_SECONDS := .7
 const SWIPE_RATIO := 1.6
 # Past this sideways drift a press is a swipe attempt and can no longer
 # activate the button it started on.
-const SWIPE_SLOP := 24.0
-const SWIPE_COOLDOWN_MSEC := 180
+const SWIPE_SLOP := 16.0
+const SWIPE_PREVIEW_LIMIT := 42.0
+const SWIPE_COOLDOWN_MSEC := 80
 
 var swipe_pointer := -2
 var swipe_from := Vector2.ZERO
 var swipe_msec := 0
 var swipe_dragging := false
+var swipe_preview_offset := 0.0
+var swipe_body_origins: Array[Vector2] = []
 var card_rect := Rect2()
 var body_nodes: Array[Control] = []
+var transition_nodes: Array[Control] = []
+var scenic_frame: Panel
 var start_button: Button
 var tab_buttons: Array[Button] = []
+var navigation_bar: Control
+var banner_inset := 0.0
+var banner_tween: Tween
 
 func setup(owner_hud: GameHud) -> void:
 	prepare(owner_hud)
+	_build_screen()
+
+func _reset_build_state() -> void:
+	swipe_pointer = -2
+	swipe_dragging = false
+	swipe_preview_offset = 0.0
+	swipe_body_origins.clear()
+	body_nodes.clear()
+	transition_nodes.clear()
+	tab_buttons.clear()
+	start_button = null
+	card_rect = Rect2()
+	scenic_frame = null
+
+func _build_screen() -> void:
+	_reset_build_state()
 	build_header()
 	var first_body := get_child_count()
 	match hud.menu_tab:
@@ -73,6 +97,67 @@ func setup(owner_hud: GameHud) -> void:
 		var node := get_child(index)
 		if node is Control: body_nodes.append(node)
 	build_navigation()
+	animate_entry()
+
+func update_layout() -> void:
+	var target_landscape: bool = hud.wide
+	var target_size := Vector2(1080,660) if target_landscape else Vector2(540,960)
+	if landscape != target_landscape:
+		landscape = target_landscape
+		for child in get_children():
+			remove_child(child)
+			child.queue_free()
+		size = target_size
+		position = (hud.root.size-size)*.5
+		modulate.a = 1.0
+		_build_screen()
+	else:
+		size = target_size
+		position = (hud.root.size-size)*.5
+		update_banner_inset(game.ads.menu_banner_height()/maxf(.1,hud.root.scale.x))
+
+func update_banner_inset(pixels: float) -> void:
+	banner_inset = maxf(0.0,pixels)
+	if is_instance_valid(navigation_bar):
+		var target_y := size.y-82-banner_inset
+		if is_instance_valid(banner_tween): banner_tween.kill()
+		# Keep hit testing above the banner immediately. The banner itself is
+		# asynchronous, so delaying the layout would leave controls underneath it.
+		navigation_bar.position.y = target_y
+
+func refresh_screen() -> void:
+	# Keep the header, wallet and backdrop alive. Only the active body and the
+	# navigation selection are replaced, so values at the top never blink.
+	for node in transition_nodes:
+		if is_instance_valid(node):
+			remove_child(node)
+			node.queue_free()
+	transition_nodes.clear()
+	for node in body_nodes:
+		if is_instance_valid(node):
+			remove_child(node)
+			node.queue_free()
+	body_nodes.clear()
+	start_button = null
+	card_rect = Rect2()
+	if is_instance_valid(navigation_bar):
+		remove_child(navigation_bar)
+		navigation_bar.queue_free()
+	navigation_bar = null
+	var first_body := get_child_count()
+	match hud.menu_tab:
+		"equipment": build_equipment()
+		"settings": build_settings()
+		_: build_expedition()
+	for index in range(first_body,get_child_count()):
+		var node := get_child(index)
+		if node is Control:
+			body_nodes.append(node)
+	var direction: int = hud.menu_slide
+	hud.menu_slide = 0
+	build_navigation()
+	if direction!=0:
+		hud.menu_slide = direction
 	animate_entry()
 
 func animate_entry() -> void:
@@ -106,6 +191,25 @@ func bounce(direction: int) -> void:
 func local_point(screen: Vector2) -> Vector2:
 	return get_global_transform().affine_inverse()*screen
 
+func begin_swipe_preview() -> void:
+	swipe_body_origins.clear()
+	for node in body_nodes:
+		if is_instance_valid(node): swipe_body_origins.append(node.position)
+	swipe_preview_offset = 0.0
+
+func update_swipe_preview(offset: float) -> void:
+	swipe_preview_offset = clampf(offset,-SWIPE_PREVIEW_LIMIT,SWIPE_PREVIEW_LIMIT)
+	for index in range(mini(body_nodes.size(),swipe_body_origins.size())):
+		var node := body_nodes[index]
+		if is_instance_valid(node): node.position.x = swipe_body_origins[index].x+swipe_preview_offset
+
+func reset_swipe_preview() -> void:
+	for index in range(mini(body_nodes.size(),swipe_body_origins.size())):
+		var node := body_nodes[index]
+		if is_instance_valid(node): node.position = swipe_body_origins[index]
+	swipe_preview_offset = 0.0
+	swipe_body_origins.clear()
+
 func _input(event: InputEvent) -> void:
 	if not is_inside_tree() or hud.layout_mode!="menu" or game.state!="menu" or game.ads.fullscreen: return
 	if event is InputEventKey or event is InputEventJoypadButton:
@@ -117,7 +221,10 @@ func _input(event: InputEvent) -> void:
 	var released := false
 	if event is InputEventScreenTouch:
 		if event.canceled:
-			if event.index==swipe_pointer: swipe_pointer = -2
+			if event.index==swipe_pointer:
+				reset_swipe_preview()
+				swipe_pointer = -2
+				swipe_dragging = false
 			return
 		pointer = event.index
 		position_value = event.position
@@ -143,18 +250,25 @@ func _input(event: InputEvent) -> void:
 			swipe_from = at
 			swipe_msec = Time.get_ticks_msec()
 			swipe_dragging = false
+			begin_swipe_preview()
 		return
 	if pointer!=swipe_pointer: return
 	var travel := at-swipe_from
 	if not released:
-		if absf(travel.x)>SWIPE_SLOP and absf(travel.x)>absf(travel.y)*SWIPE_RATIO: swipe_dragging = true
+		if absf(travel.x)>SWIPE_SLOP and absf(travel.x)>absf(travel.y)*SWIPE_RATIO:
+			if not swipe_dragging: get_viewport().set_input_as_handled()
+			swipe_dragging = true
+			update_swipe_preview(travel.x*.36)
 		return
 	swipe_pointer = -2
+	var was_dragging := swipe_dragging
+	reset_swipe_preview()
+	swipe_dragging = false
 	var seconds := maxf(.001,(Time.get_ticks_msec()-swipe_msec)*.001)
 	var speed := absf(travel.x)/seconds
 	var horizontal := absf(travel.x)>absf(travel.y)*SWIPE_RATIO
 	var long_enough := absf(travel.x)>=SWIPE_DISTANCE or (absf(travel.x)>=SWIPE_FLICK_DISTANCE and speed>=SWIPE_FLICK_SPEED)
-	if swipe_dragging:
+	if was_dragging:
 		# The release belongs to the gesture, never to the button under it.
 		get_viewport().set_input_as_handled()
 	if not (horizontal and long_enough and seconds<=SWIPE_MAX_SECONDS): return
@@ -214,6 +328,8 @@ func build_navigation() -> void:
 	var width := 484.0 if not landscape else 540.0
 	var at := Vector2((size.x-width)*.5,size.y-82)
 	var bar := slab(self,at,Vector2(width,66))
+	navigation_bar = bar
+	bar.position.y -= banner_inset
 	var entries := [["expedition","Восхождение",7],["equipment","Снаряжение",2],["settings","Настройки",15]]
 	var each := (width-16)/3
 	for index in range(3):
@@ -243,10 +359,11 @@ func build_navigation() -> void:
 		create_tween().tween_property(marker,"position:x",8+current*each+12,.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	hud.menu_previous_tab = hud.menu_tab
 
-func scenic_card(at: Vector2, dimensions: Vector2) -> void:
+func scenic_card(at: Vector2, dimensions: Vector2) -> Panel:
 	var definition: Dictionary = model.balance["locations"][game.lobby_location]
 	var owned: bool = model.profile["locations"].has(game.lobby_location)
 	var frame := slab(self,at,dimensions,STONE_SHADE,STONE_LIP,5)
+	scenic_frame = frame
 	card_rect = Rect2(at,dimensions)
 	var inner := dimensions-Vector2(0,5)
 	var preview := LevelPreview.new()
@@ -300,6 +417,21 @@ func scenic_card(at: Vector2, dimensions: Vector2) -> void:
 		arrow.visible = model.profile["active"].is_empty()
 		if at_end: arrow.modulate.a = .45
 		symbol(arrow,10 if direction<0 else 11,Vector2(12,12),Vector2(24,24),INK)
+	return frame
+
+func refresh_location_card(direction: int) -> bool:
+	if hud.menu_tab!="expedition" or not is_instance_valid(scenic_frame): return false
+	var old := scenic_frame
+	var old_at := old.position
+	var old_size := old.size
+	var index := body_nodes.find(old)
+	remove_child(old)
+	old.queue_free()
+	var replacement := scenic_card(old_at,old_size)
+	if index>=0: body_nodes[index] = replacement
+	replacement.position.x += clampf(float(direction),-1,1)*24.0
+	create_tween().tween_property(replacement,"position:x",old_at.x,.22).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	return true
 
 func build_expedition() -> void:
 	var active: bool = not model.profile["active"].is_empty()
@@ -369,7 +501,7 @@ func effect_text(kind: int, at_level: int) -> String:
 	var i := clampi(at_level-1,0,model.max_level(kind)-1)
 	var balance: Dictionary = model.balance
 	match kind:
-		GameModel.ROPE: return "%d м" % roundi(float(balance["rope_lengths"][i])*10)
+		GameModel.ROPE: return "%d%% дальности" % roundi(float(balance["rope_lengths"][i])/float(balance["rope_lengths"][0])*100.0)
 		GameModel.IMPULSE: return "+%d%%" % roundi((float(balance["impulse_factors"][i])-1)*100)
 		GameModel.HOOKS: return GameModel.HOOK_NAMES[i]
 		GameModel.BAG:
@@ -381,7 +513,7 @@ func effect_text(kind: int, at_level: int) -> String:
 			return "%d / %d м" % [roundi(float(balance["magnet_coin_radii"][i])*10),roundi(float(balance["magnet_radii"][i])*10)]
 		GameModel.RECOVERY: return "%d%%" % int(balance["recovery_percents"][i])
 		GameModel.SLOWMO: return seconds_text(float(balance["slowmo_seconds"][i]))
-	return "%d м/с" % roundi(float(balance["throw_speeds"][i])*10)
+	return "%d%% скорости" % roundi(float(balance["throw_speeds"][i])/float(balance["throw_speeds"][0])*100.0)
 
 func build_upgrade(kind: int, at: Vector2, dimensions: Vector2, active: bool) -> void:
 	var frame := slab(self,at,dimensions)
@@ -440,39 +572,53 @@ func build_upgrade(kind: int, at: Vector2, dimensions: Vector2, active: bool) ->
 
 # --- Preparation: run profiles, active items, stock and progress ----------------------
 
-const SPEC_LABELS := {"rope":"Канат","impulse":"Импульс","throw":"Бросок","magnet":"Магнит"}
-
 func build_supplies(active: bool) -> void:
 	var column_width := 504.0 if landscape else 484.0
-	paragraph(self,"Профили и запас меняются между попытками." if not active else "Попытка идёт: профили и запас изменятся после неё.",Vector2(29,130),Vector2(size.x-56,20),13)
+	paragraph(self,"Выбери стиль и предметы до старта." if not active else "Попытка идёт: сбор изменится после её завершения.",Vector2(29,130),Vector2(size.x-56,20),13)
 	var left := Vector2(28,162)
 	var right := Vector2(28+column_width+16,162) if landscape else Vector2(28,left.y+304)
-	# Run profiles: hook scheme plus the specialisations of four tracks.
+	# A preparation is a readable play style. It still drives the existing
+	# rope/impulse/throw mechanics, but the player chooses one coherent intent.
 	var profiles := slab(self,left,Vector2(column_width,292))
-	text(profiles,"Профили забега",Vector2(20,12),Vector2(300,24),17,INK,"display")
-	var row_y := 44.0
+	text(profiles,"Стиль восхождения",Vector2(20,12),Vector2(300,24),17,INK,"display")
+	var row_y := 40.0
 	var owned: Array = []
 	for index in range(model.level(GameModel.HOOKS)): owned.append(GameModel.HOOK_NAMES[index].replace("2 ","2×"))
 	text(profiles,"Крюки",Vector2(20,row_y+11),Vector2(110,22),14,INK_SOFT,"strong")
 	var hooks := segmented(profiles,Vector2(120,row_y),column_width-140,owned,model.hook_config()-1,func(index: int): _choose("hook",str(index+1)),40)
+	for index in range(hooks.size()):
+		var hook_count := int(model.balance["hook_counts"][index])
+		var hook_tips := int(model.balance["hook_tips"][index])
+		var tips_word := "наконечник" if hook_tips==1 else "наконечника" if hook_tips<5 else "наконечников"
+		hooks[index].tooltip_text = "%d крюк%s · %d %s" % [hook_count,"а" if hook_count==2 else "",hook_tips,tips_word]
 	for button in hooks:
 		button.disabled = active
 		button.add_theme_font_size_override("font_size",12 if owned.size()>2 else 14)
 	row_y += 48
-	for track in ["rope","impulse","throw","magnet"]:
-		var definition: Dictionary = model.balance["specializations"][track]
-		text(profiles,SPEC_LABELS[track],Vector2(20,row_y+11),Vector2(110,22),14,INK_SOFT,"strong")
-		if not model.spec_unlocked(track):
-			text(profiles,"Откроется на ур. %d «%s»" % [int(definition["unlock_level"]),UPGRADE_SHORT[int(definition["track"])]],Vector2(120,row_y+11),Vector2(column_width-140,22),13,INK_FAINT)
-		else:
-			var keys: Array = definition["options"].keys()
-			var names: Array = []
-			for key in keys: names.append(str(definition["options"][key]["name"]))
-			var buttons := segmented(profiles,Vector2(120,row_y),column_width-140,names,keys.find(model.choice(track)),func(index: int): _choose(track,str(keys[index])),40)
-			for index in range(buttons.size()):
-				buttons[index].disabled = active
-				buttons[index].tooltip_text = str(definition["options"][keys[index]].get("hint",""))
-		row_y += 48
+	text(profiles,"Профиль",Vector2(20,row_y+11),Vector2(110,22),14,INK_SOFT,"strong")
+	var prep_keys := model.prep_profile_keys()
+	var prep_names: Array[String] = []
+	for profile_id in prep_keys: prep_names.append(model.prep_profile_name(profile_id))
+	if model.prep_profiles_unlocked():
+		var prep_buttons := segmented(profiles,Vector2(120,row_y),column_width-140,prep_names,prep_keys.find(model.prep_profile()),func(index: int): _choose_prep(prep_keys[index]),40)
+		for index in range(prep_buttons.size()): prep_buttons[index].tooltip_text = model.prep_profile_hint(prep_keys[index])
+	else:
+		text(profiles,"Откроется после 3-го уровня каната, импульса и броска",Vector2(120,row_y+11),Vector2(column_width-140,22),12,INK_FAINT)
+	row_y += 48
+	paragraph(profiles,model.prep_profile_hint(),Vector2(120,row_y-4),Vector2(column_width-140,34),12,INK_SOFT)
+	row_y += 38
+	text(profiles,"Цель сбора",Vector2(20,row_y+11),Vector2(110,22),14,INK_SOFT,"strong")
+	var magnet: Dictionary = model.balance["specializations"]["magnet"]
+	if not model.spec_unlocked("magnet"):
+		text(profiles,"Откроется на 5-м уровне магнита",Vector2(120,row_y+11),Vector2(column_width-140,22),12,INK_FAINT)
+		paragraph(profiles,"До этого находки подбираются только в радиусе касания.",Vector2(120,row_y+42),Vector2(column_width-140,30),12,INK_SOFT)
+	else:
+		var magnet_keys: Array = magnet["options"].keys()
+		var magnet_names: Array[String] = []
+		for key in magnet_keys: magnet_names.append(str(magnet["options"][key]["name"]))
+		var magnet_buttons := segmented(profiles,Vector2(120,row_y),column_width-140,magnet_names,magnet_keys.find(model.choice("magnet")),func(index: int): _choose("magnet",str(magnet_keys[index])),40)
+		for index in range(magnet_buttons.size()): magnet_buttons[index].tooltip_text = str(magnet["options"][magnet_keys[index]].get("hint",""))
+		paragraph(profiles,str(magnet["options"][model.choice("magnet")].get("hint","")),Vector2(120,row_y+42),Vector2(column_width-140,30),12,INK_SOFT)
 	# Active items: two slots, stock up to two of each, bought with gold or
 	# made from materials. Diamonds never buy consumables.
 	var items := slab(self,right,Vector2(column_width,262))
@@ -508,12 +654,15 @@ func build_supplies(active: bool) -> void:
 	var sets := int(model.profile["unlocked_sets"].size())
 	text(progress,"Комплекты %d/%d · ориентиры %d · контракты %d · жетоны мастерства %d" % [sets,model.balance["sets"].size(),model.profile["landmarks"].size(),model.profile["completed_contracts"].size(),int(model.profile["mastery_tokens"])],Vector2(20,58),Vector2(column_width-40,20),12,INK_SOFT)
 
-const UPGRADE_SHORT := ["Канат","Импульс","Крюки","Рюкзак","Магнит","Защита","Бросок","Замедление"]
-
 func _choose(track: String, option: String) -> void:
 	var message := model.set_choice(track,option)
 	if track=="hook" and is_instance_valid(game.explorer):
 		game.explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
+	hud.show_menu()
+	game.toast(message)
+
+func _choose_prep(profile_id: String) -> void:
+	var message := model.set_prep_profile(profile_id)
 	hud.show_menu()
 	game.toast(message)
 

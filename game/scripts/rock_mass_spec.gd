@@ -193,8 +193,10 @@ func _sculpt(flat: PackedVector2Array, inner_center: Vector2, random: RandomNumb
 			var edge := INF
 			for i in range(count): edge = minf(edge,Geometry2D.get_closest_point_to_segment(at,inner_contour[i],inner_contour[(i+1)%count]).distance_to(at))
 			if edge<step*.35: continue
+			# A spherical cap over the ring: the face keeps turning all the way
+			# to the crown, so every facet of a boulder catches its own light.
 			var t := clampf(edge/radius,0,1)
-			var z := ring_mean+dome*sqrt(t)+slope.dot(at-inner_center)+random.randf_range(-.12,.12)*maxf(dome,.2)
+			var z := ring_mean+dome*sqrt(1.0-(1.0-t)*(1.0-t))+slope.dot(at-inner_center)+random.randf_range(-.16,.16)*maxf(dome,.2)
 			cap_points.append(Vector3(at.x,at.y,minf(z,z_limit)))
 			flat.append(at)
 		y += step*.86
@@ -251,6 +253,30 @@ static func _barycentric(p: Vector2, a: Vector2, b: Vector2, c: Vector2) -> Vect
 	var u := (v2.x*v1.y-v1.x*v2.y)/d
 	var v := (v0.x*v2.y-v2.x*v0.y)/d
 	return Vector3(1.0-u-v,u,v)
+
+# A boulder of the reference: a squarish ellipse (superellipse) of 10-14
+# corners with uneven radii and corner spacing, so it reads as one rounded
+# cushion of rock with short straight facets on its rim, never a box. The
+# foot is a little flatter than the crown. Always convex (build() needs it).
+# fullness: superellipse exponent range; higher keeps fuller corners, for
+# pieces that must carry a gameplay object's whole box.
+static func boulder_contour(center: Vector2, size: Vector2, random: RandomNumberGenerator, turn: float = 0.0, fullness: Vector2 = Vector2(2.2,2.9)) -> PackedVector2Array:
+	var half := size*.5
+	var count := random.randi_range(10,14) if minf(size.x,size.y)>1.8 else random.randi_range(7,9)
+	var exponent := random.randf_range(fullness.x,fullness.y)
+	var phase := random.randf()*TAU/count
+	var points := PackedVector2Array()
+	for k in range(count):
+		var angle := phase+TAU*(k+random.randf_range(-.2,.2))/count
+		var c := cos(angle)
+		var s := sin(angle)
+		var radius := 1.0/pow(pow(absf(c),exponent)+pow(absf(s),exponent),1.0/exponent)
+		var point := Vector2(c*half.x,s*half.y)*radius*random.randf_range(.98,1.09)
+		if point.y<0: point.y *= .9
+		points.append(center+point.rotated(turn))
+	var hull := Geometry2D.convex_hull(points)
+	if hull.size()>1 and hull[0]==hull[-1]: hull.remove_at(hull.size()-1)
+	return hull
 
 # A blocky convex contour: a rotated, slightly skewed box whose four corners
 # are cut by different amounts, so masses read as broken blocks with long

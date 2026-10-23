@@ -23,7 +23,7 @@ const ROUTE_CLEAR := 2.4
 const FIND_CLEARANCE := 1.05
 const FRONT_LIMIT := 1.95
 # Distant parallax layers: depth, share of camera motion and haze.
-const FAR_LAYERS := [{"z":-9.0,"follow":.42,"haze":.62,"cell":1.5},{"z":-15.0,"follow":.68,"haze":.78,"cell":2.0}]
+const FAR_LAYERS := [{"z":-9.0,"follow":.42,"haze":.42,"cell":1.5},{"z":-15.0,"follow":.68,"haze":.62,"cell":2.0}]
 # Bevel width / lift per landform: Vector3(top, side, bottom).
 const SHAPES := {
 	"buttress":[Vector3(.5,.32,.72),Vector3(.85,.8,1.0)],
@@ -188,10 +188,10 @@ func _add_mass(list: Array, band: int, role: String, landform: String, contour: 
 	var size := Rect2(contour[0],Vector2.ZERO)
 	for point in contour: size = size.expand(point)
 	var span := sqrt(size.size.x*size.size.y)
-	# Sculpted front: facets of about a metre over a low tilted dome, smaller
-	# on small pieces. Big hosts get the larger dome.
-	mass.facet_size = clampf(span*.17,.55,1.3)
-	mass.dome = clampf(span*.11,.08,.85) if landform not in ["shelf","rubble"] else .08
+	# Sculpted front: facets under a metre over a high rounded dome, smaller
+	# on small pieces, so a boulder turns its facets to the light all over.
+	mass.facet_size = clampf(span*.12,.5,.95)
+	mass.dome = clampf(span*.2,.1,1.5) if landform not in ["shelf","rubble"] else .08
 	mass.slope = Vector2(random.randf_range(-.05,.05),random.randf_range(-.06,.03))
 	mass.z_limit = FRONT_LIMIT
 	# Front of a mass never reaches the plane of the grips and the hero.
@@ -206,7 +206,11 @@ func _add_mass(list: Array, band: int, role: String, landform: String, contour: 
 
 func _block(list: Array, band: int, role: String, landform: String, center: Vector2, size: Vector2, z_rim: float, random: RandomNumberGenerator, z_back: float = -3.4, host: RockMassSpec = null, turn_range: float = .34) -> RockMassSpec:
 	var turn := random.randf_range(-turn_range,turn_range)
-	var contour := RockMassSpec.block_contour(center,size,random,turn)
+	# Masses of the face are rounded boulders; shelves, arches and overhangs
+	# keep their straight block contours (they are built elsewhere).
+	# Fill and seats carry gameplay objects to their corners: fuller boulders.
+	var fullness := Vector2(3.4,4.2) if role in ["fill","seat"] else Vector2(2.6,3.2) if role=="trunk" else Vector2(2.2,2.9)
+	var contour := RockMassSpec.boulder_contour(center,size,random,turn,fullness)
 	if role in ["body","island","rubble","lobe"]:
 		# Nothing fills an arch opening: the sky shows through it.
 		var box := Rect2(contour[0],Vector2.ZERO)
@@ -838,7 +842,11 @@ func _build_landmarks(index: int, parent: Node3D) -> void:
 		for mass in members:
 			if best==null or mass.bounds.end.y>best.bounds.end.y: best = mass
 		if best==null or best.top_edges.is_empty(): continue
+		# A round island has several short top edges: stand on the crown.
 		var edge: int = best.top_edges[0]
+		var count: int = best.outer_contour.size()
+		for candidate in best.top_edges:
+			if best.outer_contour[candidate].y+best.outer_contour[(candidate+1)%count].y>best.outer_contour[edge].y+best.outer_contour[(edge+1)%count].y: edge = candidate
 		var rim: Vector2 = best.outer_contour[edge].lerp(best.outer_contour[(edge+1)%best.outer_contour.size()],.5)
 		var ring: Vector2 = best.inner_contour[edge].lerp(best.inner_contour[(edge+1)%best.inner_contour.size()],.5)
 		var point := rim.lerp(ring,.5)
@@ -884,16 +892,20 @@ func build_far_band(far: int, band: int, parent: Node3D) -> void:
 	var random := layout.rng(band*7+far,951)
 	var profile := profile_at(band*BAND*(1.0-float(FAR_LAYERS[far-1]["follow"]))+12.0)
 	var rock: Color = profile.rock_material["base_color"]
-	var tone := rock.lerp(Color("6f8aa6"),.35 if far==1 else .55)
+	# Blue ranges of the reference: the near layer a deep slate blue, the
+	# far one paler in the haze, both clearly bluer than the climbing rock.
+	var tone := rock.lerp(Color("4f6f92"),.6 if far==1 else .7)
 	var snow := float(profile.weathering_rules["snow"])>.1 or profile.id=="sky"
 	var points := PackedVector3Array()
 	var colors := PackedColorArray()
-	var count := random.randi_range(3,5)
+	# Narrow, steep peaks, several per band, so an opening shows a range of
+	# summits instead of one pale slope filling it.
+	var count := random.randi_range(5,8)
 	for peak in range(count):
 		var x := lerpf(-46.0,46.0,(peak+random.randf_range(.15,.85))/count)
 		var base := band*BAND+random.randf_range(-8.0,10.0)
-		var width := random.randf_range(12.0,22.0)*(1.0+.3*(far-1))
-		var height := random.randf_range(9.0,16.0)*(1.0+.35*(far-1))
+		var width := random.randf_range(6.5,12.0)*(1.0+.3*(far-1))
+		var height := random.randf_range(9.0,15.0)*(1.0+.35*(far-1))
 		var z := -random.randf_range(0,3.0)-peak*.15
 		var apex := Vector3(x+random.randf_range(-2,2),base+height,z+2.0)
 		var left := Vector3(x-width*.5,base,z)

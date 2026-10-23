@@ -20,8 +20,8 @@ uniform vec3 aerial_color : source_color = vec3(0.56,0.70,0.82);
 // shaded as if lit from a lower upper-left angle so every mass reads round.
 uniform vec3 form_light_world = vec3(-0.62,0.62,0.48);
 uniform float form_strength : hint_range(0.0,1.0) = 0.85;
-uniform float form_shade : hint_range(0.0,1.5) = 0.80;
-uniform float form_lit : hint_range(0.0,2.0) = 1.30;
+uniform float form_shade : hint_range(0.0,1.5) = 0.74;
+uniform float form_lit : hint_range(0.0,2.0) = 1.32;
 // Floor of the wrapped sun on faces turned away from it: the sky fill.
 uniform float shade_floor : hint_range(0.0,1.0) = 0.56;
 // Macro light from the real geometry: tops of large forms warm and light,
@@ -62,6 +62,15 @@ void fragment() {
 	float upwards=smoothstep(0.05,0.6,rock_normal.y);
 	vec3 stone=COLOR.rgb*(0.96+weather*0.05+(grain-0.5)*0.035*detail_strength);
 	stone*=material_tint;
+	// Granite speckle of the reference: sparse pale and dark grains a few
+	// centimetres across, plus soft weathered blotches a metre across. It
+	// reads as stone texture at play distance without breaking the facets.
+	float speck=noise3(p*vec3(15.0,15.0,9.0));
+	float pale=smoothstep(.70,.80,speck)*smoothstep(.45,.7,noise3(p*5.3+vec3(17.0)));
+	float dark=smoothstep(.30,.20,speck)*smoothstep(.4,.7,noise3(p*4.7+vec3(23.0)));
+	float speck_gain=mix(.55,1.0,detail_strength);
+	stone*=1.0+(pale*.10-dark*.12)*speck_gain;
+	stone*=1.0+(noise3(p*1.6+vec3(41.0))-.5)*.10*speck_gain;
 	stone*=mix(vec3(1.0),mix(vec3(0.90,0.94,1.0),vec3(1.04,1.02,0.97),smoothstep(-0.7,0.7,rock_normal.y)),macro_strength);
 	stone*=1.0-crack*0.06;
 	float bedding=noise3(vec3(p.x*0.09,p.y*0.75+p.x*0.22,p.z*0.2));

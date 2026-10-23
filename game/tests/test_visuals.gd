@@ -107,6 +107,28 @@ func run_tests() -> void:
 	check(classes.has(RockMassSpec.FACE) and classes.has(RockMassSpec.TOP) and classes.has(RockMassSpec.SIDE) and classes.has(RockMassSpec.UNDERSIDE) and classes.has(RockMassSpec.INNER) and classes.has(RockMassSpec.WALL),"masses have front, top, side, underside, arch and wall faces: %s" % str(classes.keys()))
 	check(landforms.has("arch") and landforms.has("overhang") and landforms.has("island") and landforms.has("pillar") and landforms.has("shelf"),"landforms reach the geometry: %s" % str(landforms.keys()))
 	check(seats_big and seats<a.nearby_anchors(0,120).size(),"objects never get a pedestal block of their own (%d seats)" % seats)
+	# Boulders of the reference: large face masses have a rounded rim of many
+	# short edges (no side longer than 40% of the girth) and a high crown, so
+	# their facets turn to the light all over. Shelves and arches stay blocks.
+	var rounded := 0
+	var large := 0
+	var crowned := true
+	for band in range(0,5):
+		for mass in massif.front_band(band):
+			if mass.role not in ["trunk","body","island"] or mass.landform=="pillar" or mass.bounds.size.x<3.5: continue
+			large += 1
+			var girth := 0.0
+			var longest := 0.0
+			for i in range(mass.outer_contour.size()):
+				var edge: float = mass.outer_contour[i].distance_to(mass.outer_contour[(i+1)%mass.outer_contour.size()])
+				girth += edge
+				longest = maxf(longest,edge)
+			if mass.outer_contour.size()>=8 and longest<girth*.4: rounded += 1
+			crowned = crowned and mass.front_z-mass.z_rim>=.6 and mass.front_z<=MassifVisuals.FRONT_LIMIT+.001
+	check(large>20 and rounded==large and crowned,"large masses are rounded boulders with a high crown (%d / %d)" % [rounded,large])
+	var boulder_a := RockMassSpec.boulder_contour(Vector2(3,40),Vector2(6,5),a.seeded_rng(7,947),.2)
+	var boulder_b := RockMassSpec.boulder_contour(Vector2(3,40),Vector2(6,5),a.seeded_rng(7,947),.2)
+	check(boulder_a==boulder_b and boulder_a.size()>=8,"boulder contours are deterministic per seed stream")
 	# Host masses: one body with a front, top, side and underside and real
 	# depth; lobes, seats and shelves fuse into a host instead of standing
 	# alone; shelves keep a broad underside, never a wedge.
@@ -258,7 +280,8 @@ func run_tests() -> void:
 	check(polygon_kept,"visual grips never change the gameplay polygon")
 	check(no_pebbles,"grips carry no pebble chips or base ring of their own")
 	# Boulder grips: a few chips and moss at the foot, never a heap; wide
-	# blocks break into two stones; the paint is a band along the top edge.
+	# blocks break into two stones; the paint is a short stroke across the
+	# crown (about half the block, as on the reference), never a plate.
 	var footing_ok := true
 	var split := 0
 	var paint_on_top := true
@@ -272,10 +295,10 @@ func run_tests() -> void:
 		var strip := holder.find_child("Полоса состояния",true,false) as MeshInstance3D
 		var box: AABB = strip.get_aabb()
 		var block := spec.bounds()
-		paint_on_top = paint_on_top and box.end.y>=block.end.y-.12 and box.size.y<=block.size.y*.36 and box.size.x>=spec.front_width*.6
+		paint_on_top = paint_on_top and box.end.y>=block.end.y-.18 and box.size.y<=block.size.y*.36 and box.size.x>=spec.front_width*.36 and box.size.x<=spec.front_width*.72
 	check(footing_ok,"each grip has a few chips and moss at its foot (balanced), never a heap")
 	check(split>0 and split<a.nearby_anchors(20,70).size(),"some wide grips break into two stones, not all (%d)" % split)
-	check(paint_on_top,"the status paint is a wide band along the top of the boulder, not a plate over it")
+	check(paint_on_top,"the status paint is a short stroke across the crown of the boulder, not a plate over it")
 	var lean := make_world(58273,"battery")
 	var lean_chunk := Node3D.new()
 	lean.add_child(lean_chunk)
@@ -333,7 +356,8 @@ func run_tests() -> void:
 			if massif.stone_field(Vector2(x,y))<0: open += 1
 	var sky_share := float(open)/total
 	check(sky_share>.05 and sky_share<.6,"sky opens between the masses around the climb (%.2f)" % sky_share)
-	# The outcrop follows GripVisualSpec: 1.1-1.3 of the gameplay width, its
+	# The outcrop follows GripVisualSpec: about the gameplay width (a compact
+	# boulder, never a plate wider than the hitbox), its
 	# top on the hitbox top, a body dropping 0.22-1.0 m below the hitbox into
 	# the mountain, a top face the camera sees (it carries the paint), real
 	# depth and a back running into the rock; its front stays well behind the
@@ -348,7 +372,7 @@ func run_tests() -> void:
 		var size: Vector2 = anchor["dimensions"]
 		var spec: GripVisualSpec = anchor["visual_spec"]
 		var drop := spec.front_height-size.y-.05
-		block_sized = block_sized and box.size.x>=size.x*1.08 and box.size.x<=size.x*1.32 and drop>=GripVisualSpec.MIN_DROP-.001 and drop<=1.0
+		block_sized = block_sized and box.size.x>=size.x*.92 and box.size.x<=size.x*1.15 and drop>=GripVisualSpec.MIN_DROP-.001 and drop<=1.0
 		block_sized = block_sized and absf(spec.bounds().end.y-(size.y*.5+.05))<=.06 and spec.top_band_height>=.2 and spec.side_depth>=.7
 		block_sized = block_sized and box.position.z<=-spec.back_embed+.001 and box.end.z>=spec.side_depth*.9 and spec.back_embed>=.4
 		before_hero = before_hero and (holder.global_transform*body.transform*box.end).z<3.0
@@ -358,7 +382,7 @@ func run_tests() -> void:
 		for find in a.finds:
 			var q: Vector2 = find["pos"]
 			if q.y<p.y and absf(q.x-p.x)<spec.front_width*.5 and q.y+.45>foot: clear_of_loot = false
-	check(block_sized,"grip outcrops follow the visual contract: a little wider than the hitbox, a body below it, a visible top face, depth and an embedded back")
+	check(block_sized,"grip outcrops follow the visual contract: about the hitbox width, a body below it, a visible top face, depth and an embedded back")
 	check(clear_of_loot,"no grip outcrop reaches down onto a find below it")
 	check(before_hero,"grip outcrops stay behind the hero's plane")
 	var simple := true

@@ -13,6 +13,7 @@ android {
 dependencies {
     compileOnly files('../../game/android/build/libs/debug/godot-lib.template_debug.aar')
     implementation 'com.yandex.android:mobileads:8.5.0'
+    implementation 'io.appmetrica.analytics:analytics:8.6.0'
 }
 
 tasks.register('installPlugin', Copy) {

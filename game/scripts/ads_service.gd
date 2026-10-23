@@ -8,6 +8,7 @@ signal reward_verified
 signal banner_layout_changed
 
 const CONFIG_PATH := "res://data/yandex_ads.json"
+const APP_METRICA_CONFIG_PATH := "res://data/appmetrica.json"
 const RETRY_SECONDS := 30.0
 const LOAD_TIMEOUT := 45.0
 var backend: Object
@@ -36,6 +37,9 @@ func attach_backend(native: Object, use_demo_units: bool) -> void:
 	backend = native
 	test_mode = use_demo_units
 	units = JSON.parse_string(FileAccess.get_file_as_string(CONFIG_PATH))["ad_units"].duplicate()
+	var appmetrica_config: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(APP_METRICA_CONFIG_PATH))
+	if backend.has_method("setAppMetricaApiKey"):
+		backend.call("setAppMetricaApiKey",str(appmetrica_config.get("api_key","")))
 	if test_mode:
 		units = {"revive_rewarded":"demo-rewarded-yandex", "level_complete_interstitial":"demo-interstitial-yandex", "main_menu_banner":"demo-banner-yandex"}
 	supported = true

@@ -45,11 +45,11 @@ var top_right := 1
 # Per-type proportions: [width x W, drop below the hitbox (m), protrusion (m),
 # top face (m), underside (m), bottom narrowing, facets].
 const SHAPES := {
-	"stone":[1.18,.42,.92,.30,.16,.92,8],
-	"root":[1.16,.40,.86,.28,.17,.88,8],
-	"spring":[1.20,.38,.94,.32,.15,.86,7],
-	"ice":[1.18,.36,.88,.28,.14,.94,5],
-	"crystal":[1.14,.44,.90,.28,.16,.90,9],
+	"stone":[1.0,.62,.92,.21,.16,.86,10],
+	"root":[.99,.60,.86,.21,.17,.84,10],
+	"spring":[1.03,.56,.94,.22,.15,.82,9],
+	"ice":[1.01,.54,.88,.21,.14,.88,6],
+	"crystal":[.98,.64,.90,.21,.16,.84,10],
 }
 const FAMILIES := ["stone","root","spring","ice","crystal"]
 # Lowest drop of the body below the hitbox, even in a tight spot.
@@ -67,19 +67,19 @@ static func for_grip(object: Dictionary, profile: GripBiomeProfile, room_below: 
 	random.seed = spec.seed_value*48271+kind*977+11
 	var shape: Array = SHAPES[spec.visual_family]
 	spec.front_width = w*float(shape[0])*random.randf_range(.97,1.04)
-	var drop := clampf(float(shape[1])*random.randf_range(.8,1.2)*(.8+w*.12),MIN_DROP,maxf(MIN_DROP,room_below))
+	var drop := clampf(float(shape[1])*random.randf_range(.85,1.15)*(.8+w*.12),MIN_DROP,minf(1.0,maxf(MIN_DROP,room_below)))
 	spec.front_height = h+.05+drop
 	spec.side_depth = float(shape[2])*random.randf_range(.92,1.06)
 	spec.back_embed = .42
-	spec.top_band_height = float(shape[3])*random.randf_range(.9,1.1)
+	spec.top_band_height = float(shape[3])*random.randf_range(.97,1.08)
 	spec.top_depth = spec.side_depth
 	spec.under_height = minf(float(shape[4])*random.randf_range(.85,1.15),drop*.6+.1)
-	spec.chamfer = minf(w,h)*.22
+	spec.chamfer = minf(w,h)*.34
 	spec.facet_count = int(shape[6])
 	spec.rear_scale = random.randf_range(.86,.90)
-	spec.bulge = random.randf_range(.07,.12)
+	spec.bulge = random.randf_range(.10,.16)
 	# Most outcrops break into two or three stones; ice stays one piece.
-	spec.split = kind!=GripSpec.ICE and random.randf()<.85
+	spec.split = kind!=GripSpec.ICE and random.randf()<.45
 	spec.split_x = w*random.randf_range(-.18,.18)
 	if spec.split:
 		spec.cracks.append(spec.split_x)
@@ -87,7 +87,8 @@ static func for_grip(object: Dictionary, profile: GripBiomeProfile, room_below: 
 			var side := 1.0 if spec.split_x<0 else -1.0
 			spec.cracks.append(spec.split_x+side*w*random.randf_range(.32,.42))
 	spec.crack_pattern = "deep" if kind==GripSpec.ROOT else "vein" if kind==GripSpec.CRYSTAL else "corners"
-	spec.paint_profile = {"color":profile.paint_color(kind),"width":random.randf_range(.78,.88)*w/spec.front_width,"wear":random.randf_range(.10,.18)}
+	# A short stroke across the crown, as on the reference, not a full bar.
+	spec.paint_profile = {"color":profile.paint_color(kind),"width":random.randf_range(.5,.64),"wear":random.randf_range(.10,.18)}
 	spec._build_outline(random,h,float(shape[5]))
 	return spec
 
@@ -106,12 +107,17 @@ func _build_outline(random: RandomNumberGenerator, h: float, narrowing: float) -
 	var span := right-left
 	# The top edge in three or four pieces, so the top face breaks into
 	# several planes instead of one flat panel.
-	var points: Array[Vector2] = [Vector2(left+cut_left,top-slope)]
+	# The crown arches: the middle of the top edge is the hitbox top, its
+	# ends fall away to the cut corners, so the boulder reads round.
+	# Never deeper than the corner cuts: a corner falling below its flank
+	# point would fold the outline over itself.
+	var arc := minf(front_height*random.randf_range(.07,.11),minf(cut_left,cut_right)*.55)
+	var points: Array[Vector2] = [Vector2(left+cut_left,top-slope-arc)]
 	var pieces := random.randi_range(3,4)
 	for piece in range(1,pieces):
 		var t := (piece+random.randf_range(-.2,.2))/pieces
-		points.append(Vector2(lerpf(left+cut_left,right-cut_right,t),top+slope*(2.0*t-1.0)+random.randf_range(-.025,.02)))
-	points.append(Vector2(right-cut_right,top+slope))
+		points.append(Vector2(lerpf(left+cut_left,right-cut_right,t),top+slope*(2.0*t-1.0)-arc*pow(2.0*t-1.0,2.0)+random.randf_range(-.02,.01)))
+	points.append(Vector2(right-cut_right,top+slope-arc))
 	var last_top := points.size()-1
 	points.append_array([
 		Vector2(right,top-cut_right*random.randf_range(.8,1.2)),
@@ -166,6 +172,13 @@ func _build_outline(random: RandomNumberGenerator, h: float, narrowing: float) -
 	front = PackedVector2Array()
 	for point in pulled:
 		front.append(Vector2(point.x,lerpf(rim_low,rim_top,(point.y-low_y)/maxf(.01,high_y-low_y))))
+	if crosses(front):
+		# Uneven pulls on a steep flank can fold the rim: pull every point
+		# alike instead, which keeps the silhouette's simple shape.
+		front = PackedVector2Array()
+		for point in outline:
+			var even := center+(point-center)*Vector2(.88,1.0)
+			front.append(Vector2(even.x,lerpf(rim_low,rim_top,(point.y-low_y)/maxf(.01,high_y-low_y))))
 
 # True when two edges of a closed polygon cross each other.
 static func crosses(polygon: PackedVector2Array) -> bool:

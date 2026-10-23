@@ -134,7 +134,7 @@ func run_tests() -> void:
 	await touch_tap(find_button(game.hud.content,"Высокая"))
 	check(game.model.profile["graphics_quality"]=="high" and game.sun_light.shadow_enabled,"high graphics preset applies shadows and persists")
 	await touch_tap(find_button(game.hud.content,"Экономия"))
-	check(game.model.profile["graphics_quality"]=="battery" and Engine.max_fps==30 and not game.sun_light.shadow_enabled,"battery graphics preset lowers frame target and disables shadows")
+	check(game.model.profile["graphics_quality"]=="battery" and Engine.max_fps==0 and not game.sun_light.shadow_enabled,"battery graphics preset keeps the display refresh target and disables shadows")
 	var vibration_before: bool = game.model.profile["vibration"]
 	game.hud.toggle_vibration()
 	check(game.model.profile["vibration"]!=vibration_before,"vibration setting toggles")

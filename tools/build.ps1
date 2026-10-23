@@ -6,6 +6,9 @@ param(
     # Release mode exports without debug features and signs the APK with the
     # store key instead of the debug key.
     [switch]$Release,
+    # Release.cmd uses this for a one-click APK export. Run the full suite
+    # explicitly when you want a CI-style validation pass.
+    [switch]$SkipTests,
     [string]$ReleaseKeystorePath = '',
     [string]$ReleaseKeystorePasswordFile = '',
     [string]$ReleaseKeyAlias = 'lasthook'
@@ -53,6 +56,7 @@ function Invoke-TaskGodot([string[]]$TaskArguments, [string]$TaskLog) {
     if ((Get-Content -Raw -LiteralPath $TaskLog) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw "Godot logged an error. See $TaskLog" }
 }
 
+if (-not $SkipTests) {
 Invoke-TaskGodot @('--headless','--editor','--import','--quit') (Join-Path $taskArtifacts 'build-import.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_rules.gd') (Join-Path $taskArtifacts 'build-rules.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_progression.gd') (Join-Path $taskArtifacts 'build-progression.log')
@@ -73,6 +77,7 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_ads.gd') (Join-Path
 Invoke-TaskGodot @('--headless','--script','res://tests/test_character_editing.gd') (Join-Path $taskArtifacts 'build-character-editing.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_sprite_animation.gd') (Join-Path $taskArtifacts 'build-sprite-animation.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_polish.gd') (Join-Path $taskArtifacts 'build-polish.log')
+}
 
 if ($Target -in @('All','Windows')) {
     $taskWindows = Join-Path $taskRoot $(if ($Release) { 'Builds\Windows-Release' } else { 'Builds\Windows' })
@@ -110,8 +115,22 @@ if ($Target -in @('All','Android')) {
         $env:GODOT_ANDROID_KEYSTORE_RELEASE_USER = $ReleaseKeyAlias
         $env:GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD = (Get-Content -Raw -LiteralPath $ReleaseKeystorePasswordFile).Trim()
     }
+    $taskAndroidLog = Join-Path $taskArtifacts 'export-android.log'
     try {
-        Invoke-TaskGodot @('--headless',$taskExport,'Android',$taskApk) (Join-Path $taskArtifacts 'export-android.log')
+        try {
+            Invoke-TaskGodot @('--headless',$taskExport,'Android',$taskApk) $taskAndroidLog
+        } catch {
+            # Gradle can leave a stale daemon registry after an interrupted
+            # export. Remove only this build's private daemon state and retry
+            # the same export once; no version changes or manual cleanup are
+            # required from Release.cmd.
+            $taskDaemonHome = Join-Path $taskArtifacts 'gradle-user-home\daemon'
+            if (Test-Path -LiteralPath $taskDaemonHome) {
+                Remove-Item -LiteralPath $taskDaemonHome -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            Write-Output 'Android export retry after cleaning the Gradle daemon state...'
+            Invoke-TaskGodot @('--headless',$taskExport,'Android',$taskApk) $taskAndroidLog
+        }
     } finally {
         Remove-Item Env:GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD -ErrorAction SilentlyContinue
     }

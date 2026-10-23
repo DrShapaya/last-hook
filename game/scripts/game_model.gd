@@ -12,7 +12,7 @@ const RECOVERY := 5
 const THROW := 6
 # Release slow motion: four levels of decision time.
 const SLOWMO := 7
-const BUILD_VERSION := "0.15.1"
+const BUILD_VERSION := "0.15.3"
 const PROFILE_VERSION := 6
 const HOOK_NAMES = ["Одинарный", "Тройной", "2 одинарных", "2 тройных"]
 const ZONE_NAMES = ["Лес", "Скалы", "Руины", "Лёд", "Вулкан", "Небеса"]
@@ -21,6 +21,14 @@ const LOOT_NAMES = ItemCatalog.LEGACY_NAMES
 const MATERIAL_NAMES = ["Камень", "Корень", "Пружинящая ветка", "Лёд", "Кристалл"]
 # Specialisation tracks: the upgrade row they belong to.
 const SPEC_TRACKS := {"rope":ROPE,"impulse":IMPULSE,"throw":THROW,"magnet":MAGNET}
+# The preparation screen exposes coherent play styles instead of four tiny
+# switches whose effects are hard to compare. The underlying specialization
+# choices stay in the save for compatibility and are still used by gameplay.
+const PREP_PROFILES := {
+	"range":{"name":"Дальность","hint":"Канат +0,5 ед.; отпускание +6%; обычная скорость крюка.","choices":{"rope":"reach","impulse":"power","throw":"speed"}},
+	"control":{"name":"Контроль","hint":"Длина каната меняется в 1,6× быстрее; при падении без импульса; крюк наследует 60% скорости героя и летит на 5% медленнее.","choices":{"rope":"control","impulse":"control","throw":"steady"}},
+	"collector":{"name":"Сбор","hint":"Канат +0,5 ед.; при падении без импульса; обычная скорость крюка — проще забирать боковые находки.","choices":{"rope":"reach","impulse":"control","throw":"speed"}}
+}
 # Frozen economy of older profiles. Migration is computed from these, never
 # from the current balance.json, so a later price change cannot change what an
 # old save is refunded.
@@ -62,6 +70,7 @@ static func fresh_profile() -> Dictionary:
 		if loadout.size()<int(ItemCatalog.balance().get("active_slots",2)): loadout.append(id)
 	while loadout.size()<int(ItemCatalog.balance().get("active_slots",2)): loadout.append("")
 	return {"version": PROFILE_VERSION, "gold": 0, "diamonds": 0, "upgrade_levels": [1, 1, 1, 1, 1, 1, 1, 1], "upgrade_choices": default_choices(),
+		"prep_profile": "range",
 		"material_wallet": {}, "consumable_stock": starter, "active_loadout": loadout,
 		"coin_ledger": {"run":"","ids":[],"gold":0,"lifetime":0}, "unlocked_sets": [], "set_parts": {}, "landmarks": [],
 		"completed_contracts": [], "mastery_tokens": 0, "reached_acts": 1, "best": 0.0,
@@ -213,6 +222,18 @@ func _sanitize_progress() -> void:
 		if not balance["specializations"][track]["options"].has(str(choices[track])): choices[track] = balance["specializations"][track]["default"]
 		choices[track] = str(choices[track])
 	profile["upgrade_choices"] = choices
+	var prep_profile := str(profile.get("prep_profile",""))
+	if not PREP_PROFILES.has(prep_profile):
+		prep_profile = "range"
+		for candidate in PREP_PROFILES.keys():
+			var candidate_choices: Dictionary = PREP_PROFILES[candidate]["choices"]
+			var matches := true
+			for track in candidate_choices.keys():
+				if str(choices.get(track,""))!=str(candidate_choices[track]): matches = false
+			if matches:
+				prep_profile = str(candidate)
+				break
+	profile["prep_profile"] = prep_profile
 	for key in ["material_wallet","consumable_stock","set_parts"]:
 		var source = profile[key]
 		var clean := {}
@@ -344,6 +365,34 @@ func set_choice(track: String, option: String) -> String:
 	save()
 	return "Профиль: "+str(balance["specializations"][track]["options"][option]["name"])
 
+func prep_profile_keys() -> Array[String]:
+	return ["range","control","collector"]
+
+func prep_profile() -> String:
+	var selected := str(profile.get("prep_profile","range"))
+	return selected if PREP_PROFILES.has(selected) else "range"
+
+func prep_profile_name(profile_id: String = "") -> String:
+	var selected := profile_id if not profile_id.is_empty() else prep_profile()
+	return str(PREP_PROFILES.get(selected,PREP_PROFILES["range"]).get("name","Дальность"))
+
+func prep_profile_hint(profile_id: String = "") -> String:
+	var selected := profile_id if not profile_id.is_empty() else prep_profile()
+	return str(PREP_PROFILES.get(selected,PREP_PROFILES["range"]).get("hint",""))
+
+func prep_profiles_unlocked() -> bool:
+	return spec_unlocked("rope") and spec_unlocked("impulse") and spec_unlocked("throw")
+
+func set_prep_profile(profile_id: String) -> String:
+	if not profile["active"].is_empty(): return "Сначала заверши текущую попытку"
+	if not PREP_PROFILES.has(profile_id): return "Нет такого профиля"
+	if not prep_profiles_unlocked(): return "Откроется на уровне 3"
+	var choices: Dictionary = PREP_PROFILES[profile_id]["choices"]
+	for track in choices.keys(): profile["upgrade_choices"][track] = str(choices[track])
+	profile["prep_profile"] = profile_id
+	save()
+	return "Сбор: "+prep_profile_name(profile_id)
+
 func hook_config() -> int:
 	return clampi(int(profile["upgrade_choices"].get("hook",level(HOOKS))),1,level(HOOKS))
 
@@ -458,7 +507,7 @@ func purchase(kind: int) -> String:
 func upgrade_text(kind: int, at_level: int = -1) -> String:
 	var i := clampi((level(kind) if at_level == -1 else at_level) - 1,0,max_level(kind)-1)
 	match kind:
-		ROPE: return "%d м" % roundi(float(balance["rope_lengths"][i]) * float(balance["meters_per_unit"]))
+		ROPE: return "%d%% дальности" % roundi(float(balance["rope_lengths"][i])/float(balance["rope_lengths"][0])*100.0)
 		IMPULSE: return "+%d%% при отпускании" % roundi((float(balance["impulse_factors"][i])-1)*100)
 		HOOKS: return HOOK_NAMES[i]+(" · разброс %.0f°" % float(balance["hook_spread_degrees"]) if int(balance["hook_counts"][i])==2 else " · один канат")
 		BAG: return "%d слотов" % int(balance["capacities"][i])+(" + слот для материала, реликвии или контракта" if int(balance["special_slots"][i])>0 else "")
@@ -468,7 +517,7 @@ func upgrade_text(kind: int, at_level: int = -1) -> String:
 			return "монеты %d м · находки %d м" % [roundi(float(balance["magnet_coin_radii"][i])*10),roundi(float(balance["magnet_radii"][i])*10)]
 		RECOVERY: return "%d%% стоимости при поражении" % int(balance["recovery_percents"][i])
 		SLOWMO: return (str(snappedf(float(balance["slowmo_seconds"][i]),.01))+" с замедления после отцепления").replace(".",",")
-	return "%d м/с · скорость крюка" % roundi(float(balance["throw_speeds"][i])*10)
+	return "%d%% скорости крюка" % roundi(float(balance["throw_speeds"][i])/float(balance["throw_speeds"][0])*100.0)
 
 func upgrade_use(kind: int, at_level: int) -> String:
 	var uses: Array = balance.get("upgrade_uses",[])
@@ -568,7 +617,8 @@ func can_fit(item: Dictionary) -> bool:
 	return true
 
 func try_pick(item: Dictionary) -> bool:
-	# Intentionally no auto-replacement; a more valuable find stays in the world.
+	# Full-bag replacement is decided by the run controller, which can also
+	# animate the incoming item at the correct world position.
 	if picked.has(item["id"]) or not can_fit(item):
 		return false
 	bag.append(ItemCatalog.normalize(item.duplicate(true)))

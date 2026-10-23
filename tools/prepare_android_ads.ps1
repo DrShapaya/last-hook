@@ -30,6 +30,11 @@ New-Item -ItemType File -Path (Join-Path $adsBuild '.gdignore') -Force | Out-Nul
 [IO.File]::WriteAllText((Join-Path $adsRoot 'game\android\.build_version'),'4.7.2.stable',[Text.UTF8Encoding]::new($false))
 $adsGradleProperties = Join-Path $adsBuild 'gradle.properties'
 $adsGradleText = Get-Content -Raw -LiteralPath $adsGradleProperties
+# The portable build runs Gradle with --no-daemon. Keeping org.gradle.jvmargs
+# forces Gradle 8 to fork a single-use daemon anyway; on some Windows setups
+# that daemon starts but its loopback handshake never completes. Let the
+# wrapper use its direct process instead.
+$adsGradleText = [regex]::Replace($adsGradleText,'(?m)^org\.gradle\.jvmargs=.*\r?\n','')
 if ($adsGradleText -notmatch '(?m)^org\.gradle\.daemon=') {
     Add-Content -LiteralPath $adsGradleProperties -Value "`norg.gradle.daemon=false"
 } else {

@@ -25,7 +25,7 @@ AppMetrica подключена для приложения с API key
 собранный AAR и плагин экспорта — `game/addons/last_hook_ads/`.
 Игровой сервис — `game/scripts/ads_service.gd`.
 
-- AppMetrica активируется на Android до инициализации рекламного SDK и автоматически собирает сессии, сведения об устройстве и сбои. На Windows и в тестовом fake-backend вызов отсутствует.
+- AppMetrica активируется на Android до инициализации рекламного SDK и автоматически собирает сессии, сведения об устройстве и сбои. Игра также отправляет пользовательские события `app_initialized`, `menu_opened`, `run_started_*`, `run_finished_success/failed`, `rewarded_requested`, `rewarded_earned` и `interstitial_requested`. На Windows и в тестовом fake-backend сетевой вызов отсутствует.
 
 - Возрождение запускается кнопкой «Смотреть рекламу · возродиться».
   Сервис принимает событие SDK `onRewarded` только в ходе запрошенного

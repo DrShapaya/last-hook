@@ -330,7 +330,9 @@ func setup(controller) -> void:
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(content)
 	toast_chip = chip(root,MenuSurface.SLATE)
+	toast_chip.visible = false
 	toast_label = label(toast_chip,"",15,WHITE)
+	toast_label.visible = false
 	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	ad_blocker = Control.new()
@@ -406,13 +408,32 @@ func chip(parent: Node, face: Color) -> PanelContainer:
 	parent.add_child(node)
 	return node
 
+func safe_inset_top() -> float:
+	var safe := DisplayServer.get_display_safe_area()
+	var visible_size := get_viewport().get_visible_rect().size
+	if safe.size.y > 0 and safe.position.y > 0 and safe.size.y < visible_size.y:
+		return float(safe.position.y) / maxf(0.1, root.scale.y)
+	return 0.0
+
+func safe_inset_bottom() -> float:
+	var safe := DisplayServer.get_display_safe_area()
+	var visible_size := get_viewport().get_visible_rect().size
+	if safe.size.y > 0 and safe.end.y < visible_size.y:
+		return float(visible_size.y - safe.end.y) / maxf(0.1, root.scale.y)
+	return 0.0
+
 func place_toast() -> void:
 	if not is_instance_valid(toast_chip): return
+	var has_text: bool = not toast_label.text.is_empty() and game.hint_timer>0 and bool(game.model.profile.get("notifications",true))
+	toast_chip.visible = has_text
+	toast_label.visible = has_text
+	if not has_text: return
 	var wide_text := body_font.get_string_size(toast_label.text,HORIZONTAL_ALIGNMENT_LEFT,-1,15).x>440
 	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if wide_text else TextServer.AUTOWRAP_OFF
 	toast_label.custom_minimum_size = Vector2(440 if wide_text else 0,0)
 	toast_chip.reset_size()
-	toast_chip.position = Vector2((root.size.x-toast_chip.size.x)*.5,root.size.y-(150 if layout_mode=="play" else 64)-toast_chip.size.y*.5)
+	var safe_bottom := safe_inset_bottom()
+	toast_chip.position = Vector2((root.size.x-toast_chip.size.x)*.5,root.size.y-(150 if layout_mode=="play" else 64)-toast_chip.size.y*.5 - safe_bottom)
 
 func label(parent: Node, text: String, size: int = 17, color: Color = WHITE) -> Label:
 	var node := Label.new()
@@ -482,6 +503,8 @@ func skin_button(node: Button, tone: String = "secondary") -> void:
 func select_menu(tab: String) -> void:
 	# A tap fades the section in; swipes and keys also slide it (menu_slide).
 	if tab not in MENU_TABS: tab = "expedition"
+	if tab=="equipment" and game.state=="menu":
+		game.ensure_menu_explorer()
 	menu_previous_tab = menu_tab
 	menu_tab = tab
 	show_menu()
@@ -497,7 +520,7 @@ func step_menu(direction: int, focus: String = "tab") -> bool:
 
 func toggle_sound() -> void:
 	game.model.profile["sound"] = not game.model.profile.get("sound",true)
-	game.model.save()
+	game.request_profile_save()
 	if not game.model.profile["sound"]: game.audio.stop()
 	show_menu()
 
@@ -506,17 +529,17 @@ func toggle_loot_prices() -> void:
 
 func set_loot_prices(mode: String) -> void:
 	game.model.profile["loot_prices"] = mode
-	game.model.save()
+	game.request_profile_save()
 	show_menu()
 
 func toggle_vibration() -> void:
 	game.model.profile["vibration"] = not game.model.profile.get("vibration",true)
-	game.model.save()
+	game.request_profile_save()
 	show_menu()
 
 func toggle_notifications() -> void:
 	game.model.profile["notifications"] = not game.model.profile.get("notifications",true)
-	game.model.save()
+	game.request_profile_save()
 	show_menu()
 
 func clear() -> void:
@@ -577,8 +600,10 @@ func show_play() -> void:
 	content.add_child(danger_edge)
 	# In-run chrome is dark slate so it reads over the sunlit limestone; the
 	# same chamfer and lip as the menus keep it part of one family.
+	var safe_top := safe_inset_top()
+	var pad_top := maxf(20.0, 20.0 + safe_top)
 	var top := Panel.new()
-	top.position = Vector2(20,20)
+	top.position = Vector2(20, pad_top)
 	top.size = Vector2(196,74)
 	top.pivot_offset = top.size*.5
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -594,7 +619,7 @@ func show_play() -> void:
 	record_label.size = Vector2(170,20)
 	pause_button = button(content,"",game.pause_run)
 	skin_button(pause_button,"dark")
-	pause_button.position = Vector2(root.size.x-76,20)
+	pause_button.position = Vector2(root.size.x-76, pad_top)
 	pause_button.custom_minimum_size = Vector2(56,56)
 	pause_button.size = Vector2(56,56)
 	var bars := UiSymbol.new()
@@ -606,19 +631,19 @@ func show_play() -> void:
 	bars.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	pause_button.add_child(bars)
 	climb_bar = PlayGauges.RouteGauge.new()
-	climb_bar.position = Vector2(20,96)
+	climb_bar.position = Vector2(20, pad_top + 76.0)
 	climb_bar.size = Vector2(root.size.x-40,24)
 	climb_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(climb_bar)
 	rope_gauge = PlayGauges.RopeGauge.new()
 	rope_gauge.font = heading_font
-	rope_gauge.position = Vector2(root.size.x-64,176)
+	rope_gauge.position = Vector2(root.size.x-64, pad_top + 156.0)
 	rope_gauge.size = Vector2(44,170)
 	rope_gauge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rope_gauge.visible = false
 	content.add_child(rope_gauge)
 	var notes := VBoxContainer.new()
-	notes.position = Vector2(20,128)
+	notes.position = Vector2(20, pad_top + 108.0)
 	notes.add_theme_constant_override("separation",6)
 	notes.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(notes)
@@ -634,8 +659,9 @@ func show_play() -> void:
 	danger_timer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	danger_column.add_child(danger_timer)
 	goal_label = label(chip(notes,MenuSurface.SLATE),"",14,WHITE)
-	contract_label = label(chip(notes,MenuSurface.SLATE),"",13,GOLD)
-	contract_label.add_theme_font_override("font",strong_font)
+	# Contract rewards remain in settlement data, but there is no finished
+	# contract interaction in the run HUD, so do not show a misleading chip.
+	contract_label = null
 	aim_label = label(chip(notes,MenuSurface.SLATE),"",14,GOLD)
 	aim_label.add_theme_font_override("font",strong_font)
 	for holder in notes.get_children():
@@ -653,7 +679,7 @@ func show_play() -> void:
 	# stays clear of the climb.
 	var gap_left := top.position.x+top.size.x+8
 	var gap_right := pause_button.position.x-8
-	slowmo_indicator.position = Vector2(clampf((gap_left+gap_right-slowmo_indicator.size.x)*.5,gap_left,maxf(gap_left,gap_right-slowmo_indicator.size.x)),32)
+	slowmo_indicator.position = Vector2(clampf((gap_left+gap_right-slowmo_indicator.size.x)*.5,gap_left,maxf(gap_left,gap_right-slowmo_indicator.size.x)), pad_top + 12.0)
 	slowmo_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	slowmo_indicator.visible = false
 	content.add_child(slowmo_indicator)
@@ -662,7 +688,7 @@ func show_play() -> void:
 	wallet_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wallet_plate.add_theme_stylebox_override("panel",slab_style(PLAY_PANEL,MenuSurface.SLATE_LIP,3,8))
 	wallet_plate.size = Vector2(118,38)
-	wallet_plate.position = Vector2(root.size.x-20-wallet_plate.size.x,128)
+	wallet_plate.position = Vector2(root.size.x-20-wallet_plate.size.x, pad_top + 108.0)
 	wallet_plate.pivot_offset = wallet_plate.size*.5
 	content.add_child(wallet_plate)
 	var wallet_coin := UiSymbol.new()
@@ -863,7 +889,7 @@ func _discard(index: int) -> void:
 func fit_notes() -> void:
 	var notes: Control = aim_label.get_parent().get_parent()
 	var limit := rope_gauge.position.x-8-notes.position.x-24
-	for note in [danger_label,goal_label,contract_label,aim_label]:
+	for note in [danger_label,goal_label,aim_label]:
 		var font: Font = note.get_theme_font("font")
 		var wide := font.get_string_size(note.text,HORIZONTAL_ALIGNMENT_LEFT,-1,note.get_theme_font_size("font_size")).x>limit
 		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if wide else TextServer.AUTOWRAP_OFF
@@ -923,17 +949,13 @@ func update_play() -> void:
 	climb_bar.value = clampf((game.sim.highest-game.START_Y)/game.summit_height,0,1)
 	climb_bar.record = clampf(record_at_start/(game.summit_height*10),0,1)
 	climb_bar.visible = game.run_mode=="summit"
-	var zone := clampi(int(maxf(0,game.sim.pos.y-game.START_Y)/20),0,5)
 	var reached_zone := clampi(int(maxf(0,game.sim.highest-game.START_Y)/20),0,5)
 	if last_zone>=0 and reached_zone>last_zone:
 		climb_bar.flash = 1.0
 		climb_bar.flash_at = float(reached_zone)/climb_bar.zones
 		pulse(height_plate)
 	last_zone = reached_zone
-	# On the expeditions the place is the act; older routes keep the zone name.
-	var act: Dictionary = game.world.act_at(game.sim.pos.y)
-	var place: String = str(act["display_name"]) if not act.is_empty() else GameModel.ZONE_NAMES[zone]
-	goal_label.text = "Тренировка · 16 зацепов" if game.run_mode=="practice" else place+" · "+game.model.next_goal()
+	goal_label.text = "Тренировка · 16 зацепов" if game.run_mode=="practice" else game.model.next_goal()
 	var lesson := tutorial_hint()
 	if not lesson.is_empty(): goal_label.text = lesson
 	aim_overlay.active = game.pressed and not game.sim.attached and not game.bolt_active and (not game.touch_gesture or game.aim_stick_valid)
@@ -1038,8 +1060,6 @@ func update_play() -> void:
 	var gold := float(game.model.profile["gold"])
 	shown_wallet = move_toward(shown_wallet,gold,maxf(30,absf(gold-shown_wallet)*5)*delta)
 	wallet_label.text = str(int(round(shown_wallet)))
-	contract_label.text = contract_text()
-	show_chip(contract_label.get_parent(),not contract_label.text.is_empty())
 	fit_notes()
 	for button_index in range(item_buttons.size()):
 		var item_button: ItemButton = item_buttons[button_index]
@@ -1054,12 +1074,7 @@ func update_play() -> void:
 	beacon_marks.queue_redraw()
 
 func contract_text() -> String:
-	if game.run_contract.is_empty(): return ""
-	var carried := false
-	for item in game.model.bag: carried = carried or str(item.get("family",""))=="contract"
-	var taken: bool = game.model.picked.has(int(game.run_contract["find"]))
-	var status := "в рюкзаке — донеси до вершины" if carried else "потерян" if taken else "на ветке акта «%s»" % str(game.run_contract["act_name"])
-	return "Контракт: груз · "+status
+	return ""
 
 func tutorial_hint() -> String:
 	var learned: Array = game.model.profile["learned_controls"]
@@ -1073,7 +1088,7 @@ func tutorial_hint() -> String:
 	if "rope" not in learned:
 		return "Держи строго вверх / вниз: после паузы канат движется" if mobile else "W / S или колесо: измени длину каната"
 	if "release" not in learned:
-		return "Отпусти палец — отцепись. Новый бросок — новое касание" if mobile else "Пробел: отпусти канат на взлёте и целься снова"
+		return "Отпусти палец — отцепись. Затем снова прицелься" if mobile else "Пробел: отпусти канат на взлёте и целься снова"
 	return ""
 
 func world_input_allowed(point: Vector2) -> bool:
@@ -1088,7 +1103,10 @@ func world_input_allowed(point: Vector2) -> bool:
 
 func set_toast(text: String) -> void:
 	toast_label.text = text
-	place_toast()
+	var has_text: bool = not text.is_empty() and game.hint_timer>0 and bool(game.model.profile.get("notifications",true))
+	toast_chip.visible = has_text
+	toast_label.visible = has_text
+	if has_text: place_toast()
 
 func show_workshop() -> void:
 	show_menu()

@@ -56,6 +56,19 @@ public final class LastHookAds extends GodotPlugin {
         if (apiKey != null) appMetricaApiKey = apiKey.trim();
     }
 
+    /** Sends a custom event after AppMetrica has been activated. */
+    @UsedByGodot public void reportEvent(String eventName) {
+        if (eventName == null || eventName.trim().isEmpty()) return;
+        ui(() -> {
+            if (!appMetricaActivated) return;
+            try {
+                AppMetrica.reportEvent(eventName.trim());
+            } catch (Throwable error) {
+                failed("appmetrica_event", error.toString());
+            }
+        });
+    }
+
     private void activateAppMetrica() {
         if (appMetricaActivated || appMetricaApiKey.isEmpty()) return;
         try {
@@ -210,13 +223,19 @@ public final class LastHookAds extends GodotPlugin {
             int widthPixels = parent.getWidth();
             if (widthPixels <= 0) widthPixels = activity.getResources().getDisplayMetrics().widthPixels;
             float density = activity.getResources().getDisplayMetrics().density;
-            BannerAdSize size = BannerAdSize.sticky(activity, Math.round(widthPixels / density));
+            if (density <= 0f) density = 1f;
+            int widthDp = Math.round(widthPixels / density);
+            int maxBannerHeightDp = widthDp > 728 ? 90 : 55;
+            BannerAdSize size = BannerAdSize.inline(activity, widthDp, maxBannerHeightDp);
             banner = new BannerAdView(activity);
             banner.setAdSize(size);
             bannerContainer = new FrameLayout(activity);
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, size.getHeightInPixels(activity));
-            params.gravity = Gravity.BOTTOM;
+            // The main-menu banner belongs to the top safe area. Keeping it
+            // outside the bottom navigation prevents a black placeholder from
+            // appearing under the menu and leaves the lower bar anchored.
+            params.gravity = Gravity.TOP;
             parent.addView(bannerContainer, params);
             // Godot's render surface can be a SurfaceView/TextureView. Keep the
             // banner in the decor overlay and explicitly raise it after every
@@ -231,7 +250,20 @@ public final class LastHookAds extends GodotPlugin {
             if (bannerWanted) bannerContainer.bringToFront();
             emitSignal("banner_height_changed", size.getHeightInPixels(activity));
             banner.setBannerAdEventListener(new BannerAdEventListener() {
-                @Override public void onAdLoaded() {}
+                @Override public void onAdLoaded() {
+                    ui(() -> {
+                        if (destroyed || banner == null || bannerContainer == null) return;
+                        int measured = banner.getHeight();
+                        if (measured > 0) {
+                            ViewGroup.LayoutParams lp = bannerContainer.getLayoutParams();
+                            if (lp != null && lp.height != measured) {
+                                lp.height = measured;
+                                bannerContainer.setLayoutParams(lp);
+                            }
+                            emitSignal("banner_height_changed", measured);
+                        }
+                    });
+                }
                 @Override public void onAdClicked() {}
                 @Override public void onImpression(ImpressionData data) {}
                 @Override public void onAdFailedToLoad(AdRequestError error) {

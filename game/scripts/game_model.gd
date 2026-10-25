@@ -46,6 +46,7 @@ var bag: Array = []
 var picked: Array = []
 var save_path: String
 var save_error: String = ""
+var save_blocked := false
 
 static func loot_name(item: Dictionary) -> String:
 	return ItemCatalog.name_of(item)
@@ -89,7 +90,14 @@ func load_profile() -> void:
 		if parser.parse(FileAccess.get_file_as_string(path)) != OK:
 			continue
 		var parsed = parser.data
-		if not parsed is Dictionary or int(parsed.get("version", 0)) not in [1,2,3,4,5,6]:
+		if not parsed is Dictionary:
+			continue
+		var stored_version := int(parsed.get("version",0))
+		if stored_version>PROFILE_VERSION:
+			save_blocked = true
+			save_error = "Сохранение создано более новой версией игры"
+			return
+		if stored_version not in [1,2,3,4,5,6]:
 			continue
 		var defaults := fresh_profile()
 		var source_version := int(parsed["version"])
@@ -259,13 +267,15 @@ func _sanitize_progress() -> void:
 	profile["reached_acts"] = clampi(int(profile["reached_acts"]),1,3)
 
 func save() -> bool:
+	if save_blocked:
+		return false
 	var absolute := ProjectSettings.globalize_path(save_path)
 	DirAccess.make_dir_recursive_absolute(absolute.get_base_dir())
 	var pending := absolute + ".tmp"
 	var file := FileAccess.open(pending, FileAccess.WRITE)
 	if file == null:
 		save_error = "Не удалось сохранить прогресс"
-		push_error(save_error + ": " + str(FileAccess.get_open_error()))
+		print("SAVE_ERROR ",save_error,": ",str(FileAccess.get_open_error()))
 		return false
 	file.store_string(JSON.stringify(profile, "\t"))
 	file.flush()
@@ -275,11 +285,20 @@ func save() -> bool:
 		if FileAccess.file_exists(absolute + ".bak"):
 			DirAccess.remove_absolute(absolute + ".bak")
 		if DirAccess.rename_absolute(absolute, absolute + ".bak") != OK:
+			DirAccess.remove_absolute(pending)
 			save_error = "Не удалось обновить сохранение"
 			return false
 	var error := DirAccess.rename_absolute(pending, absolute)
-	save_error = "" if error == OK else "Не удалось записать сохранение"
-	return error == OK
+	if error == OK:
+		save_error = ""
+		return true
+	# The old file may already be in .bak. Restore it immediately so a failed
+	# save never leaves the primary path missing until the next launch.
+	DirAccess.remove_absolute(pending)
+	if not FileAccess.file_exists(absolute) and FileAccess.file_exists(absolute + ".bak"):
+		DirAccess.rename_absolute(absolute + ".bak",absolute)
+	save_error = "Не удалось записать сохранение"
+	return false
 
 # --- Upgrade tracks -----------------------------------------------------------------
 

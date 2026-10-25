@@ -5,13 +5,29 @@ extends RefCounted
 # loot system already stores ({"id","tier","kind","value"}) plus the find's
 # "rare" flag, so pickup, the bag and run results stay untouched.
 
-const TIER_COLORS := [Color("e7b347"),Color("e8913f"),Color("e9bf4f"),Color("8fd8ee"),Color("a98fdc"),Color("f3d478")]
+const TIER_COLORS := ItemCatalog.VISUAL_RARITY_COLORS
+
+class LootIconCanvas extends Control:
+	var item: Dictionary = {}
+	var time := 0.0
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		queue_redraw()
+	func _process(delta: float) -> void:
+		time += delta
+		queue_redraw()
+	func _draw() -> void:
+		if not item.is_empty():
+			LootIcon.draw(self,item,size*.5,minf(size.x,size.y)*.78,time)
 
 static func kind_of(item: Dictionary) -> String:
 	var kind := str(item.get("kind",""))
 	if kind.is_empty():
 		kind = ["coin","amber","relic","crystal","idol","star"][clampi(int(item.get("tier",0)),0,5)]
 	return kind
+
+static func rarity_color(item: Dictionary) -> Color:
+	return ItemCatalog.visual_color(item)
 
 static func build(world: MountainWorld, find: Dictionary, holder: Node3D, quality: String, wall_local_z: float) -> void:
 	var item: Dictionary = find["item"]
@@ -23,21 +39,45 @@ static func build(world: MountainWorld, find: Dictionary, holder: Node3D, qualit
 	# shade only: no shelf of its own, so loot never reads as a platform.
 	# Older mountains keep their pedestals.
 	_pedestal(world,holder,wall_local_z,int(item.get("id",0)),shadows,kind,quality)
-	match kind:
-		"coin": _coin(world,holder,shadows)
-		"amber": _gem(world,holder,Color("e8913f"),Color("ffd28a"),shadows)
-		"crown": _crown(world,holder,shadows)
-		"chalice": _chalice(world,holder,shadows)
-		"idol": _idol(world,holder,shadows)
-		"star", "crystal": _crystal(world,holder,Color("8fd8ee") if kind=="crystal" else Color("cfe9ff"),shadows)
-		"material":
-			var tint: Color = LootIcon.MATERIAL_COLORS.get(str(item.get("set_id","")),Color("c9a46a"))
-			_gem(world,holder,tint.darkened(.2),tint.lightened(.3),shadows)
-		_: _relic(world,holder,shadows)
+	if world.visuals!=null and world.visuals.finds_without_pedestal():
+		_build_shared_icon(item,holder)
+	else:
+		match kind:
+			"coin": _coin(world,holder,shadows)
+			"amber": _gem(world,holder,Color("e8913f"),Color("ffd28a"),shadows)
+			"crown": _crown(world,holder,shadows)
+			"chalice": _chalice(world,holder,shadows)
+			"idol": _idol(world,holder,shadows)
+			"star", "crystal": _crystal(world,holder,Color("8fd8ee") if kind=="crystal" else Color("cfe9ff"),shadows)
+			"material":
+				var tint: Color = LootIcon.MATERIAL_COLORS.get(str(item.get("set_id","")),Color("c9a46a"))
+				_gem(world,holder,tint.darkened(.2),tint.lightened(.3),shadows)
+			_: _relic(world,holder,shadows)
 	if quality!="battery":
 		_sparkle(world,holder,Vector3(.20,.20,.34),.30 if not rare else .42,float(int(item.get("id",0))%7)*.37)
 	if rare:
-		_halo(world,holder,TIER_COLORS[tier].lightened(.3),.95 if quality!="battery" else .7)
+		_halo(world,holder,rarity_color(item).lightened(.3),.95 if quality!="battery" else .7)
+
+static func _build_shared_icon(item: Dictionary, holder: Node3D) -> void:
+	var viewport := SubViewport.new()
+	viewport.name = "Единая модель сокровища"
+	viewport.size = Vector2i(96,96)
+	viewport.transparent_bg = true
+	viewport.handle_input_locally = false
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	holder.add_child(viewport)
+	var canvas := LootIconCanvas.new()
+	canvas.item = item.duplicate(true)
+	canvas.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	viewport.add_child(canvas)
+	var sprite := Sprite3D.new()
+	sprite.name = "Модель сокровища"
+	sprite.texture = viewport.get_texture()
+	sprite.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	sprite.pixel_size = .0065
+	sprite.position = Vector3(0,0,.18)
+	sprite.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	holder.add_child(sprite)
 
 static func _metal(world: MountainWorld, key: String, color: Color, glow: float = .18) -> StandardMaterial3D:
 	var material := world.mat("loot_v2_"+key,color,false)

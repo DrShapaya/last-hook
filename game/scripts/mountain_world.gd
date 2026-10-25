@@ -344,7 +344,7 @@ func _highlight_exit(id: int, on: bool) -> void:
 		marker.add_child(ring)
 	if marker!=null: marker.visible = on
 
-const TIMER_SHADER := "shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled; uniform float remaining = 1.0; uniform vec4 ring : source_color = vec4(1.0,.62,.32,1.0); uniform vec4 face : source_color = vec4(.12,.10,.09,1.0); uniform vec4 rim : source_color = vec4(.97,.93,.85,1.0); void fragment(){ vec2 p=UV*2.0-1.0; p.y=-p.y; float d=length(p); if(d>1.0) discard; float angle=fract(atan(p.x,p.y)/6.2831853+1.0); vec3 color=face.rgb; if(d>.64) color=angle<=remaining?ring.rgb:mix(face.rgb,ring.rgb,.3); if(d>.9) color=rim.rgb; ALBEDO=color; }"
+const TIMER_SHADER := "shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled; uniform float remaining = 1.0; uniform vec4 ring : source_color = vec4(1.0,.62,.32,1.0); uniform vec4 face : source_color = vec4(.12,.10,.09,1.0); uniform vec4 rim : source_color = vec4(.97,.93,.85,1.0); void fragment(){ vec2 p=UV*2.0-1.0; p.y=-p.y; float d=length(p); if(d>1.0) discard; float angle=fract(atan(p.x,p.y)/6.2831853+1.0); vec3 color=mix(face.rgb,face.rgb*1.12,smoothstep(.08,.58,d)); if(d>.58 && d<=.64) color=mix(face.rgb,ring.rgb,.35); if(d>.64) color=angle<=remaining?ring.rgb:mix(face.rgb,ring.rgb,.3); if(d>.9) color=rim.rgb; ALBEDO=color; }"
 
 func _add_timer_dial(object: Dictionary) -> void:
 	# The fragile grip carries its own clock: a full dial at rest that drains
@@ -359,7 +359,7 @@ func _add_timer_dial(object: Dictionary) -> void:
 	var dial := MeshInstance3D.new()
 	dial.name = "Таймер опоры"
 	var quad := QuadMesh.new()
-	var size := float(object.get("dial_size",.56))
+	var size := clampf(float(object.get("dial_size",.56))*1.15,.42,.72)
 	quad.size = Vector2(size,size)
 	dial.mesh = quad
 	dial.material_override = material
@@ -371,13 +371,14 @@ func _add_timer_dial(object: Dictionary) -> void:
 	var label := Label3D.new()
 	label.name = "Секунды опоры"
 	label.text = _timer_text(GripSpec.ROOT_SECONDS)
-	label.font_size = 56
-	label.outline_size = 0
+	label.font_size = 50
+	label.outline_size = 12
+	label.outline_modulate = style["face"]
 	label.pixel_size = .0042*size/.56
-	label.modulate = Color("fff4e2")
+	label.modulate = style["ring"]
 	label.shaded = false
 	label.double_sided = true
-	label.position = face+Vector3(0,0,.02)
+	label.position = face+Vector3(0,0,.024)
 	holder.add_child(label)
 	object["timer_dial"] = {"material":material,"label":label,"shown":-1.0}
 
@@ -561,12 +562,9 @@ func set_loot_prices_visible(show_prices: bool) -> void:
 			find["price_visual"].visible = show_prices
 
 func _build_sky() -> void:
-	# A flat two-colour gradient on every platform. The volumetric cloud
-	# shader is no longer used in game: a few Android GPUs abort while
-	# compiling its nested noise loops.
 	sky_backdrop = ProceduralSkyBackdrop.new()
 	add_child(sky_backdrop)
-	sky_backdrop.setup(seed_value)
+	sky_backdrop.setup(seed_value, false, location)
 	sky_backdrop.set_view(camera_center)
 
 func _release_chunk(key: int) -> void:
@@ -582,6 +580,11 @@ func _release_chunk(key: int) -> void:
 	remove_child(chunk)
 	chunk.queue_free()
 	chunks.erase(key)
+	if not layout.finite and key < int(floor((camera_center.y-32.0)/24.0)):
+		var min_y := float((key+1)*24)
+		finds = finds.filter(func(f: Dictionary) -> bool: return f["pos"].y>=min_y)
+		obstacles = obstacles.filter(func(o: Dictionary) -> bool: return o["pos"].y>=min_y)
+		ledges = ledges.filter(func(l: Dictionary) -> bool: return float(l.get("top",0.0))>=min_y)
 
 func update_visibility(center_y: float, center_x: float = 0, build_budget: int = -1) -> void:
 	camera_center = Vector2(center_x,center_y)
@@ -795,6 +798,12 @@ func restore_hazards(collapsed: Array) -> void:
 		if int(id)<0 or int(id)>=layout.hazards.size(): continue
 		var hazard: Dictionary = layout.hazards[int(id)]
 		if hazard["kind"]!="collapse": continue
+		var reveal := anchor_by_id(int(hazard.get("reveal",-1)))
+		if not reveal.is_empty():
+			reveal["broken"] = false
+			reveal["hidden"] = false
+			GripSpec.restore(reveal,false)
+			if is_instance_valid(reveal.get("visual")): reveal["visual"].visible = true
 		ledges[int(hazard["ledge"])]["collapsed"] = true
 		if hazard_visuals!=null: hazard_visuals.collapse(hazard,false)
 

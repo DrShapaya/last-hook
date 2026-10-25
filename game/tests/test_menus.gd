@@ -53,6 +53,19 @@ func validate_screen(game, area: Rect2, description: String) -> void:
 	check(controls_inside(screen,area),description+" keeps every control on screen")
 	check(buttons_do_not_overlap(screen),description+" keeps actions separate")
 
+func validate_navigation(game, dimensions: Vector2i) -> void:
+	var lobby := game.hud.content.get_child(0) as LobbyView
+	var nav := lobby.navigation_bar
+	var viewport := Rect2(Vector2.ZERO,game.get_viewport().get_visible_rect().size).grow(1)
+	check(nav!=null and nav.get_global_rect().end.y>=viewport.size.y*.72 and nav.get_global_rect().end.y<=viewport.end.y,
+		"section navigation stays anchored to the lower safe area at %s" % dimensions)
+	check(nav!=null and nav.get_global_rect().size.x>=480,
+		"section navigation keeps its full-width hit area at %s" % dimensions)
+	if nav!=null:
+		for tab in lobby.tab_buttons:
+			check(nav.get_global_rect().encloses(tab.get_global_rect()),
+				"section button stays inside navigation bar at %s" % dimensions)
+
 func run_tests() -> void:
 	var directory := OS.get_environment("LASTHOOK_SAVE_DIR")
 	if directory.is_empty():
@@ -78,6 +91,7 @@ func run_tests() -> void:
 			game.hud.select_menu(tab)
 			await process_frame
 			validate_screen(game,area,"%s at %s" % [tab,dimensions])
+			validate_navigation(game,dimensions)
 			if tab=="settings":
 				game.hud.touch_controls_hint = true
 				game.hud.show_menu()
@@ -88,6 +102,24 @@ func run_tests() -> void:
 					if "0,28" in label.text: has_delay = true
 				check(has_delay,"touch settings expose the vertical hold delay at %s" % dimensions)
 				game.hud.touch_controls_hint = false
+		game.hud.select_menu("expedition")
+		await process_frame
+		var route_tag_found := false
+		for label in game.hud.content.find_children("*","Label",true,false):
+			if label.text=="3 акта · ручной маршрут":
+				route_tag_found = true
+		check(not route_tag_found,"level cards omit the obsolete manual-route subtitle at %s" % dimensions)
+		var lobby := game.hud.content.get_child(0) as LobbyView
+		var card_before := lobby.scenic_frame.position
+		var nav_before := lobby.navigation_bar.position
+		var body_fixed := lobby.body_nodes.filter(func(node): return is_instance_valid(node) and node!=lobby.scenic_frame).map(func(node): return node.position)
+		lobby.begin_swipe_preview()
+		lobby.update_swipe_preview(-30)
+		check(lobby.scenic_frame.position.x==card_before.x-30 and lobby.navigation_bar.position==nav_before,
+			"level swipe previews only the scenic card at %s" % dimensions)
+		check(lobby.body_nodes.filter(func(node): return is_instance_valid(node) and node!=lobby.scenic_frame).map(func(node): return node.position)==body_fixed,
+			"level swipe keeps title, route and actions fixed at %s" % dimensions)
+		lobby.reset_swipe_preview()
 		game.start_run(false)
 		game.model.set_level(GameModel.BAG,5)
 		game.model.bag.clear()
@@ -99,6 +131,7 @@ func run_tests() -> void:
 		game.state = "revive"
 		game.hud.show_revive("Не хватило длины каната")
 		validate_screen(game,area,"rescue at %s" % dimensions)
+		check(find_button(game.hud.content,"Начать заново")!=null,"failure screen exposes a direct restart action at %s" % dimensions)
 		game.state = "result"
 		for success in [false,true]:
 			game.hud.show_result({"success":success,"first":success,"highest":1200,"height":540,"loot":900,"carried":900,"finish":1300,"diamonds":20,"total":2740,"zone_bonus":1800,"seconds":214,"shots":51,"catches":43})
@@ -128,6 +161,8 @@ func run_tests() -> void:
 	game.hud.select_menu("settings")
 	var was_enabled: bool = game.model.profile["sound"]
 	await touch_tap(find_button(game.hud.content,"Вкл" if was_enabled else "Выкл"))
+	# Settings writes are coalesced for a short debounce window.
+	await create_timer(.25).timeout
 	var reloaded := GameModel.new(game.model.save_path)
 	check(game.model.profile["sound"]!=was_enabled and reloaded.profile["sound"]==game.model.profile["sound"],"sound setting persists across reload")
 	game.hud.select_menu("settings")
@@ -165,6 +200,37 @@ func run_tests() -> void:
 	touch_event(start+Vector2(0,-100),false)
 	await process_frame
 	check(game.hud.menu_tab=="expedition","lifting outside a menu button safely cancels its touch")
+	var cached_menu_world = game.world
+	game.lobby_location = 0
+	game.cycle_location(1)
+	await process_frame
+	var route_preview: LevelPreview = null
+	for node in game.hud.content.find_children("*","Control",true,false):
+		if node is LevelPreview:
+			route_preview = node
+			break
+	check(game.world==cached_menu_world and route_preview!=null and route_preview.route_location==1,
+		"switching a menu route reuses the cached world and only updates the lightweight preview")
+	game.lobby_location = 0
+	game.hud.show_menu()
+	await process_frame
+	var preview_before_finish: bool = game.preview
+	game.preview = false
+	game.start_run(false)
+	game.show_menu()
+	await process_frame
+	var finish_run_button := find_button(game.hud.content,"Завершить забег")
+	check(finish_run_button!=null,"an unfinished run exposes a finish button in the expedition menu")
+	check(find_button(game.hud.content,"Продолжить восхождение")!=null,"an unfinished run keeps the resume action beside the finish button")
+	if finish_run_button!=null:
+		finish_run_button.pressed.emit()
+		await process_frame
+	check(game.state=="result" and game.model.profile["active"].is_empty() and not bool(game.settlement.get("success",true)),
+		"finishing an unfinished run settles it once and clears the active snapshot")
+	game.preview = preview_before_finish
+	game.show_menu()
+	await process_frame
+	check(find_button(game.hud.content,"Завершить забег")==null,"a completed run no longer shows the finish button")
 	var training := find_button(game.hud.content,"Тренировка")
 	await touch_tap(training)
 	check(game.run_mode=="practice" and game.state=="play","home training shortcut still opens an isolated practice run")

@@ -93,6 +93,9 @@ var camera_view_offset := 0.0
 var snapshot_timer := 0.0
 const SNAPSHOT_PERIOD := 3.0
 const COIN_SAVE_DELAY := .5
+var profile_save_pending := false
+var profile_save_timer := 0.0
+const PROFILE_SAVE_DEBOUNCE := .2
 var hint_timer := 0.0
 var hint := ""
 var hint_context := ""
@@ -177,6 +180,8 @@ func _ready() -> void:
 	hud = GameHud.new()
 	add_child(hud)
 	hud.setup(self)
+	if model.save_blocked:
+		toast(model.save_error,6.0,"save")
 	_create_world(58273,0,36,0,true)
 	sim.pos = Vector2(-.7,8.9)
 	sim.anchor = world.anchor_by_id(world.main_route[2])["pos"]
@@ -429,9 +434,8 @@ func _apply_shadow_preset(preset: String) -> void:
 		"battery":
 			sun_light.shadow_enabled = false
 			sun_light.shadow_opacity = .28
-			# The compatibility renderer adds shadowed directional light in a
-			# separate pass, which reads brighter; match exposure without it.
-			sun_light.light_energy = SUN_ENERGY*3.2
+			# Without shadows, unshadowed illumination covers all surfaces; keep exposure natural.
+			sun_light.light_energy = SUN_ENERGY*1.1
 			sun_light.directional_shadow_max_distance = 40
 			RenderingServer.directional_shadow_atlas_set_size(1024,true)
 			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_HARD)
@@ -463,7 +467,7 @@ func _apply_graphics_quality(quality: String, save: bool = true) -> void:
 	if is_instance_valid(explorer): explorer.set_visual_quality(selected)
 	if model!=null:
 		model.profile["graphics_quality"] = selected
-		if save and not preview: model.save()
+		if save and not preview: request_profile_save()
 
 func set_graphics_quality(quality: String) -> void:
 	_apply_graphics_quality(quality)
@@ -487,6 +491,16 @@ func _create_world(seed_number: int, location_number: int, height: float, saved_
 		explorer.setup(world,model.hook_tips())
 		explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
 		explorer.set_walk_speed(WALK_SPEED)
+
+func ensure_menu_explorer() -> void:
+	if is_instance_valid(explorer) or not is_instance_valid(world):
+		return
+	explorer = ExplorerView.new()
+	add_child(explorer)
+	explorer.setup(world,model.hook_tips())
+	explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
+	explorer.set_walk_speed(WALK_SPEED)
+	explorer.visible = false
 
 func start_run(endless: bool) -> void:
 	if ads.fullscreen: return
@@ -535,6 +549,7 @@ func start_run(endless: bool) -> void:
 	camera_dip = 0.0
 	_position_camera()
 	state = "play"
+	ads.report_event("run_started_%s" % run_mode)
 	lobby_location = selected_location
 	current_act = int(world.act_at(sim.pos.y).get("index",-1))
 	hazard_cooldown = 0.0
@@ -1047,7 +1062,20 @@ func zoom_view_offset() -> float:
 
 func set_camera_zoom(zoom: float) -> void:
 	model.profile["camera_zoom"] = model.snap_camera_zoom(zoom)
-	if not preview: model.save()
+	if not preview: request_profile_save()
+
+func request_profile_save() -> void:
+	if model==null or model.save_blocked:
+		return
+	profile_save_pending = true
+	profile_save_timer = PROFILE_SAVE_DEBOUNCE
+
+func flush_profile_save() -> bool:
+	if not profile_save_pending:
+		return true
+	profile_save_pending = false
+	profile_save_timer = 0.0
+	return model.save()
 
 func screen_bottom_y() -> float:
 	# The danger edge follows the undipped, unzoomed framing: lowering the view
@@ -1413,12 +1441,14 @@ func _update_return(dt: float) -> void:
 func _collect_finds() -> void:
 	var coin_reach := .54+model.coin_radius()
 	var item_reach := .54+model.item_radius()
+	var max_reach := maxf(coin_reach,item_reach)
 	var priority := model.magnet_priority()
 	var candidates: Array[Dictionary] = []
 	for find in world.finds:
 		if bool(find.get("picked",false)): continue
+		if absf(find["pos"].y-sim.pos.y)>max_reach: continue
 		var reach := coin_reach if ItemCatalog.is_coin(find["item"]) else item_reach
-		if sim.pos.distance_to(find["pos"])>reach: continue
+		if sim.pos.distance_squared_to(find["pos"])>reach*reach: continue
 		if world.rope_blocked(sim.pos,find["pos"]): continue
 		candidates.append(find)
 	# Direct contact is deliberate. Among magnetic finds the chosen family
@@ -1644,6 +1674,11 @@ func fail_run(reason: String) -> void:
 	if sim.attached: release_hook(false,"fall")
 	_end_item_effect()
 	close_swap(false)
+	# A start-of-run controls toast must never cover the revive/result modal.
+	if hint_context=="controls":
+		hint = ""
+		hint_context = ""
+		hint_timer = 0.0
 	if _tape_rescue(): return
 	var offer_revive := not revive_used and run_mode!="practice" and revive_available()
 	state = "revive" if offer_revive else "result"
@@ -1768,6 +1803,7 @@ func finish_run(success: bool) -> void:
 	if run_id.is_empty() or ads.fullscreen:
 		return
 	state = "result"
+	ads.report_event("run_finished_%s" % ("success" if success else "failed"))
 	_reset_input()
 	bolt_active = false
 	bolt_returning = false
@@ -1799,6 +1835,13 @@ func finish_run(success: bool) -> void:
 	if success and run_mode=="summit" and not preview:
 		ads.show_level_complete()
 
+func restart_failed_run() -> void:
+	# The failure screen can start a fresh attempt directly. Settle the failed
+	# ledger first so the old active snapshot is cleared without requiring the
+	# player to visit the reward screen.
+	if state=="revive" and not run_id.is_empty(): finish_run(false)
+	if state=="result" or state=="revive": start_run(false)
+
 func pause_run() -> void:
 	if state=="play":
 		state = "pause"
@@ -1821,6 +1864,7 @@ func show_menu() -> void:
 		practice_return_model = null
 		selected_location = int(model.profile.get("selected_location",0))
 	state = "menu"
+	ads.report_event("menu_opened")
 	lobby_location = selected_location
 	_reset_input()
 	if model.profile["active"].is_empty():
@@ -1843,6 +1887,7 @@ func go_back() -> void:
 	match state:
 		"play": pause_run()
 		"pause": unpause()
+		"revive": show_menu()
 		"result": show_menu()
 		"menu":
 			if hud.menu_tab!="expedition":
@@ -1850,6 +1895,7 @@ func go_back() -> void:
 				hud.menu_focus = "tab"
 				hud.select_menu("expedition")
 			elif not preview:
+				flush_profile_save()
 				save_snapshot()
 				get_tree().quit()
 
@@ -1867,16 +1913,14 @@ func cycle_location(direction: int) -> bool:
 		return false
 	hud.menu_slide = direction
 	lobby_location = next
-	_create_world(58273,lobby_location,36,0,true)
 	if model.profile["locations"].has(lobby_location):
 		selected_location = lobby_location
 		model.profile["selected_location"] = selected_location
 		if not preview:
 			model.save()
-	if hud.layout_mode=="menu" and is_instance_valid(hud.lobby_view) and hud.lobby_view.refresh_location_card(direction):
-		hud.menu_slide = 0
-	else:
-		hud.show_menu()
+	# Rebuild the expedition body with the new route state. Updating only the
+	# scenic card leaves the old start button enabled for a newly locked route.
+	hud.show_menu()
 	if is_instance_valid(world): world.visible = false
 	if is_instance_valid(explorer): explorer.visible = false
 	return true
@@ -1894,6 +1938,18 @@ func lobby_action() -> void:
 			model.profile["selected_location"] = selected_location
 			model.save()
 		hud.show_menu()
+
+func finish_saved_run() -> void:
+	if ads.fullscreen or model.profile["active"].is_empty():
+		return
+	# The menu can be shown after a restart, so first reconstruct the saved
+	# runtime state before settling it. A stale generator is handled by
+	# resume_run() and is settled exactly once there.
+	if state=="menu":
+		resume_run()
+	if state in ["play","revive"] and not run_id.is_empty():
+		failure_reason = "Завершено из меню"
+		finish_run(false)
 
 func save_snapshot() -> void:
 	if preview or run_id.is_empty() or state not in ["play","pause","revive"]:
@@ -1930,15 +1986,19 @@ func _notification(what: int) -> void:
 	if model==null:
 		return
 	if what==NOTIFICATION_WM_CLOSE_REQUEST:
+		flush_profile_save()
 		save_snapshot()
 		get_tree().quit()
 	elif what==NOTIFICATION_WM_GO_BACK_REQUEST:
 		go_back()
 	elif what==NOTIFICATION_APPLICATION_PAUSED:
 		pause_run()
+		flush_profile_save()
 		save_snapshot()
-	elif what==NOTIFICATION_WM_WINDOW_FOCUS_OUT and state=="play" and not preview:
-		pause_run()
+	elif what==NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		flush_profile_save()
+		if state=="play" and not preview:
+			pause_run()
 
 func _move_camera(delta: float) -> void:
 	if state in ["pause","revive","result"]:
@@ -1984,6 +2044,10 @@ func _move_camera(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	if profile_save_pending:
+		profile_save_timer -= delta
+		if profile_save_timer<=0.0:
+			flush_profile_save()
 	var fade := maxf(.02,float(model.balance.get("slowmo",{}).get("fade_seconds",.12)))
 	focus_blend = move_toward(focus_blend,1.0 if state in ["play","pause"] and focus_active() else 0.0,delta/fade) if state!="pause" else focus_blend
 	if state not in ["pause","revive","result"]:
@@ -1998,25 +2062,26 @@ func _process(delta: float) -> void:
 			save_snapshot()
 	_move_camera(delta)
 	_refresh_aim()
-	world.update_visibility(camera_y,camera_x,1)
-	if is_instance_valid(world.sky_backdrop): world.sky_backdrop.advance(animation_time,delta)
-	# Prices show near the hero and along the aim, unless the player asked
-	# for them always. Only the labels change; pickup rules are untouched.
-	var aim_at := aim_point if pressed and not sim.attached and not bolt_active else Vector2.INF
-	var prices_playing := state=="play"
-	var prices_always := str(model.profile.get("loot_prices","near"))=="always"
-	loot_price_refresh_timer -= delta
-	var price_input_changed := (prices_playing!=last_loot_price_playing
-		or prices_always!=last_loot_price_always
-		or sim.pos.distance_squared_to(last_loot_price_hero)>.16
-		or aim_at.distance_squared_to(last_loot_price_aim)>.16)
-	if loot_price_refresh_timer<=0.0 or price_input_changed:
-		world.update_loot_prices(prices_playing,prices_always,sim.pos,aim_at)
-		loot_price_refresh_timer = .08
-		last_loot_price_hero = sim.pos
-		last_loot_price_aim = aim_at
-		last_loot_price_playing = prices_playing
-		last_loot_price_always = prices_always
+	if is_instance_valid(world):
+		world.update_visibility(camera_y,camera_x,1)
+		if is_instance_valid(world.sky_backdrop): world.sky_backdrop.advance(animation_time,delta)
+		# Prices show near the hero and along the aim, unless the player asked
+		# for them always. Only the labels change; pickup rules are untouched.
+		var aim_at := aim_point if pressed and not sim.attached and not bolt_active else Vector2.INF
+		var prices_playing := state=="play"
+		var prices_always := str(model.profile.get("loot_prices","near"))=="always"
+		loot_price_refresh_timer -= delta
+		var price_input_changed := (prices_playing!=last_loot_price_playing
+			or prices_always!=last_loot_price_always
+			or sim.pos.distance_squared_to(last_loot_price_hero)>.16
+			or aim_at.distance_squared_to(last_loot_price_aim)>.16)
+		if loot_price_refresh_timer<=0.0 or price_input_changed:
+			world.update_loot_prices(prices_playing,prices_always,sim.pos,aim_at)
+			loot_price_refresh_timer = .08
+			last_loot_price_hero = sim.pos
+			last_loot_price_aim = aim_at
+			last_loot_price_playing = prices_playing
+			last_loot_price_always = prices_always
 	var target := sim.anchor if sim.attached else bolt_pos
 	var held_grip := world.anchor_by_id(anchor_id) if sim.attached and anchor_id>=0 else {}
 	var fragile := not held_grip.is_empty() and GripSpec.timed(held_grip)

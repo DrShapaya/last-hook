@@ -56,6 +56,7 @@ func attach_backend(native: Object, use_demo_units: bool) -> void:
 func _on_initialized() -> void:
 	if initialized: return
 	initialized = true
+	_report_event("app_initialized")
 	preload_fullscreen()
 	if _menu: _load_banner()
 	availability_changed.emit()
@@ -93,6 +94,7 @@ func request_rewarded() -> bool:
 		preload_fullscreen()
 		return false
 	rewarded_ready = false
+	_report_event("rewarded_requested")
 	_reward_earned = false
 	_showing = "rewarded"
 	_set_fullscreen(true)
@@ -105,6 +107,7 @@ func show_level_complete() -> bool:
 		preload_fullscreen()
 		return false
 	interstitial_ready = false
+	_report_event("interstitial_requested")
 	_showing = "interstitial"
 	_set_fullscreen(true)
 	backend.call("showInterstitial")
@@ -128,6 +131,7 @@ func _on_interstitial_loaded() -> void:
 func _on_reward_earned() -> void:
 	if _showing=="rewarded" and fullscreen and not _reward_earned:
 		_reward_earned = true
+		_report_event("rewarded_earned")
 		reward_verified.emit()
 
 func _on_rewarded_closed() -> void:
@@ -148,6 +152,13 @@ func _on_interstitial_closed() -> void:
 func _on_banner_height(height: int) -> void:
 	banner_height = maxi(0,height)
 	banner_layout_changed.emit()
+
+func _report_event(event_name: String) -> void:
+	if is_instance_valid(backend) and backend.has_method("reportEvent"):
+		backend.call("reportEvent",event_name)
+
+func report_event(event_name: String) -> void:
+	_report_event(event_name)
 
 func _on_failed(kind: String, message: String) -> void:
 	print("Yandex Ads / %s: %s" % [kind,message])

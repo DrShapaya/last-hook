@@ -613,6 +613,16 @@ func _palette(profile: GripBiomeProfile, height: float, mass: RockMassSpec) -> D
 	var facets: Array = []
 	for color in rock["facet_palette"]: facets.append(base.lerp(color,.5))
 	var under: Color = base.lerp(rock["underside_tint"],.42).darkened(.16)
+	if mass.role=="ledge_shelf":
+		# Rest platforms are a separate material family: warm matte wood with
+		# enough facet variation to keep their thickness readable.
+		base = Color("654635").lerp(profile.rock_palette["cool"],.08)
+		base = base.lightened((mass.tone-.5)*.10) if mass.tone>.5 else base.darkened((.5-mass.tone)*.10)
+		facets = [base.lightened(.12),base.darkened(.10),base.lightened(.03)]
+		under = base.darkened(.32)
+		return {"base":base,"facets":facets,
+			"top":base.lightened(.24),"side":base.darkened(.10),
+			"under":under,"inner":under.darkened(.12),"wood":true}
 	return {"base":base,"facets":facets,
 		"top":base.lerp(rock["top_light_tint"],.26).lightened(.06),
 		"side":base.lerp(rock["underside_tint"],.12).darkened(.04),
@@ -687,7 +697,13 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 
 func _decor_blocked(point: Vector2, reach: float = 0.0) -> bool:
 	for anchor in layout.nearby_ids(point.y-2.0,point.y+2.0):
-		if layout.anchors[anchor]["pos"].distance_to(point)<.95+reach: return true
+		var grip: Dictionary = layout.anchors[anchor]
+		var grip_size: Vector2 = grip.get("dimensions",Vector2(1.6,.65))
+		# Keep a clear halo around the whole visible outcrop, not just its
+		# gameplay centre. This stops plants, roots and props reading as extra
+		# hookable platforms.
+		var grip_clearance := maxf(2.0,maxf(grip_size.x,grip_size.y)*.5+.82)
+		if grip["pos"].distance_to(point)<grip_clearance+reach: return true
 	for obstacle in layout.obstacles:
 		if obstacle["pos"].distance_to(point)<1.15+maxf(obstacle["dimensions"].x,obstacle["dimensions"].y)*.5+reach: return true
 	for find in layout.finds:

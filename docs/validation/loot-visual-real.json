@@ -1,0 +1,15 @@
+{
+  "type": "real_window_capture",
+  "renderer": "gl_compatibility_opengl3",
+  "resolution": "720x1112",
+  "screens": [
+    "artifacts/real-captures/inventory-shared-final.png",
+    "artifacts/real-captures/pause-bag-shared.png"
+  ],
+  "assertions": [
+    "The map uses the same LootIcon drawing contract as the backpack.",
+    "The pickup/map item silhouette matches the backpack item silhouette.",
+    "Rarity accents come from ItemCatalog.visual_color()."
+  ],
+  "automated_visual_contract_checks": 83
+}

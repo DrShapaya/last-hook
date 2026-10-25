@@ -19,6 +19,7 @@ class FakeAds extends RefCounted:
 	var banners_loaded := 0
 	var banner_visible := false
 	var reward_id := ""
+	var reported_events: Array[String] = []
 	func initialize() -> void: initialized.emit()
 	func loadRewarded(id: String) -> void:
 		reward_loads += 1
@@ -28,6 +29,7 @@ class FakeAds extends RefCounted:
 	func showRewarded() -> void: rewards_shown += 1
 	func showInterstitial() -> void: interstitials_shown += 1
 	func setBannerVisible(visible: bool) -> void: banner_visible = visible
+	func reportEvent(event_name: String) -> void: reported_events.append(event_name)
 
 func _initialize() -> void:
 	call_deferred("run_tests")
@@ -70,22 +72,28 @@ func run_tests() -> void:
 	var native := FakeAds.new()
 	game.ads.attach_backend(native,true)
 	await flush()
+	check("app_initialized" in native.reported_events,"AppMetrica receives the SDK initialization event")
 	check(native.reward_id=="demo-rewarded-yandex","debug build requests demo inventory")
 	check(native.reward_loads==1 and native.interstitial_loads==1,"SDK initialization preloads each fullscreen format once")
 	game.ads.preload_fullscreen()
 	check(native.reward_loads==1,"concurrent preload requests are deduplicated")
 	game.show_menu()
 	await flush()
+	check("menu_opened" in native.reported_events,"AppMetrica receives menu events")
 	check(native.banner_visible and native.banners_loaded==1,"banner loads and is visible in the main menu")
-	# Reserve a real physical-pixel strip; all menu controls must remain above it.
+	# The native banner is docked at the top; menu controls must start below it
+	# while the section bar stays anchored to the bottom.
 	for dimensions in [Vector2i(432,960),Vector2i(540,960),Vector2i(1280,800)]:
 		root.size = dimensions
 		native.banner_height_changed.emit(110)
 		await flush()
+		var first := INF
 		var lowest := 0.0
 		for button in game.hud.content.find_children("*","Button",true,false):
+			first = minf(first,button.get_global_rect().position.y)
 			lowest = maxf(lowest,button.get_global_rect().end.y)
-		check(lowest<=game.get_viewport().get_visible_rect().size.y-110,"menu controls stay above the banner at %s" % dimensions)
+		check(first>=110,"menu controls start below the top banner at %s" % dimensions)
+		check(lowest<=game.get_viewport().get_visible_rect().size.y+1,"menu controls stay inside the viewport at %s" % dimensions)
 	rescue_fixture(game)
 	check(not native.banner_visible,"banner hides before gameplay and modal screens")
 	var test_buttons := 0

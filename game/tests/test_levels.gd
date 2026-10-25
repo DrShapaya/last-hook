@@ -403,7 +403,7 @@ func run_tests() -> void:
 	check(snapshot.get("collapsed_hazards",[]).has(bridge["id"]),"the collapse is saved with the attempt")
 	game.model.profile["active"] = snapshot
 	game.resume_run()
-	check(game.world.ledges[int(bridge["ledge"])].get("collapsed",false) and not game.world.anchor_by_id(int(bridge["reveal"]))["broken"],"a resumed attempt keeps the bridge down and its exit open")
+	check(game.world.ledges[int(bridge["ledge"])].get("collapsed",false) and not game.world.anchor_by_id(int(bridge["reveal"]))["broken"] and not game.world.anchor_by_id(int(bridge["reveal"]))["hidden"],"a resumed attempt keeps the bridge down and its exit open")
 	game.model.profile["active"] = {}
 	# Slow motion slows the act hazards with the hero: their clock runs on the
 	# scaled step while the run timer stays real time, and the clock is saved.

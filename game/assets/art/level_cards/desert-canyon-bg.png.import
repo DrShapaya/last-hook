@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dcxrrd0p01jgo"
-path="res://.godot/imported/canyon-v2.png-a05423dacfb8b61a7ae4f7aa2e3262f9.ctex"
+uid="uid://clavo0o27jwuh"
+path="res://.godot/imported/desert-canyon-bg.png-1d577d3ff28c9ec6835202e216f359ce.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/art/canyon-v2.png"
-dest_files=["res://.godot/imported/canyon-v2.png-a05423dacfb8b61a7ae4f7aa2e3262f9.ctex"]
+source_file="res://assets/art/level_cards/desert-canyon-bg.png"
+dest_files=["res://.godot/imported/desert-canyon-bg.png-1d577d3ff28c9ec6835202e216f359ce.ctex"]
 
 [params]
 

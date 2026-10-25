@@ -176,6 +176,21 @@ func run_tests() -> void:
 	var migrated_again := GameModel.new(legacy_path)
 	check(migrated_again.profile["upgrade_levels"].size()==8 and migrated_again.level(6)==4 and migrated_again.level(GameModel.SLOWMO)==1 and migrated_again.profile["gold"]==migrated.profile["gold"],"migration is idempotent across subsequent loads")
 	check(migrated_again.level(2)==2,"a purchased legacy grip retains a useful two-prong hook across reloads")
+	var future_path := directory.path_join("future-profile.json")
+	var future_data := GameModel.fresh_profile()
+	future_data["version"] = GameModel.PROFILE_VERSION+1
+	future_data["gold"] = 98765
+	var future_file := FileAccess.open(future_path,FileAccess.WRITE)
+	future_file.store_string(JSON.stringify(future_data))
+	future_file.close()
+	var future_model := GameModel.new(future_path)
+	check(future_model.save_blocked and not future_model.save() and future_model.save_error!="","a profile from a newer version is read-only and reports a migration warning")
+	check(JSON.parse_string(FileAccess.get_file_as_string(future_path))["gold"]==98765,"a newer profile is never overwritten by the older build")
+	var blocked_path := directory.path_join("blocked-profile.json")
+	DirAccess.make_dir_recursive_absolute(blocked_path+".tmp")
+	var blocked_model := GameModel.new(blocked_path)
+	check(not blocked_model.save() and not blocked_model.save_error.is_empty(),"a failed save reports an error instead of claiming success")
+	DirAccess.remove_absolute(blocked_path+".tmp")
 	legacy["version"] = 2
 	legacy["levels"] = [6,6,6,6,6,6,6]
 	legacy_file = FileAccess.open(legacy_path,FileAccess.WRITE)

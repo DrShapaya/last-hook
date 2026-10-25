@@ -46,11 +46,11 @@ const HAZARDS := {
 }
 
 const LEVELS := [
-	{"id":"green_peak","location_slot":0,"display_name":"Живой хребет","height_units":120,
+	{"id":"green_peak","location_slot":0,"display_name":"Стандартная гора","height_units":120,
 		"unlock_rule":{},"acts":["root_wall","wind_traverse","old_post"]},
-	{"id":"stone_spires","location_slot":1,"display_name":"Солнечный разлом","height_units":140,
+	{"id":"stone_spires","location_slot":1,"display_name":"Пустынный каньон","height_units":140,
 		"unlock_rule":{"cleared":0,"gold":2500},"acts":["dry_canyon","buried_caravan","storm_observatory"]},
-	{"id":"sky_city","location_slot":2,"display_name":"Ледяная корона","height_units":160,
+	{"id":"sky_city","location_slot":2,"display_name":"Снежная вершина","height_units":160,
 		"unlock_rule":{"cleared":1,"tokens":5,"diamonds":15},"acts":["white_saddle","blue_crevasse","shattered_crown"]},
 ]
 

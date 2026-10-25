@@ -374,11 +374,19 @@ func _draw_effects(flight: Dictionary, flying: bool, time: float) -> void:
 	impact_mesh.mesh = surface.commit()
 
 static func rope_tube(points: PackedVector3Array, radius: float) -> ArrayMesh:
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var distance := 0.0
+	var count := points.size() - 1
+	if count <= 0: return null
 	var sides := 8
-	for index in range(points.size()-1):
+	var total_verts := count * sides * 6
+	var vertices := PackedVector3Array()
+	vertices.resize(total_verts)
+	var normals := PackedVector3Array()
+	normals.resize(total_verts)
+	var uvs := PackedVector2Array()
+	uvs.resize(total_verts)
+	var v_idx := 0
+	var distance := 0.0
+	for index in range(count):
 		var a := points[index]
 		var b := points[index+1]
 		var segment_length := a.distance_to(b)
@@ -390,11 +398,21 @@ static func rope_tube(points: PackedVector3Array, radius: float) -> ArrayMesh:
 			for corner in [Vector2i(0,0),Vector2i(1,0),Vector2i(1,1),Vector2i(0,0),Vector2i(1,1),Vector2i(0,1)]:
 				var angle: float = TAU*(side+corner.y)/sides
 				var normal := (axis_a if corner.x==0 else axis_b)*cos(angle)+Vector3.BACK*sin(angle)
-				surface.set_normal(normal)
-				surface.set_uv(Vector2(float(side+corner.y)/sides,(distance+segment_length*corner.x)/.45))
-				surface.add_vertex((a if corner.x==0 else b)+normal*radius)
+				var vert := (a if corner.x==0 else b)+normal*radius
+				var uv := Vector2(float(side+corner.y)/sides,(distance+segment_length*corner.x)/.45)
+				vertices[v_idx] = vert
+				normals[v_idx] = normal
+				uvs[v_idx] = uv
+				v_idx += 1
 		distance += segment_length
-	return surface.commit()
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
 
 static func rope_points(from: Vector3, to: Vector3, slack: float) -> PackedVector3Array:
 	var desired := from.distance_to(to)+slack
@@ -438,13 +456,31 @@ static func rope_corner_points(from: Vector3, corner: Vector3, to: Vector3) -> P
 	return points
 
 static func rope_strip(points: PackedVector3Array, radius: float) -> ArrayMesh:
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for index in range(points.size()-1):
+	var count := points.size() - 1
+	if count <= 0: return null
+	var vertices := PackedVector3Array()
+	vertices.resize(count * 6)
+	var normals := PackedVector3Array()
+	normals.resize(count * 6)
+	var v_idx := 0
+	for index in range(count):
 		var a := points[index]
 		var b := points[index+1]
 		var normal := Vector3(-(b-a).y,(b-a).x,0).normalized()*radius
-		for vertex in [a+normal,a-normal,b-normal,a+normal,b-normal,b+normal]:
-			surface.set_normal(Vector3.BACK)
-			surface.add_vertex(vertex)
-	return surface.commit()
+		var an := a + normal
+		var am := a - normal
+		var bm := b - normal
+		var bn := b + normal
+		vertices[v_idx] = an; normals[v_idx] = Vector3.BACK; v_idx += 1
+		vertices[v_idx] = am; normals[v_idx] = Vector3.BACK; v_idx += 1
+		vertices[v_idx] = bm; normals[v_idx] = Vector3.BACK; v_idx += 1
+		vertices[v_idx] = an; normals[v_idx] = Vector3.BACK; v_idx += 1
+		vertices[v_idx] = bm; normals[v_idx] = Vector3.BACK; v_idx += 1
+		vertices[v_idx] = bn; normals[v_idx] = Vector3.BACK; v_idx += 1
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh

@@ -252,17 +252,16 @@ func scene_tests() -> void:
 	game.world.finds.append(find_at(ItemCatalog.valuable(902,0,"root_wall",1),hero+Vector2(-1.2,0)))
 	game._collect_finds()
 	check(game.model.profile["gold"]==16 and game.model.bag.is_empty(),"the level-2 magnet pulls coins, not finds")
-	# Full bag: coins still bank; an artifact asks; a plain find stays.
+	# Full bag: coins still bank; a plain find stays; a more valuable artifact
+	# replaces the cheapest eligible item automatically.
 	game.model.bag = [ItemCatalog.valuable(903,0,"root_wall",0)]
 	game.model.picked.append(903)
 	game.world.finds.append(find_at(ItemCatalog.coin(904,0,"root_wall",8),hero))
 	game.world.finds.append(find_at(ItemCatalog.valuable(905,0,"root_wall",0),hero+Vector2(.2,0)))
 	game.world.finds.append(find_at(ItemCatalog.valuable(906,0,"root_wall",3,"artifact"),hero+Vector2(-.2,0)))
 	game._collect_finds()
-	check(game.model.profile["gold"]==24 and game.model.bag.size()==1 and int(game.model.bag[0]["id"])==903,"a full bag still banks coins and never replaces an item by itself")
-	check(not game.swap_offer.is_empty() and int(game.swap_offer["find"]["item"]["id"])==906 and is_instance_valid(game.hud.swap_panel),"an artifact at a full bag opens the comparison with the cheapest item")
-	game.accept_swap()
-	check(int(game.model.bag[0]["id"])==906 and game.swap_offer.is_empty() and not is_instance_valid(game.hud.swap_panel),"taking the artifact replaces the cheapest item")
+	check(game.model.profile["gold"]==24 and game.model.bag.size()==1 and int(game.model.bag[0]["id"])==906,"a full bag banks coins and automatically keeps the more valuable artifact")
+	check(game.swap_offer.is_empty() and not is_instance_valid(game.hud.swap_panel),"automatic replacement leaves no pending comparison panel")
 	# Restart: the ledger and picked coins survive; nothing pays twice.
 	game.save_snapshot()
 	game.model.load_profile()

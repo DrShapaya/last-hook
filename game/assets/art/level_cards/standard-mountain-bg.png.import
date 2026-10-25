@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cle5mnws3qe2b"
-path="res://.godot/imported/natural-objects-v2.png-bd3de0fd0ef0083706e5e9851ee24f67.ctex"
+uid="uid://jq07pxbw58i2"
+path="res://.godot/imported/standard-mountain-bg.png-ba81ef69bf92345e7e94dca1f1dba80f.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/art/natural-objects-v2.png"
-dest_files=["res://.godot/imported/natural-objects-v2.png-bd3de0fd0ef0083706e5e9851ee24f67.ctex"]
+source_file="res://assets/art/level_cards/standard-mountain-bg.png"
+dest_files=["res://.godot/imported/standard-mountain-bg.png-ba81ef69bf92345e7e94dca1f1dba80f.ctex"]
 
 [params]
 

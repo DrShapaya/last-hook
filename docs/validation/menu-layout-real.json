@@ -1,0 +1,24 @@
+{
+  "type": "real_window_capture",
+  "renderer": "gl_compatibility_opengl3",
+  "captures": [
+    "artifacts/real-captures/menu-real-expedition-540x960.png",
+    "artifacts/real-captures/menu-real-expedition-1280x800.png",
+    "artifacts/real-captures/menu-real-workshop-540x960.png",
+    "artifacts/real-captures/menu-real-settings-1280x800.png"
+  ],
+  "verified": [
+    "portrait expedition layout",
+    "wide expedition layout",
+    "portrait equipment layout",
+    "wide settings layout",
+    "bottom section navigation remains anchored",
+    "no bottom black placeholder is present",
+    "manual route subtitle is absent"
+  ],
+  "automated": [
+    "MENUS_TESTS 212 checks, 0 failures",
+    "ADS_TESTS 42 checks, 0 failures"
+  ],
+  "note": "Desktop captures do not display the Android native banner; its top gravity is implemented in the Android ad backend and its top inset is covered by ADS_TESTS."
+}

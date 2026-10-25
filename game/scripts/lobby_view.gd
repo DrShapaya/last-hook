@@ -13,31 +13,44 @@ class UpgradeMeter extends Control:
 			# Slanted ticks read as steps up a slope rather than a loading bar.
 			draw_colored_polygon(PackedVector2Array([Vector2(left+3,0),Vector2(left+width,0),Vector2(left+width-3,size.y),Vector2(left,size.y)]),color)
 
-# Same daylight as the climb: sky gradient with two faceted ridge bands. Over a
-# paused run the sky turns into a veil so the climb stays faintly visible.
+# Painterly mountain panorama with atmospheric valley mist, layered ridges,
+# soft drifting clouds and a warm sun aura. Veiled over paused runs.
 class Backdrop extends Control:
-	var veil := false
-	func _draw() -> void:
-		var alpha := .9 if veil else 1.0
-		for band in range(48):
-			draw_rect(Rect2(0,size.y*band/48,size.x,size.y/48+1),Color(SKY_TOP.lerp(SKY_LOW,float(band)/47),alpha))
-		if veil: return
-		var unit := minf(size.x,size.y)
-		ridge(size.y*.62,unit*.16,RIDGE_FAR,11,.7)
-		ridge(size.y*.80,unit*.12,RIDGE_NEAR,8,2.3)
+	var veil := false:
+		set(value):
+			veil = value
+			_update_veil()
+	var rect: ColorRect
+	var mat: ShaderMaterial
 
-	func ridge(base: float, amplitude: float, color: Color, count: int, phase: float) -> void:
-		var tops := PackedVector2Array()
-		for index in range(count+1):
-			var x := size.x*index/count
-			tops.append(Vector2(x,base-amplitude*(.55+.45*sin(index*2.1+phase)*cos(index*.7+phase*2))))
-		for index in range(count):
-			var a := tops[index]
-			var b := tops[index+1]
-			var mid := Vector2((a.x+b.x)*.5+sin(index+phase)*size.x*.02,maxf(a.y,b.y)+amplitude*.6)
-			draw_colored_polygon(PackedVector2Array([a,b,mid]),color.lightened(.06 if index%2==0 else 0))
-			draw_colored_polygon(PackedVector2Array([a,mid,Vector2(a.x,size.y)]),color.darkened(.03))
-			draw_colored_polygon(PackedVector2Array([b,Vector2(b.x,size.y),Vector2(a.x,size.y),mid]),color.darkened(.07 if index%2 else .02))
+	func _init() -> void:
+		mouse_filter = MOUSE_FILTER_IGNORE
+		mat = ShaderMaterial.new()
+		mat.shader = preload("res://shaders/lobby_backdrop.gdshader")
+		rect = ColorRect.new()
+		rect.mouse_filter = MOUSE_FILTER_IGNORE
+		rect.material = mat
+		rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		add_child(rect)
+
+	func _notification(what: int) -> void:
+		if what == NOTIFICATION_RESIZED:
+			_update_aspect()
+
+	func _process(_delta: float) -> void:
+		if is_instance_valid(mat) and visible and not veil:
+			mat.set_shader_parameter("time", float(Time.get_ticks_msec()) / 1000.0)
+
+	func _update_aspect() -> void:
+		if is_instance_valid(mat) and size.y > 0:
+			mat.set_shader_parameter("aspect", size.x / maxf(1.0, size.y))
+
+	func _update_veil() -> void:
+		if is_instance_valid(mat):
+			mat.set_shader_parameter("veil", veil)
+
+	func _draw() -> void:
+		pass
 
 # Horizontal swipes: over the route card they pick the neighbouring route,
 # anywhere else they switch sections. Distances are in design pixels, so the
@@ -61,6 +74,7 @@ var swipe_preview_offset := 0.0
 var swipe_body_origins: Array[Vector2] = []
 var card_rect := Rect2()
 var body_nodes: Array[Control] = []
+var header_nodes: Array[Control] = []
 var transition_nodes: Array[Control] = []
 var scenic_frame: Panel
 var start_button: Button
@@ -71,23 +85,54 @@ var banner_tween: Tween
 
 func setup(owner_hud: GameHud) -> void:
 	prepare(owner_hud)
+	var bounds := _calculate_layout_bounds()
+	landscape = bounds.landscape
+	size = bounds.size
+	position = bounds.position
 	_build_screen()
+
+func _calculate_layout_bounds() -> Dictionary:
+	var target_landscape: bool = hud.wide
+	var raw_banner: float = float(game.ads.menu_banner_height()) / maxf(0.1, hud.root.scale.y)
+	var safe_top: float = hud.safe_inset_top()
+	var top_boundary: float = maxf(safe_top, raw_banner)
+	var safe_bottom: float = hud.safe_inset_bottom()
+	var bottom_boundary: float = hud.root.size.y - safe_bottom
+	var target_size: Vector2
+	var target_position: Vector2
+	if target_landscape:
+		target_size = Vector2(1080, 660)
+		target_position = Vector2((hud.root.size.x - target_size.x) * 0.5, (hud.root.size.y - target_size.y) * 0.5)
+	else:
+		var available_h := maxf(960.0 - top_boundary, bottom_boundary - top_boundary)
+		target_size = Vector2(540, available_h)
+		target_position = Vector2((hud.root.size.x - target_size.x) * 0.5, top_boundary)
+	return {"landscape": target_landscape, "size": target_size, "position": target_position}
 
 func _reset_build_state() -> void:
 	swipe_pointer = -2
 	swipe_dragging = false
 	swipe_preview_offset = 0.0
 	swipe_body_origins.clear()
+	for child in get_children():
+		remove_child(child)
+		child.queue_free()
 	body_nodes.clear()
+	header_nodes.clear()
 	transition_nodes.clear()
 	tab_buttons.clear()
 	start_button = null
 	card_rect = Rect2()
 	scenic_frame = null
+	navigation_bar = null
 
 func _build_screen() -> void:
 	_reset_build_state()
 	build_header()
+	header_nodes.clear()
+	for index in range(get_child_count()):
+		var header_node := get_child(index)
+		if header_node is Control: header_nodes.append(header_node)
 	var first_body := get_child_count()
 	match hud.menu_tab:
 		"equipment": build_equipment()
@@ -96,34 +141,26 @@ func _build_screen() -> void:
 	for index in range(first_body,get_child_count()):
 		var node := get_child(index)
 		if node is Control: body_nodes.append(node)
+	apply_body_banner_inset()
 	build_navigation()
 	animate_entry()
 
 func update_layout() -> void:
-	var target_landscape: bool = hud.wide
-	var target_size := Vector2(1080,660) if target_landscape else Vector2(540,960)
-	if landscape != target_landscape:
-		landscape = target_landscape
-		for child in get_children():
-			remove_child(child)
-			child.queue_free()
-		size = target_size
-		position = (hud.root.size-size)*.5
-		modulate.a = 1.0
+	var bounds := _calculate_layout_bounds()
+	var changed: bool = (landscape != bounds.landscape) or (not size.is_equal_approx(bounds.size)) or (not position.is_equal_approx(bounds.position))
+	landscape = bounds.landscape
+	size = bounds.size
+	position = bounds.position
+	if changed:
 		_build_screen()
 	else:
-		size = target_size
-		position = (hud.root.size-size)*.5
-		update_banner_inset(game.ads.menu_banner_height()/maxf(.1,hud.root.scale.x))
+		layout_navigation()
 
-func update_banner_inset(pixels: float) -> void:
-	banner_inset = maxf(0.0,pixels)
-	if is_instance_valid(navigation_bar):
-		var target_y := size.y-82-banner_inset
-		if is_instance_valid(banner_tween): banner_tween.kill()
-		# Keep hit testing above the banner immediately. The banner itself is
-		# asynchronous, so delaying the layout would leave controls underneath it.
-		navigation_bar.position.y = target_y
+func update_banner_inset(_pixels: float = 0.0) -> void:
+	update_layout()
+
+func apply_body_banner_inset() -> void:
+	pass
 
 func refresh_screen() -> void:
 	# Keep the header, wallet and backdrop alive. Only the active body and the
@@ -141,9 +178,11 @@ func refresh_screen() -> void:
 	start_button = null
 	card_rect = Rect2()
 	if is_instance_valid(navigation_bar):
+		navigation_bar.visible = false
 		remove_child(navigation_bar)
 		navigation_bar.queue_free()
 	navigation_bar = null
+	tab_buttons.clear()
 	var first_body := get_child_count()
 	match hud.menu_tab:
 		"equipment": build_equipment()
@@ -153,6 +192,7 @@ func refresh_screen() -> void:
 		var node := get_child(index)
 		if node is Control:
 			body_nodes.append(node)
+	apply_body_banner_inset()
 	var direction: int = hud.menu_slide
 	hud.menu_slide = 0
 	build_navigation()
@@ -164,11 +204,11 @@ func animate_entry() -> void:
 	var direction: int = hud.menu_slide
 	hud.menu_slide = 0
 	if direction!=0:
-		# The new section slides in from the side the finger moved toward.
+		# Keep authored coordinates stable. Positional slides made nested
+		# Controls jump toward the centre on some aspect ratios.
 		for node in body_nodes:
-			var rest := node.position
-			node.position.x += 64*direction
-			create_tween().tween_property(node,"position",rest,.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			node.modulate.a = 0.0
+			create_tween().tween_property(node,"modulate:a",1.0,.18).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	var focus: String = hud.menu_focus
 	hud.menu_focus = ""
 	var target: Button = start_button if focus=="start" and is_instance_valid(start_button) and not start_button.disabled else null
@@ -177,6 +217,7 @@ func animate_entry() -> void:
 		if index>=0 and index<tab_buttons.size(): target = tab_buttons[index]
 	if target!=null:
 		target.focus_mode = Control.FOCUS_ALL
+		target.grab_focus()
 		target.call_deferred("grab_focus")
 
 func bounce(direction: int) -> void:
@@ -193,20 +234,20 @@ func local_point(screen: Vector2) -> Vector2:
 
 func begin_swipe_preview() -> void:
 	swipe_body_origins.clear()
-	for node in body_nodes:
-		if is_instance_valid(node): swipe_body_origins.append(node.position)
+	# A level swipe previews only the scenic card. Header, wallet, route line,
+	# actions and section navigation must stay fixed in place.
+	if hud.menu_tab=="expedition" and is_instance_valid(scenic_frame):
+		swipe_body_origins.append(scenic_frame.position)
 	swipe_preview_offset = 0.0
 
 func update_swipe_preview(offset: float) -> void:
 	swipe_preview_offset = clampf(offset,-SWIPE_PREVIEW_LIMIT,SWIPE_PREVIEW_LIMIT)
-	for index in range(mini(body_nodes.size(),swipe_body_origins.size())):
-		var node := body_nodes[index]
-		if is_instance_valid(node): node.position.x = swipe_body_origins[index].x+swipe_preview_offset
+	if swipe_body_origins.size()>0 and is_instance_valid(scenic_frame):
+		scenic_frame.position.x = swipe_body_origins[0].x+swipe_preview_offset
 
 func reset_swipe_preview() -> void:
-	for index in range(mini(body_nodes.size(),swipe_body_origins.size())):
-		var node := body_nodes[index]
-		if is_instance_valid(node): node.position = swipe_body_origins[index]
+	if swipe_body_origins.size()>0 and is_instance_valid(scenic_frame):
+		scenic_frame.position = swipe_body_origins[0]
 	swipe_preview_offset = 0.0
 	swipe_body_origins.clear()
 
@@ -310,26 +351,26 @@ func _navigation_input(event: InputEvent) -> void:
 	swipe(direction,routes)
 
 func build_header() -> void:
+	var top := 0.0
 	# The icon's own sky would melt into the backdrop, so it sits on a slab.
-	slab(self,Vector2(25,21),Vector2(50,54),STONE,STONE_LIP,4)
+	slab(self,Vector2(25,21+top),Vector2(50,54),STONE,STONE_LIP,4)
 	var mark := TextureRect.new()
 	mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	mark.texture = preload("res://assets/icon.svg")
-	mark.position = Vector2(28,24)
+	mark.position = Vector2(28,24+top)
 	mark.size = Vector2(44,44)
 	mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	mark.material = rounded_material(mark.size,10)
 	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(mark)
-	text(self,"Last Hook",Vector2(84,26),Vector2(200,40),28,INK,"display")
-	wallet(Vector2(size.x-236,24))
+	text(self,"Last Hook",Vector2(84,26+top),Vector2(200,40),28,INK,"display")
+	wallet(Vector2(size.x-236,24+top))
 
 func build_navigation() -> void:
 	var width := 484.0 if not landscape else 540.0
 	var at := Vector2((size.x-width)*.5,size.y-82)
 	var bar := slab(self,at,Vector2(width,66))
 	navigation_bar = bar
-	bar.position.y -= banner_inset
 	var entries := [["expedition","Восхождение",7],["equipment","Снаряжение",2],["settings","Настройки",15]]
 	var each := (width-16)/3
 	for index in range(3):
@@ -346,6 +387,7 @@ func build_navigation() -> void:
 			styled.content_margin_right = 6
 			tab.add_theme_stylebox_override(state_name,styled)
 		symbol(tab,int(entry[2]),Vector2(10,12),Vector2(24,24),STONE if selected else INK_SOFT)
+	layout_navigation()
 	# A hold-yellow marker under the active section glides from the previous one.
 	var marker := ColorRect.new()
 	marker.color = HOLD
@@ -359,6 +401,23 @@ func build_navigation() -> void:
 		create_tween().tween_property(marker,"position:x",8+current*each+12,.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	hud.menu_previous_tab = hud.menu_tab
 
+func layout_navigation() -> void:
+	if not is_instance_valid(navigation_bar): return
+	var width := 484.0 if not landscape else 540.0
+	var at := Vector2((size.x-width)*.5,size.y-82)
+	navigation_bar.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	navigation_bar.position = at
+	navigation_bar.size = Vector2(width,66)
+	navigation_bar.clip_contents = true
+	var each := (width-16)/3
+	for index in range(mini(3,tab_buttons.size())):
+		var tab := tab_buttons[index]
+		if not is_instance_valid(tab): continue
+		tab.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+		tab.position = Vector2(8+index*each,7)
+		tab.custom_minimum_size = Vector2(each-(0 if index==2 else 4),50)
+		tab.size = tab.custom_minimum_size
+
 func scenic_card(at: Vector2, dimensions: Vector2) -> Panel:
 	var definition: Dictionary = model.balance["locations"][game.lobby_location]
 	var owned: bool = model.profile["locations"].has(game.lobby_location)
@@ -368,6 +427,7 @@ func scenic_card(at: Vector2, dimensions: Vector2) -> Panel:
 	var inner := dimensions-Vector2(0,5)
 	var preview := LevelPreview.new()
 	preview.world = game.world
+	preview.route_location = game.lobby_location
 	preview.size = inner
 	preview.material = rounded_material(inner,10)
 	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -397,6 +457,10 @@ func scenic_card(at: Vector2, dimensions: Vector2) -> Panel:
 		var lock := slab(frame,Vector2(16,16),Vector2(118,34),Color(SLATE,.88),SLATE_LIP,3)
 		symbol(lock,14,Vector2(8,5),Vector2(24,24),STONE)
 		text(lock,"Закрыто",Vector2(36,6),Vector2(78,22),14,STONE,"strong")
+	else:
+		var route_tag := slab(frame,Vector2(16,16),Vector2(164,34),Color(SLATE,.88),SLATE_LIP,3)
+		var acts: Array = LevelCatalog.level(game.lobby_location).get("acts",[])
+		text(route_tag,"%d акта" % int(acts.size()),Vector2(8,6),Vector2(148,22),12,STONE,"strong")
 	text(frame,str(definition["name"]),Vector2(22,inner.y-94),Vector2(inner.x-44,48),36,STONE,"display")
 	var total: int = model.balance["locations"].size()
 	# Act names wrap to a second line before the route pager.
@@ -437,7 +501,10 @@ func build_expedition() -> void:
 	var active: bool = not model.profile["active"].is_empty()
 	var definition: Dictionary = model.balance["locations"][game.lobby_location]
 	var owned: bool = model.profile["locations"].has(game.lobby_location)
-	scenic_card(Vector2(28,90),Vector2(620,466) if landscape else Vector2(484,414))
+	var card_y := 90.0 if landscape else 76.0
+	var nav_top := size.y - 82.0
+	var card_h := 466.0 if landscape else clampf(nav_top - 340.0 - card_y, 240.0, 480.0)
+	scenic_card(Vector2(28,card_y),Vector2(620,card_h) if landscape else Vector2(484,card_h))
 	var x := 680.0 if landscape else 28.0
 	var width := 372.0 if landscape else 484.0
 	var y := 90.0
@@ -446,12 +513,12 @@ func build_expedition() -> void:
 		paragraph(self,"Продолжишь с того же зацепа." if active else "Брось крюк, раскачайся и лови следующую опору.",Vector2(x,y+46),Vector2(width,44),15)
 		y = 196
 	else:
-		y = 524
+		y = card_y + card_h + 14.0
 	route(self,Vector2(x,y),width)
 	var wins := int(model.profile["wins"])
-	text(self,"Вершин покорено: %d" % wins if wins>0 else "Вершина ещё не покорена",Vector2(x,y+50),Vector2(width,20),13,INK_SOFT)
-	var mode_y := y+86
-	var mode_buttons := segmented(self,Vector2(x,mode_y),width,["Вершина","Бесконечно"],1 if game.lobby_endless else 0,func(index: int): game.lobby_endless = index==1; hud.show_menu(),48)
+	text(self,"Вершин покорено: %d" % wins if wins>0 else "Вершина ещё не покорена",Vector2(x,y+44),Vector2(width,20),13,INK_SOFT)
+	var mode_y := y+72
+	var mode_buttons := segmented(self,Vector2(x,mode_y),width,["Вершина","Бесконечно"],1 if game.lobby_endless else 0,func(index: int): game.lobby_endless = index==1; hud.show_menu(),44)
 	for index in range(2):
 		mode_buttons[index].disabled = active or (index==1 and not model.profile["summit_cleared"])
 	mode_buttons[1].tooltip_text = "Откроется после первой вершины" if not model.profile["summit_cleared"] else "Без вершины: забирайся сколько сможешь"
@@ -463,39 +530,42 @@ func build_expedition() -> void:
 	if unlock.has("gold"): cost_parts.append("%d золота" % int(unlock["gold"]))
 	if unlock.has("diamonds"): cost_parts.append("%d алм." % int(unlock["diamonds"]))
 	var action_text := "Продолжить восхождение" if active else "Начать восхождение" if owned else "Открыть за "+" + ".join(cost_parts) if ready else "Закрыто"
-	var start := action(self,action_text,Vector2(x,mode_y+64),Vector2(width,66),game.lobby_action,"primary")
+	var start := action(self,action_text,Vector2(x,mode_y+54),Vector2(width,60),game.lobby_action,"primary")
 	start_button = start
 	start.add_theme_font_size_override("font_size",21 if action_text.length()<26 else 16)
 	start.disabled = not active and not owned and not ready
 	if not owned and not active:
-		paragraph(self,"Нужно: "+model.location_requirement(game.lobby_location),Vector2(x,mode_y+210),Vector2(width,40),13,DANGER if not ready else INK_SOFT).name = "Requirement"
-	var practice := action(self,"Тренировка: 16 зацепов",Vector2(x,mode_y+146),Vector2(width,52),game.start_practice)
+		paragraph(self,"Нужно: "+model.location_requirement(game.lobby_location),Vector2(x,mode_y+182),Vector2(width,40),13,DANGER if not ready else INK_SOFT).name = "Requirement"
+	var practice := action(self,"Тренировка: 16 зацепов",Vector2(x,mode_y+122),Vector2(width,48),game.start_practice)
 	practice.disabled = active
 	practice.tooltip_text = "Короткий маршрут с базовым снаряжением. Кошелёк не меняется."
 	if active:
-		paragraph(self,"Снаряжение можно улучшить после завершения попытки.",Vector2(x,mode_y+210),Vector2(width,40),13)
+		var finish := action(self,"Завершить забег",Vector2(x,mode_y+182),Vector2(width,48),game.finish_saved_run)
+		finish.tooltip_text = "Завершить сохранённую попытку и оформить награду за текущий прогресс."
 	elif landscape and owned:
-		paragraph(self,"Тренировка идёт с базовым снаряжением и не трогает кошелёк.",Vector2(x,mode_y+210),Vector2(width,40),13)
+		paragraph(self,"Тренировка идёт с базовым снаряжением и не трогает кошелёк.",Vector2(x,mode_y+182),Vector2(width,40),13)
 
 func build_equipment() -> void:
 	var active: bool = not model.profile["active"].is_empty()
-	title(self,"Снаряжение",Vector2(28,84),300,32)
+	title(self,"Снаряжение",Vector2(28,80),300,32)
 	var views := ["upgrades","supplies"]
-	var switch := segmented(self,Vector2(size.x-28-260,86),260,["Улучшения","Сборы"],views.find(hud.equipment_view),func(index: int): hud.equipment_view = views[index]; hud.show_menu(),42)
+	var switch := segmented(self,Vector2(size.x-28-260,82),260,["Улучшения","Сборы"],views.find(hud.equipment_view),func(index: int): hud.equipment_view = views[index]; hud.show_menu(),40)
 	switch[1].tooltip_text = "Профили, активные предметы, запас и материалы"
 	if hud.equipment_view=="supplies":
 		build_supplies(active)
 		return
-	paragraph(self,"Заверши попытку, чтобы улучшать снаряжение." if active else "Уровни 3–5 открываются актами, вершиной или контрактами.",Vector2(29,132),Vector2(size.x-56,22),13)
+	paragraph(self,"Заверши попытку, чтобы улучшать снаряжение." if active else "Уровни 3–5 открываются актами, вершиной или контрактами.",Vector2(29,126),Vector2(size.x-56,22),13)
 	var order := [GameModel.THROW,0,1,2,3,4,5,GameModel.SLOWMO]
 	var columns := 2 if landscape else 1
 	var row_width := 504.0 if landscape else 484.0
-	var row_height := 84.0 if landscape else 80.0
+	var row_height := 84.0 if landscape else (70.0 if size.y < 950.0 else 80.0)
+	var row_gap := 8.0 if (landscape or size.y >= 950.0) else 4.0
+	var base_y := 160.0 if (landscape or size.y >= 950.0) else 148.0
 	var per_column := 4 if landscape else order.size()
 	for index in range(order.size()):
 		var column := index/per_column
 		var row := index%per_column
-		build_upgrade(order[index],Vector2(28+column*(row_width+16),160+row*(row_height+8)),Vector2(row_width,row_height),active)
+		build_upgrade(order[index],Vector2(28+column*(row_width+16),base_y+row*(row_height+row_gap)),Vector2(row_width,row_height),active)
 
 func effect_text(kind: int, at_level: int) -> String:
 	var i := clampi(at_level-1,0,model.max_level(kind)-1)
@@ -724,47 +794,53 @@ func section(parent: Node, value: String) -> void:
 	text(parent,value,Vector2(20,14),Vector2(400,24),17,INK,"display")
 
 func build_settings() -> void:
-	title(self,"Настройки",Vector2(28,84),500,32)
+	title(self,"Настройки",Vector2(28,80),500,32)
 	var column_width := 500.0 if landscape else 484.0
-	var graphics := slab(self,Vector2(28,138),Vector2(column_width,198))
+	var compact := not landscape and size.y < 950.0
+	var graphics_h := 186.0 if compact else 198.0
+	var graphics := slab(self,Vector2(28,126 if compact else 138),Vector2(column_width,graphics_h))
 	section(graphics,"Графика")
 	var control_x := 150.0
 	var control_width := column_width-control_x-20
-	text(graphics,"Качество",Vector2(20,58),Vector2(140,22),15,INK_SOFT)
+	text(graphics,"Качество",Vector2(20,54 if compact else 58),Vector2(140,22),15,INK_SOFT)
 	var quality := str(model.profile.get("graphics_quality","balanced"))
 	var keys := ["high","balanced","battery"]
-	segmented(graphics,Vector2(control_x,48),control_width,["Высокая","Баланс","Экономия"],keys.find(quality),func(index: int): game.set_graphics_quality(keys[index]),42)
-	text(graphics,"Цены находок",Vector2(20,106),Vector2(140,22),15,INK_SOFT)
+	segmented(graphics,Vector2(control_x,44 if compact else 48),control_width,["Высокая","Баланс","Экономия"],keys.find(quality),func(index: int): game.set_graphics_quality(keys[index]),40)
+	text(graphics,"Цены находок",Vector2(20,98 if compact else 106),Vector2(140,22),15,INK_SOFT)
 	var prices_always := str(model.profile.get("loot_prices","near"))=="always"
 	var modes := ["near","always"]
-	var prices := segmented(graphics,Vector2(control_x,96),control_width,["Рядом","Всегда"],1 if prices_always else 0,func(index: int): hud.set_loot_prices(modes[index]),42)
+	var prices := segmented(graphics,Vector2(control_x,88 if compact else 96),control_width,["Рядом","Всегда"],1 if prices_always else 0,func(index: int): hud.set_loot_prices(modes[index]),40)
 	prices[0].tooltip_text = "Цена видна у находок рядом и на линии прицела"
 	# Camera scale: 100 % is the original framing. Larger values only narrow
 	# the picture; the fall edge and route rules stay the same.
-	text(graphics,"Масштаб",Vector2(20,154),Vector2(140,22),15,INK_SOFT)
+	text(graphics,"Масштаб",Vector2(20,142 if compact else 154),Vector2(140,22),15,INK_SOFT)
 	var zoom_levels := model.camera_zoom_levels()
 	var zoom_names: Array = []
 	for zoom in zoom_levels: zoom_names.append("%d%%" % roundi(float(zoom)*100))
-	var zoom_buttons := segmented(graphics,Vector2(control_x,144),control_width,zoom_names,zoom_levels.find(model.camera_zoom()),func(index: int): game.set_camera_zoom(float(zoom_levels[index])); hud.show_menu(),42)
+	var zoom_buttons := segmented(graphics,Vector2(control_x,132 if compact else 144),control_width,zoom_names,zoom_levels.find(model.camera_zoom()),func(index: int): game.set_camera_zoom(float(zoom_levels[index])); hud.show_menu(),40)
 	for button in zoom_buttons: button.tooltip_text = "Крупнее герой и опоры. Граница падения не меняется."
-	var feedback := slab(self,Vector2(28,350),Vector2(column_width,200))
+	var feedback_h := 186.0 if compact else 200.0
+	var feedback_y := (126 + graphics_h + 12) if compact else 350.0
+	var feedback := slab(self,Vector2(28,feedback_y),Vector2(column_width,feedback_h))
 	section(feedback,"Звук и отклик")
-	settings_switch(feedback,"Звук","Бросок, зацеп и находки",Vector2(20,50),column_width-40,bool(model.profile.get("sound",true)),hud.toggle_sound)
-	settings_switch(feedback,"Вибрация","Короткий отклик при зацепе",Vector2(20,98),column_width-40,bool(model.profile.get("vibration",true)),hud.toggle_vibration)
-	settings_switch(feedback,"Подсказки","Сообщения внизу экрана",Vector2(20,146),column_width-40,bool(model.profile.get("notifications",true)),hud.toggle_notifications)
-	var help_at := Vector2(552,138) if landscape else Vector2(28,564)
-	var help_size := Vector2(500,412) if landscape else Vector2(484,302)
+	settings_switch(feedback,"Звук","Бросок, зацеп и находки",Vector2(20,46 if compact else 50),column_width-40,bool(model.profile.get("sound",true)),hud.toggle_sound)
+	settings_switch(feedback,"Вибрация","Короткий отклик при зацепе",Vector2(20,90 if compact else 98),column_width-40,bool(model.profile.get("vibration",true)),hud.toggle_vibration)
+	settings_switch(feedback,"Подсказки","Сообщения внизу экрана",Vector2(20,134 if compact else 146),column_width-40,bool(model.profile.get("notifications",true)),hud.toggle_notifications)
+	var help_y := (feedback_y + feedback_h + 12) if compact else 564.0
+	var help_h := minf(size.y - 90.0 - help_y, 302.0) if not landscape else 412.0
+	var help_at := Vector2(552,138) if landscape else Vector2(28,help_y)
+	var help_size := Vector2(500,412) if landscape else Vector2(484,help_h)
 	var help := slab(self,help_at,help_size)
 	section(help,"Управление")
-	var instructions := [["Брось крюк","Коснись где удобно, потяни как стик и отпусти."],["Раскачайся","На канате веди палец влево или вправо."],["Выбери длину","Держи строго вверх или вниз 0,28 секунды."],["Отцепись","Подними палец. Новый бросок — новое касание."]]
+	var instructions := [["Брось крюк","Коснись где удобно, потяни как стик и отпусти."],["Раскачайся","На канате веди палец влево или вправо."],["Выбери длину","Держи строго вверх или вниз 0,28 секунды."],["Отцепись","Подними палец. Затем снова прицелься."]]
 	if not hud.touch_controls_hint:
 		instructions = [["Брось крюк","Зажми ЛКМ, прицелься и отпусти."],["Раскачайся","A / D или стрелки."],["Выбери длину","W / S или колесо мыши."],["Отцепись","Пробел, затем целься снова."]]
-	var step := (help_size.y-64)/instructions.size()
+	var step := (help_size.y-54)/instructions.size()
 	for index in range(instructions.size()):
-		var row_y := 54+index*step
-		var badge := slab(help,Vector2(20,row_y+2),Vector2(34,34),SLATE,SLATE_LIP,3)
-		text(badge,str(index+1),Vector2(0,3),Vector2(34,26),17,STONE,"display").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		text(help,instructions[index][0],Vector2(68,row_y),Vector2(help_size.x-88,22),16,INK,"strong")
-		paragraph(help,instructions[index][1],Vector2(68,row_y+22),Vector2(help_size.x-88,40),13)
+		var row_y := 46+index*step
+		var badge := slab(help,Vector2(20,row_y+2),Vector2(32,32),SLATE,SLATE_LIP,3)
+		text(badge,str(index+1),Vector2(0,2),Vector2(32,26),16,STONE,"display").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		text(help,instructions[index][0],Vector2(64,row_y),Vector2(help_size.x-84,20),15,INK,"strong")
+		paragraph(help,instructions[index][1],Vector2(64,row_y+20),Vector2(help_size.x-84,36),12)
 	var version := text(help,"Версия "+GameModel.BUILD_VERSION,Vector2(help_size.x-180,18),Vector2(160,20),12,INK_SOFT)
 	version.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT

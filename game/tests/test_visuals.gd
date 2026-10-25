@@ -62,6 +62,13 @@ func run_tests() -> void:
 	var b := make_world(58273,"balanced")
 	var other := make_world(4242,"balanced")
 	var massif: MassifVisuals = a.visuals
+	var host_tone := massif.zone_color(10.0)
+	var grip_tone := massif.grip_stone_color(host_tone,GripBiomeProfile.for_place(0,10.0),GripSpec.STONE)
+	var tone_delta := absf(grip_tone.r-host_tone.r)+absf(grip_tone.g-host_tone.g)+absf(grip_tone.b-host_tone.b)
+	check(tone_delta>.07,"hook stones keep a visible contrast step against the host rock")
+	var cleanup_anchor: Dictionary = a.nearby_anchors(4,110)[0]
+	check(massif._decor_blocked(cleanup_anchor["pos"]+Vector2(1.9,0.0)),
+		"decor keeps a clear halo around the visible hook platform")
 	var first := skin_signature(a,1)
 	var second := skin_signature(b,1)
 	check(first[0]==second[0] and (first[1] as Vector3).is_equal_approx(second[1]) and is_equal_approx(first[2],second[2]) and first[3]==second[3],"the same seed rebuilds identical masses, colours and decor")
@@ -228,6 +235,17 @@ func run_tests() -> void:
 		check(has_halo==(index%2==1),"rarity halo matches the rare flag for %s" % kinds[index])
 	check(all_lit and no_pedestal,"loot models take sun and shade, with no pedestal on the rock-mass mountain")
 	check(LootVisuals.kind_of({"tier":4})=="idol" and LootVisuals.kind_of({"tier":0,"kind":"coin"})=="coin","items without a kind fall back to their tier model")
+	var visual_items := [
+		ItemCatalog.valuable(1,0,"root_wall",1),
+		ItemCatalog.valuable(2,0,"root_wall",4,"artifact"),
+		ItemCatalog.relic(3,0,"root_wall",3,"forest_relic"),
+		ItemCatalog.material(4,0,"root_wall",2,"core"),
+		ItemCatalog.contract(5,0,"root_wall",2,"root_impulse")
+	]
+	var visual_style_ok := true
+	for item in visual_items:
+		visual_style_ok = visual_style_ok and LootIcon.rarity_color(item)==LootVisuals.rarity_color(item) and LootVisuals.kind_of(item)==str(item["kind"])
+	check(visual_style_ok,"map and backpack share the same treasure kind and accent palette")
 	var old := make_world(58273,"high",0,10)
 	var old_parent := Node3D.new()
 	old.add_child(old_parent)
@@ -261,6 +279,8 @@ func run_tests() -> void:
 	for node in loot_holder.find_children("*","MeshInstance3D",true,false):
 		if (node as MeshInstance3D).material_override==massif.stone_material: stone_meshes += 1
 	check(stone_meshes==0 and loot_holder.find_child("Контактная тень",true,false)!=null,"a coin carries no stone of its own, only a soft contact shade")
+	check(loot_holder.find_child("Модель сокровища",true,false)!=null and loot_holder.find_child("Единая модель сокровища",true,false)!=null,
+		"new world loot uses the same shared icon model as the backpack")
 
 	# Grip shells: several visual variants, collision polygon untouched.
 	var grip_chunk := Node3D.new()
@@ -268,20 +288,22 @@ func run_tests() -> void:
 	var shapes := {}
 	var polygon_kept := true
 	var no_pebbles := true
+	var no_sticks := true
 	for anchor in a.nearby_anchors(20,70):
 		var before: PackedVector2Array = anchor["polygon"].duplicate()
 		massif.build_anchor(anchor,grip_chunk)
 		polygon_kept = polygon_kept and before==anchor["polygon"]
 		var holder: Node3D = anchor["visual"]
 		no_pebbles = no_pebbles and holder.find_child("Сколы",false,false)==null and holder.find_child("Каменное основание",false,false)==null
+		no_sticks = no_sticks and holder.find_child("Корень",true,false)==null
 		var signature := ""
 		for child in holder.find_children("*","Node3D",true,false): signature += String(child.name).substr(0,6)+","
 		shapes[signature] = true
 	check(polygon_kept,"visual grips never change the gameplay polygon")
 	check(no_pebbles,"grips carry no pebble chips or base ring of their own")
-	# Boulder grips: a few chips and moss at the foot, never a heap; wide
-	# blocks break into two stones; the paint is a short stroke across the
-	# crown (about half the block, as on the reference), never a plate.
+	check(no_sticks,"grips have no branches or sticks protruding through their playable surface")
+	# Boulder grips keep a clean stone contact with no chips, moss or hanging
+	# tufts inside the playable silhouette; wide blocks still split into stones.
 	var footing_ok := true
 	var split := 0
 	var paint_on_top := true
@@ -291,12 +313,12 @@ func run_tests() -> void:
 		if spec.split: split += 1
 		var seam := holder.find_child("Каменное гнездо",true,false) as MeshInstance3D
 		var growth := holder.find_child("Мох и снег в шве",true,false) as MeshInstance3D
-		footing_ok = footing_ok and int(seam.get_meta("chips",0)) in [2,3,4] and growth!=null and int(growth.get_meta("footing_tufts",0))>=3
+		footing_ok = footing_ok and int(seam.get_meta("chips",0))==0 and growth==null
 		var strip := holder.find_child("Полоса состояния",true,false) as MeshInstance3D
 		var box: AABB = strip.get_aabb()
 		var block := spec.bounds()
 		paint_on_top = paint_on_top and box.end.y>=block.end.y-.18 and box.size.y<=block.size.y*.36 and box.size.x>=spec.front_width*.36 and box.size.x<=spec.front_width*.72
-	check(footing_ok,"each grip has a few chips and moss at its foot (balanced), never a heap")
+	check(footing_ok,"each grip has a clean stone contact with no chips, moss or tufts")
 	check(split>0 and split<a.nearby_anchors(20,70).size(),"some wide grips break into two stones, not all (%d)" % split)
 	check(paint_on_top,"the status paint is a short stroke across the crown of the boulder, not a plate over it")
 	var lean := make_world(58273,"battery")
@@ -307,8 +329,8 @@ func run_tests() -> void:
 		lean.visuals.build_anchor(anchor,lean_chunk)
 		var holder: Node3D = anchor["visual"]
 		var lean_seam := holder.find_child("Каменное гнездо",true,false)
-		lean_ok = lean_ok and int(lean_seam.get_meta("chips",0))==0 and holder.find_child("Контактная тень",true,false)!=null
-	check(lean_ok,"battery drops the chips and keeps a soft contact shade instead of real shadows")
+		lean_ok = lean_ok and int(lean_seam.get_meta("chips",0))==0 and holder.find_child("Мох и снег в шве",true,false)==null and holder.find_child("Контактная тень",true,false)==null
+	check(lean_ok,"battery also keeps the grip contact free of decorative sticks and tufts")
 	lean.free()
 	check(shapes.size()>=4,"grips have several distinct visual builds (%d)" % shapes.size())
 	var strip_lit := true
@@ -328,7 +350,7 @@ func run_tests() -> void:
 		a.build_anchor(anchor,grip_chunk)
 		dials += 1
 		var label: Label3D = anchor["timer_dial"]["label"]
-		dial_ok = dial_ok and label.text=="2,6"
+		dial_ok = dial_ok and label.text=="2,6" and label.outline_size>=6
 		a.update_anchor_timer(anchor["id"],1.0)
 		var material: ShaderMaterial = anchor["timer_dial"]["material"]
 		dial_ok = dial_ok and label.text=="1,0" and absf(float(material.get_shader_parameter("remaining"))-1.0/MountainWorld.FRAGILE_SECONDS)<.001
@@ -444,15 +466,15 @@ func run_tests() -> void:
 	# Hazards are set into the rock: a warm glint only on upward edges.
 	var hazard_chunk := Node3D.new()
 	a.add_child(hazard_chunk)
-	var glints := 0
+	var clean_obstacles := 0
 	var hazards := 0
 	for obstacle in a.obstacles:
 		if not obstacle.get("massif",false) or obstacle["pos"].y>110: continue
 		massif.build_obstacle(obstacle,hazard_chunk)
 		hazards += 1
-		for child in (obstacle["visual"] as Node3D).get_children():
-			if child.name.begins_with("Тёплая кромка"): glints += 1
-	check(hazards>0 and glints==hazards,"hazards carry an edge glint")
+		var visual: Node3D = obstacle["visual"]
+		clean_obstacles += 1 if visual.find_child("Тёплая кромка",true,false)==null and visual.find_child("obstacle_ember",true,false)==null else 0
+	check(hazards>0 and clean_obstacles==hazards,"obstacles have no bright stick-like overlays")
 	# Large themed set pieces stand on side islands, clear of the route.
 	var landmarks := 0
 	var landmarks_clear := true
@@ -543,10 +565,14 @@ func mount_contract_checks() -> void:
 		a.visuals.build_ledge(ledge,chunk_a)
 		shelves += 1
 		var found := false
+		var wood_ok := false
 		for mass in massif.front_band(int(floor(top/24.0))):
 			if mass.role!="ledge_shelf" or absf(mass.bounds.end.y-top)>.01: continue
 			found = mass.bounds.position.x<=float(ledge["left"]) and mass.bounds.end.x>=float(ledge["right"]) and mass.bounds.size.y>=.8 and not mass.top_edges.is_empty()
-		shelf_ok = shelf_ok and found and before==[ledge["left"],ledge["right"],ledge["top"]] and (ledge["mount"] as SurfaceMount).host_mass>=0
+			var palette := massif._palette(massif.profile_at(top),top,mass)
+			var wood: Color = palette["base"]
+			wood_ok = wood.r>wood.b*1.25 and wood.r>wood.g
+		shelf_ok = shelf_ok and found and wood_ok and before==[ledge["left"],ledge["right"],ledge["top"]] and (ledge["mount"] as SurfaceMount).host_mass>=0
 	check(shelves>0 and shelf_ok,"every ledge is a shelf of the face with its top on the walking line (%d)" % shelves)
 	# A consumed grip takes its socket and shade with it; the face is clean.
 	var consumed := false

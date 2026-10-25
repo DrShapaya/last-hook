@@ -6,16 +6,11 @@ extends RefCounted
 # same object the player just touched on the ledge. Each icon is authored in a
 # 48 x 48 box around the origin and drawn at `origin`, `size` / 48 scale.
 
-const RARITY := [Color("e0a83a"),Color("e8833a"),Color("e9bf4f"),Color("6fc6e8"),Color("a98fdc"),Color("f3d478")]
-
-const MATERIAL_COLORS := {"fiber":Color("c9a46a"),"silk":Color("e9e4f2"),"sinew":Color("7fc48a"),"core":Color("8fd8ee")}
+const RARITY := ItemCatalog.VISUAL_RARITY_COLORS
+const MATERIAL_COLORS := ItemCatalog.VISUAL_MATERIAL_COLORS
 
 static func rarity_color(item: Dictionary) -> Color:
-	match str(item.get("family","")):
-		"material": return MATERIAL_COLORS.get(str(item.get("set_id","")),Color("c9a46a"))
-		"contract": return Color("ff9d5c")
-		"relic": return Color("d8c27a")
-	return RARITY[clampi(int(item.get("tier",0)),0,5)]
+	return ItemCatalog.visual_color(item)
 
 static func draw(ci: CanvasItem, item: Dictionary, origin: Vector2, size: float, time: float = 0.0, rotation: float = 0.0) -> void:
 	var kind := LootVisuals.kind_of(item)

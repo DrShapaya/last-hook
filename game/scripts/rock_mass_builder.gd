@@ -12,6 +12,7 @@ extends RefCounted
 static func emit(surface: SurfaceTool, mass: RockMassSpec, palette: Dictionary, cavity: Callable, walls: bool) -> int:
 	var emitted := 0
 	var facets: Array = palette["facets"]
+	var wood := bool(palette.get("wood",false))
 	var shade_cache := {}
 	for index in range(mass.faces.size()):
 		var face: Dictionary = mass.faces[index]
@@ -23,6 +24,12 @@ static func emit(surface: SurfaceTool, mass: RockMassSpec, palette: Dictionary, 
 		var tone: Color = facets[(index+mass.id)%facets.size()]
 		var jitter := (_hash(mass.id,index)-.5)*.13+(mass.tone-.5)*.09
 		tone = tone.lightened(jitter) if jitter>0 else tone.darkened(-jitter)
+		if wood:
+			# Broad grain follows the platform length; it keeps wood readable
+			# after the massif shader adds lighting and texture.
+			var grain := sin((face["a"].x+face["b"].x+face["c"].x)*3.8+(face["a"].y+face["b"].y+face["c"].y)*.35)
+			if grain<-.35: tone = tone.darkened(clampf((-grain-.35)*.16,0,.12))
+			elif grain>.72: tone = tone.lightened(clampf((grain-.72)*.18,0,.08))
 		match face_class:
 			RockMassSpec.TOP: tone = tone.lerp(palette["top"],.25)
 			RockMassSpec.UNDERSIDE: tone = tone.lerp(palette["under"],.55)

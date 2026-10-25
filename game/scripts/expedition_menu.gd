@@ -119,6 +119,8 @@ func build_revive(reason: String) -> void:
 		var ad := action(self,"Реклама пока недоступна",Vector2(x,y+126),Vector2(width,52),func(): pass)
 		ad.disabled = true
 	action(self,"Завершить и забрать награду",Vector2(x,y+226),Vector2(width,48),func(): game.finish_run(false),"ghost")
+	var restart := action(self,"Начать заново",Vector2(x,y+282),Vector2(width,52),game.restart_failed_run,"primary")
+	restart.add_theme_font_size_override("font_size",18)
 
 func build_result(result: Dictionary) -> void:
 	var practice: bool = result.get("mode","")=="practice"
@@ -168,7 +170,7 @@ func build_result(result: Dictionary) -> void:
 			symbol(reward,13,Vector2(right_width-118,258),Vector2(28,28),CRYSTAL)
 			text(reward,"+%d" % gems,Vector2(right_width-84,252),Vector2(64,40),28,CRYSTAL,"display")
 	var action_y := right_y+panel_height+22
-	var main_text := "Повторить тренировку" if practice else "Ещё одна попытка"
+	var main_text := "Повторить тренировку" if practice else "Начать заново" if not success else "Новое восхождение"
 	action(self,main_text,Vector2(right_x,action_y),Vector2(right_width,64),func(): game.start_run(false if practice else game.run_mode=="endless"),"primary").add_theme_font_size_override("font_size",21)
 	if not practice:
 		var split := (right_width-10)*.6

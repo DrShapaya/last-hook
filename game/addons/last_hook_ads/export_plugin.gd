@@ -22,6 +22,6 @@ class AndroidAdsExport extends EditorExportPlugin:
 
 	func _get_android_dependencies(_platform: EditorExportPlatform, _debug: bool) -> PackedStringArray:
 		return PackedStringArray([
-			"com.yandex.android:mobileads:8.5.0",
+			"com.yandex.android:mobileads:8.6.0",
 			"io.appmetrica.analytics:analytics:8.6.0"
 		])

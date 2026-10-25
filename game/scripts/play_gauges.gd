@@ -36,43 +36,82 @@ class RouteGauge extends Control:
 		queue_redraw()
 
 	func _draw() -> void:
+		# A rounded slate groove with a lit top edge; the climbed part is a
+		# twisted rope warming from copper to gold with a light trail at its
+		# end, act notches as small diamonds, the record as a gold pennant,
+		# the hero's head riding the rope and the summit flag at the end.
 		var y := size.y-9.0
-		var left := 4.0
-		var right := size.x-22.0
-		# The same rope-on-a-path language as the menu route: a dark groove,
-		# the climbed part as twisted rope, act notches, the record hold.
-		draw_line(Vector2(left,y),Vector2(right,y),Color(SLATE_LIP,.75),10,true)
-		draw_line(Vector2(left,y),Vector2(right,y),Color(SLATE,.92),7,true)
-		var fill_x := lerpf(left,right,clampf(value,0,1))
-		for index in range(1,zones):
-			var x := lerpf(left,right,float(index)/zones)
-			draw_line(Vector2(x,y-4),Vector2(x,y+4),Color(HOLD if x<=fill_x else STONE,.45),2)
+		var left := 6.0
+		var right := size.x-26.0
+		var thick := 12.0
+		var track := Rect2(left-4,y-thick*.5,right-left+8,thick)
+		_pill(track.grow(2),Color(SLATE_LIP,.55))
+		_pill(track,Color(SLATE,.86))
+		_pill(Rect2(track.position+Vector2(2,1),Vector2(track.size.x-4,3)),Color(STONE,.08))
+		var share := clampf(value,0,1)
+		var fill_x := lerpf(left,right,share)
 		if fill_x>left+1:
-			draw_line(Vector2(left,y),Vector2(fill_x,y),Color("7a4a1c"),6,true)
-			draw_line(Vector2(left,y-1),Vector2(fill_x,y-1),ROPE,4,true)
-			var twist := left+2
+			var rope := Rect2(left-2,y-4.5,fill_x-left+4,9)
+			_pill(rope,Color("7a4a1c"))
+			# Copper at the start, gold at the climber.
+			var steps := 12
+			for step in range(steps):
+				var x0 := lerpf(left,fill_x,float(step)/steps)
+				var x1 := lerpf(left,fill_x,float(step+1)/steps)
+				var tone := Color("b8692a").lerp(Color("f2b24a"),float(step)/steps)
+				draw_rect(Rect2(x0,y-3,x1-x0+.5,5),tone)
+			draw_line(Vector2(left,y-2.5),Vector2(fill_x,y-2.5),Color("ffe2a0",.55),1.2,true)
+			var twist := left+1
 			while twist<fill_x-3:
-				draw_line(Vector2(twist,y+2),Vector2(twist+3,y-3),Color("e0a15a",.8),1.2,true)
-				twist += 5
+				draw_line(Vector2(twist,y+3),Vector2(twist+4,y-3),Color("6b3c14",.55),1.3,true)
+				twist += 6
+			# A short light trail behind the head.
+			for glow in range(4):
+				draw_circle(Vector2(fill_x-glow*5,y),5.0-glow,Color(HOLD,.22-glow*.05))
+		for index in range(1,zones):
+			var at := float(index)/zones
+			var x := lerpf(left,right,at)
+			var reached := at<=share
+			var r := 3.6 if reached else 3.0
+			var diamond := PackedVector2Array([Vector2(x,y-r),Vector2(x+r,y),Vector2(x,y+r),Vector2(x-r,y)])
+			draw_colored_polygon(diamond,Color(SLATE_LIP,.9))
+			var inner := PackedVector2Array([Vector2(x,y-r+1.2),Vector2(x+r-1.2,y),Vector2(x,y+r-1.2),Vector2(x-r+1.2,y)])
+			draw_colored_polygon(inner,HOLD if reached else Color(STONE,.45))
 		if flash>0:
 			var x := lerpf(left,right,flash_at)
 			draw_arc(Vector2(x,y),6+(1-flash)*16,0,TAU,24,Color(HOLD,flash),2.5,true)
 		if record>0.01 and record<.995:
 			var x := lerpf(left,right,record)
-			draw_colored_polygon(PackedVector2Array([Vector2(x-6,y+1),Vector2(x-3,y-5),Vector2(x+4,y-5),Vector2(x+6,y+1),Vector2(x+2,y+5),Vector2(x-4,y+5)]),Color("b88a12"))
-			draw_colored_polygon(PackedVector2Array([Vector2(x-5,y),Vector2(x-2,y-4),Vector2(x+3,y-4),Vector2(x+5,y),Vector2(x+1,y+3),Vector2(x-3,y+3)]),HOLD)
+			draw_line(Vector2(x,y-thick*.5),Vector2(x,y-14),Color(STONE,.8),1.5,true)
+			draw_colored_polygon(PackedVector2Array([Vector2(x,y-14),Vector2(x+8,y-11.5),Vector2(x,y-9)]),Color("b88a12"))
+			draw_colored_polygon(PackedVector2Array([Vector2(x,y-13.5),Vector2(x+6.5,y-11.5),Vector2(x,y-10)]),HOLD)
 		# The climber's cube head rides the end of the rope.
 		var bob := sin(time*5)*1.0
-		var head := Rect2(fill_x-6,y-17+bob,12,11)
-		draw_rect(head.grow(1),SLATE_LIP)
+		var head := Rect2(fill_x-7,y-21+bob,14,13)
+		draw_rect(Rect2(head.position+Vector2(1.5,2),head.size),Color("0b1218",.35))
+		draw_rect(head.grow(1.2),SLATE_LIP)
 		draw_rect(head,Color("f7a72b"))
-		draw_rect(Rect2(head.position,Vector2(12,3)),Color("ffd45f"))
-		draw_rect(Rect2(head.position+Vector2(3,4),Vector2(2,4)),SLATE_LIP)
-		draw_rect(Rect2(head.position+Vector2(7,4),Vector2(2,4)),SLATE_LIP)
-		var pole := Vector2(size.x-12,y+5)
-		draw_line(pole+Vector2(1,0),pole+Vector2(1,-22),SLATE_LIP,2.5)
-		draw_line(pole,pole+Vector2(0,-22),STONE,2)
-		draw_colored_polygon(PackedVector2Array([pole+Vector2(1,-22),pole+Vector2(12,-18),pole+Vector2(10,-15),pole+Vector2(1,-13)]),HOLD)
+		draw_rect(Rect2(head.position,Vector2(head.size.x,3.5)),Color("ffd45f"))
+		draw_rect(Rect2(head.position+Vector2(3.5,5),Vector2(2.2,4.5)),SLATE_LIP)
+		draw_rect(Rect2(head.position+Vector2(8.3,5),Vector2(2.2,4.5)),SLATE_LIP)
+		# The summit: a flag on its pole, catching the light as it nears.
+		var pole := Vector2(size.x-13,y+6)
+		var near := smoothstep(.85,1.0,share)
+		if near>0: draw_circle(pole+Vector2(6,-19),9+sin(time*4)*1.5,Color(HOLD,.18*near))
+		draw_line(pole+Vector2(1,0),pole+Vector2(1,-24),SLATE_LIP,3)
+		draw_line(pole,pole+Vector2(0,-24),STONE,2)
+		draw_circle(pole+Vector2(0,-25),1.8,HOLD)
+		var wave := sin(time*3)*1.2
+		var cloth := PackedVector2Array([pole+Vector2(1,-23),pole+Vector2(8,-22+wave),pole+Vector2(14,-20),pole+Vector2(8,-16+wave),pole+Vector2(1,-15)])
+		draw_colored_polygon(cloth,Color("c98a12"))
+		draw_colored_polygon(PackedVector2Array([cloth[0],cloth[1],cloth[2],pole+Vector2(1,-19)]),HOLD)
+
+	func _pill(rect: Rect2, color: Color) -> void:
+		var box := StyleBoxFlat.new()
+		box.bg_color = color
+		box.set_corner_radius_all(int(rect.size.y*.5))
+		box.anti_aliasing = true
+		draw_style_box(box,rect)
 
 # Lower danger edge, shown only while the view has sunk below it after a
 # landing: a dashed warning line with a dark veil over the ground under it.

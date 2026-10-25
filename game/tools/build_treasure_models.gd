@@ -422,6 +422,27 @@ func _portraits(models: Dictionary, library: AnimationLibrary) -> void:
 	camera.position = Vector3(0,.42,1.55)
 	camera.look_at(Vector3(0,-.01,0))
 	camera.current = true
+	# The interface coin (UiSymbol): the same coin straight on, turned a little
+	# so its rim shows, on a clear background.
+	var icon_holder: Node3D = (models["coin"] as Node3D).duplicate()
+	icon_holder.rotation = Vector3(0,.42,0)
+	viewport.add_child(icon_holder)
+	camera.position = Vector3(0,0,1.5)
+	camera.look_at(Vector3.ZERO)
+	viewport.size = Vector2i(512,512)
+	for wait in range(3): await process_frame
+	await RenderingServer.frame_post_draw
+	var icon := viewport.get_texture().get_image()
+	icon.convert(Image.FORMAT_RGBA8)
+	var used := icon.get_used_rect()
+	icon = icon.get_region(used.grow(6).intersection(Rect2i(Vector2i.ZERO,icon.get_size())))
+	icon.resize(128,roundi(128.0*icon.get_height()/icon.get_width()),Image.INTERPOLATE_LANCZOS)
+	icon.save_png(ProjectSettings.globalize_path(Treasures.DIR.path_join("icon_coin.png")))
+	print("ICON coin")
+	icon_holder.queue_free()
+	viewport.size = Vector2i(cell,cell)*2
+	camera.position = Vector3(0,.42,1.55)
+	camera.look_at(Vector3(0,-.01,0))
 	var keys: Array = [["coin","coin",null]]
 	for entry: Array in keys:
 		var holder := Node3D.new()

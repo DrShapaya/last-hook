@@ -168,7 +168,11 @@ func run_tests() -> void:
 	check(all_disabled and game.model.profile["active"]==snapshot,"menu navigation cannot spend gold or discard a saved climb")
 	game.hud.select_menu("settings")
 	var was_enabled: bool = game.model.profile["sound"]
-	await touch_tap(find_button(game.hud.content,"Вкл" if was_enabled else "Выкл"))
+	# The second switch is "Звук" (the first is "Музыка").
+	var switches: Array = []
+	for node in game.hud.content.find_children("*","Button",true,false):
+		if node.text in ["Вкл","Выкл"] and node.is_visible_in_tree(): switches.append(node)
+	await touch_tap(switches[1])
 	# Settings writes are coalesced for a short debounce window.
 	await create_timer(.25).timeout
 	var reloaded := GameModel.new(game.model.save_path)

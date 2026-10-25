@@ -57,7 +57,7 @@ var layout_mode := "modal"
 var menu_tab := "expedition"
 # Equipment tab: "upgrades" (buy levels) or "supplies" (run profiles, items).
 var equipment_view := "upgrades"
-const MENU_TABS := ["expedition","equipment","settings"]
+const MENU_TABS := ["equipment","expedition","settings"]
 # Direction of the last menu change (-1 back, 1 forward, 0 none): the next
 # LobbyView slides its body in from that side and moves the tab marker.
 var menu_slide := 0
@@ -297,39 +297,45 @@ class AimOverlay extends Control:
 			draw_arc(contact,pulse,animation,animation+TAU*.78,24,color,1.5*ui_scale,true)
 
 	func draw_controls() -> void:
+			# A light glass ring over the rock: a faint frosted disc, a thin bright
+			# rim with a soft dark edge so it still reads on sunlit limestone,
+			# direction cues and a glossy thumb. The touch origin and travel stay
+			# exactly as before.
 			var color := CYAN if (vertical_progress>=1 if control_attached else walk_progress>=1) else GOLD
-			var radius := 48*ui_scale
-			var knob := control_origin+(control_target-control_origin).limit_length(ClimbGesture.STICK_RADIUS*ui_scale)*(48/ClimbGesture.STICK_RADIUS)
-			# Layered ring treatment keeps the control legible over bright terrain while
-			# preserving the original touch origin and travel distance.
-			draw_circle(control_origin,radius+13*ui_scale,Color("121b22",.20))
-			draw_circle(control_origin,radius+8*ui_scale,Color("24323d",.45))
-			draw_arc(control_origin,radius+8*ui_scale,-PI*.15,PI*1.15,64,Color(color,.24),1.5*ui_scale,true)
-			draw_circle(control_origin,radius,Color("24323d",.80))
-			draw_circle(control_origin,radius,Color(color,.62),false,1.5*ui_scale,true)
-			draw_circle(control_origin,radius-8*ui_scale,Color("efebe1",.16),false,1*ui_scale,true)
-			draw_circle(control_origin,ClimbGesture.DEAD_ZONE*ui_scale,Color(color,.12))
-			draw_circle(control_origin,ClimbGesture.DEAD_ZONE*ui_scale,Color(color,.52),false,1*ui_scale,true)
-			if control_attached:
-				for axis_angle in [-PI*.5,PI*.5]:
-					for side in [-1,1]:
-						var angle: float = axis_angle+side*deg_to_rad(15)
-						draw_line(control_origin,control_origin+Vector2.from_angle(angle)*(radius-5*ui_scale),Color(color,.18),ui_scale,true)
-				for angle in [-PI*.5,0,PI*.5,PI]:
-					var tick := control_origin+Vector2.from_angle(angle)*(radius+3*ui_scale)
-					draw_circle(tick,2*ui_scale,Color(color,.72))
+			var u := ui_scale
+			var radius := 48*u
+			var knob := control_origin+(control_target-control_origin).limit_length(ClimbGesture.STICK_RADIUS*u)*(48/ClimbGesture.STICK_RADIUS)
+			draw_circle(control_origin,radius+10*u,Color("ffffff",.05))
+			draw_circle(control_origin,radius,Color("eaf4fb",.13))
+			draw_circle(control_origin,radius+1.5*u,Color("121b22",.22),false,3*u,true)
+			draw_circle(control_origin,radius,Color("ffffff",.62),false,1.6*u,true)
+			# A lit upper rim, as if the glass caught the sun.
+			draw_arc(control_origin,radius-3*u,-PI*.95,-PI*.35,32,Color("ffffff",.38),2*u,true)
+			draw_circle(control_origin,radius*.62,Color("ffffff",.16),false,1*u,true)
+			draw_circle(control_origin,ClimbGesture.DEAD_ZONE*u,Color(color,.10))
+			# Four soft chevrons: where a pull, a lower or a walk is read.
+			for angle in [-PI*.5,0.0,PI*.5,PI]:
+				var direction := Vector2.from_angle(angle)
+				var across := direction.orthogonal()
+				var tip := control_origin+direction*(radius-7*u)
+				var lit := (control_attached and absf(direction.y)>.5) or (not control_attached and absf(direction.x)>.5)
+				var tone := Color(color,.85) if lit else Color("ffffff",.42)
+				draw_polyline(PackedVector2Array([tip-direction*5*u+across*5*u,tip,tip-direction*5*u-across*5*u]),tone,2*u,true)
 			if vertical_direction!=0 and control_attached:
-				draw_arc(control_origin,radius+7*ui_scale,-PI*.5,-PI*.5+TAU*maxf(.001,vertical_progress),64,color,3*ui_scale,true)
+				draw_arc(control_origin,radius+5*u,-PI*.5,-PI*.5+TAU*maxf(.001,vertical_progress),64,color,3.5*u,true)
 			elif walk_direction!=0 and not control_attached:
 				# Holding left or right on a platform fills the ring, then walks.
 				var start := 0.0 if walk_direction>0 else PI
-				draw_arc(control_origin,radius+7*ui_scale,start,start+TAU*maxf(.001,walk_progress),64,color,3*ui_scale,true)
-			# Direction rail and a raised, high-contrast thumb make the drag state obvious.
-			draw_line(control_origin,knob,Color(color,.35),5*ui_scale,true)
-			draw_circle(knob,13*ui_scale,Color("121b22",.60))
-			draw_circle(knob,10*ui_scale,color)
-			draw_circle(knob,5*ui_scale,Color("fff7df",.72))
-			draw_arc(knob,10*ui_scale,-PI*.85,PI*.05,24,Color("fff7df",.8),1.5*ui_scale,true)
+				draw_arc(control_origin,radius+5*u,start,start+TAU*maxf(.001,walk_progress),64,color,3.5*u,true)
+			# A soft rail to the thumb, then the thumb: a shadow, the coloured
+			# body, a highlight and a bright core.
+			draw_line(control_origin,knob,Color(color,.28),6*u,true)
+			draw_circle(knob+Vector2(1.5,2.5)*u,15*u,Color("0b1218",.22))
+			draw_circle(knob,15*u,Color("ffffff",.88))
+			draw_circle(knob,13*u,color)
+			draw_circle(knob+Vector2(-3,-4)*u,6*u,Color("ffffff",.38))
+			draw_arc(knob,10*u,-PI*.95,-PI*.25,24,Color("fff7df",.85),2*u,true)
+			draw_circle(knob,3.5*u,Color("fff7df",.9))
 
 func font_weight(file: FontFile, weight: int) -> FontVariation:
 	var variation := FontVariation.new()
@@ -604,6 +610,9 @@ func toggle_sound() -> void:
 	game.request_profile_save()
 	if not game.model.profile["sound"]: game.audio.stop()
 
+func toggle_music() -> void:
+	game.set_music_enabled(not bool(game.model.profile.get("music",true)))
+
 func toggle_loot_prices() -> void:
 	set_loot_prices("near" if str(game.model.profile.get("loot_prices","near"))=="always" else "always")
 
@@ -673,6 +682,14 @@ func show_menu() -> void:
 	lobby_view = lobby
 	content.add_child(lobby)
 	lobby.setup(self)
+
+# Launch splash over the menu (SplashScreen); its icon lands in the profile
+# button's mini icon.
+func show_splash() -> void:
+	if not is_instance_valid(lobby_view): return
+	var splash := SplashScreen.new()
+	add_child(splash)
+	splash.setup(self,lobby_view.profile_mark)
 
 # Lowest edge of the display cut-outs (camera holes, notches) over a
 # horizontal span, in design units. Bars hug the top edge and only step
@@ -884,7 +901,7 @@ func show_play() -> void:
 	shown_height = maxf(0,(game.sim.pos.y-game.START_Y)*10)
 	if record_run!=game.run_id:
 		record_run = game.run_id
-		record_at_start = float(game.model.profile["best"])
+		record_at_start = game.model.record(game.selected_location if game.run_mode!="practice" else 0,game.run_mode)
 		record_broken = false
 		last_zone = -1
 	refresh_bag()
@@ -1080,7 +1097,7 @@ func update_play() -> void:
 	if record_at_start>0 and climbed>record_at_start and not record_broken and game.run_mode!="practice":
 		record_broken = true
 		pulse(height_plate,.12)
-	record_label.text = "Новый рекорд!" if record_broken else "Рекорд %d м" % int(game.model.profile["best"])
+	record_label.text = "Новый рекорд!" if record_broken else "Рекорд %d м" % int(record_at_start)
 	# A theme override notifies and re-lays out the label: set it only on change.
 	var record_color := GOLD if record_broken else MUTED
 	if record_label.get_theme_color("font_color")!=record_color: record_label.add_theme_color_override("font_color",record_color)
@@ -1232,6 +1249,11 @@ func tutorial_hint() -> String:
 	if "release" not in learned:
 		return "Отпусти палец — отцепись. Затем снова прицелься" if mobile else "Пробел: отпусти канат на взлёте и целься снова"
 	return ""
+
+# The pause button, a little larger than drawn so a hurried second finger
+# still finds it.
+func pause_at(point: Vector2) -> bool:
+	return is_instance_valid(pause_button) and pause_button.visible and pause_button.get_global_rect().grow(10).has_point(point)
 
 func item_button_at(point: Vector2) -> bool:
 	for item_button in item_buttons:

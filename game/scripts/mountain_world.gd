@@ -3,7 +3,7 @@ extends Node3D
 
 const FloraModels := preload("res://scripts/flora_models.gd")
 
-const GENERATION_VERSION := 15
+const GENERATION_VERSION := 16
 # A timed root holds this long before it breaks (see GripSpec).
 const FRAGILE_SECONDS := GripSpec.ROOT_SECONDS
 const COLORS := [Color("e3b95e"),Color("e8624d"),Color("70c995"),Color("78d8e5"),Color("a994df"),Color("f1d27b")]
@@ -35,6 +35,11 @@ var hazards: ActHazards
 var hazard_visuals: HazardVisuals
 var show_loot_prices := true
 var visual_quality := "balanced"
+# Runtime worlds build at most one visual chunk per visibility update. Tests and
+# offline tools keep the default synchronous behaviour so their scene queries
+# remain deterministic.
+var visual_build_budget := -1
+var generation_row_budget := -1
 const MAX_CHUNK_BUILDS_PER_UPDATE := 1
 const MAX_FAR_BAND_BUILDS_PER_UPDATE := 1
 const STREAM_MOVE_THRESHOLD := .28
@@ -47,8 +52,9 @@ var stream_dirty := true
 # builds (start of a run, tests, tools) stay synchronous.
 const BUILD_SLICE_USEC := 4000
 # Within this distance of the view centre a section is due on screen soon,
-# so its job finishes without pausing.
+# so it gets a larger, but still bounded, slice.
 const BUILD_URGENT_DISTANCE := 18.0
+const BUILD_URGENT_SLICE_USEC := 6000
 var build_job_key := -1
 var build_job_band := NO_BAND
 var build_job_parent_id := 0
@@ -68,10 +74,14 @@ static func generation_version_for(_biome: int) -> int:
 	return GENERATION_VERSION
 
 static func resumable(version: int, biome: int) -> bool:
-	if version in [14,GENERATION_VERSION]: return true
+	if version in [14,15,GENERATION_VERSION]: return true
 	return version in [6,7,8,9,10,11,12,13] if biome==0 else version==4
 
-func setup(world_seed: int, world_location: int, saved_version: int = 0, practice: bool = false) -> void:
+# v16 summit climbs run on a prepared route (LevelCatalog.ROUTES): its index
+# is `route_index`; -1 keeps the seed's own route (endless, menus, tests).
+var route_index := -1
+
+func setup(world_seed: int, world_location: int, saved_version: int = 0, practice: bool = false, route: int = -1) -> void:
 	seed_value = world_seed
 	location = world_location
 	generation_version = saved_version if saved_version>0 else generation_version_for(location)
@@ -82,6 +92,8 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	if practice: layout = PracticeLayout.new()
 	# v15 changes only the finds layer; v14 geometry and hazards are kept.
 	if layout is ExpeditionLayout: layout.economy_loot = generation_version>=15
+	route_index = route if layout is ExpeditionLayout and generation_version>=16 else -1
+	if route_index>=0: layout.route = LevelCatalog.route(world_location,route_index)
 	layout.gentle_intro = generation_version>=7
 	layout.sparse_route = generation_version>=8
 	layout.safe_routes = generation_version>=9
@@ -91,6 +103,7 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	layout.calibrated_routes = generation_version>=13
 	# Only a saved v4 attempt still regenerates on the old generator.
 	if location!=0 and generation_version<14 and not practice: layout = LegacyMountainLayout.new()
+	layout.generation_version = generation_version
 	layout.setup(world_seed,world_location)
 	anchors = layout.anchors
 	main_route = layout.main_route
@@ -119,7 +132,7 @@ func set_visual_quality(quality: String) -> void:
 		for key in chunks.keys(): _release_chunk(key)
 		stream_pending = true
 		stream_dirty = true
-		update_visibility(camera_center.y,camera_center.x)
+		update_visibility(camera_center.y,camera_center.x,visual_build_budget)
 
 func seeded_rng(index: int, stream: int) -> RandomNumberGenerator:
 	return layout.rng(index,stream)
@@ -132,16 +145,22 @@ func outside_mountain(point: Vector2) -> bool:
 
 func generate_to(height: float, finite: bool, summit: float = 120) -> void:
 	var target := minf(height,summit+6) if finite else height
+	layout.generation_row_budget = generation_row_budget
 	layout.generate_to(target,finite,summit)
 	route_edges = layout.edges
-	generated_height = maxf(generated_height,target)
+	if generation_row_budget>=0 and not layout.summit_added and layout.row>0:
+		# The layout may intentionally build only a few rows this call. Expose
+		# the actual frontier so the caller can request the next slice next tick.
+		generated_height = maxf(generated_height,layout.main_point(layout.row).y)
+	else:
+		generated_height = maxf(generated_height,target)
 	stream_pending = true
 	stream_dirty = true
 	# The top chunk changes when the summit is added; refresh it if loaded.
 	if layout.summit_added:
 		var key := int(floor(summit/24))
 		if chunks.has(key): _release_chunk(key)
-	if visuals_enabled: update_visibility(camera_center.y,camera_center.x)
+	if visuals_enabled: update_visibility(camera_center.y,camera_center.x,visual_build_budget)
 
 func add_anchor(point: Vector2, kind: int, _bush: bool = false, dimensions: Vector2 = Vector2(1.8,.65)) -> void:
 	var id := layout._add_anchor(point,kind,dimensions)
@@ -767,7 +786,7 @@ func _build_slice() -> int:
 		urgent += 24.0
 	elif build_job_key<0: return BUILD_SLICE_USEC
 	var gap := absf(camera_center.y-clampf(camera_center.y,low,low+24.0))
-	return 1000000000 if gap<urgent else BUILD_SLICE_USEC
+	return BUILD_URGENT_SLICE_USEC if gap<urgent else BUILD_SLICE_USEC
 
 # Called by builders between pieces. Synchronous builds return at once; the
 # streamed section yields to the next frame when its slice is spent and stops

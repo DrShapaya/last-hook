@@ -201,7 +201,9 @@ func route(parent: Node, at: Vector2, width: float, current: float = -1.0, on_da
 	line.caption = caption
 	line.summit = game.summit_height*10
 	line.zone = float(model.balance["zone_units"])*10
-	line.record = float(model.profile["best"])
+	# The record of the route on show and of the mode it is climbed in.
+	var on_menu: bool = game.state=="menu"
+	line.record = model.record(game.lobby_location if on_menu else game.selected_location,"summit" if on_menu else game.run_mode)
 	line.current = current
 	line.font = hud.body_font
 	line.strong = hud.heading_font
@@ -251,6 +253,23 @@ func _segment_pressed(buttons: Array[Button], thumb: Panel, index: int, callback
 	tween.tween_property(thumb,"position:x",left+index*each,.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	paint_segments(buttons,index)
 	callback.call(index)
+
+# A small hold-yellow "Скоро" plate for features that are not open yet.
+func soon_tag(parent: Node, at: Vector2, width: float = 54.0) -> Panel:
+	var badge := slab(parent,at,Vector2(width,18),HOLD,HOLD_LIP,2)
+	text(badge,"Скоро",Vector2(0,0),Vector2(width,16),11,INK,"strong").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	return badge
+
+# A short wiggle of a "Скоро" plate and a note: the answer to a tap on
+# something that is not open yet.
+func wiggle_soon(badge: Control, message: String) -> void:
+	if is_instance_valid(badge):
+		badge.pivot_offset = badge.size*.5
+		var tween := badge.create_tween()
+		tween.tween_property(badge,"rotation",.12,.06)
+		tween.tween_property(badge,"rotation",-.1,.09)
+		tween.tween_property(badge,"rotation",0.0,.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	game.toast(message,1.8,"menu")
 
 func coin_amount(parent: Node, value: int, at: Vector2, font_size: int = 17, color: Color = COIN, kind: int = 12) -> void:
 	var icon := font_size+5

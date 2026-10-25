@@ -67,6 +67,7 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_controls.gd') (Join
 Invoke-TaskGodot @('--headless','--script','res://tests/test_generation.gd') (Join-Path $taskArtifacts 'build-generation.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_routes.gd') (Join-Path $taskArtifacts 'build-routes.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_levels.gd') (Join-Path $taskArtifacts 'build-levels.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_authored.gd') (Join-Path $taskArtifacts 'build-authored.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_grip_types.gd') (Join-Path $taskArtifacts 'build-grip-types.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_terrain.gd') (Join-Path $taskArtifacts 'build-terrain.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_visuals.gd') (Join-Path $taskArtifacts 'build-visuals.log')

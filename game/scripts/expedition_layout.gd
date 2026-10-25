@@ -40,6 +40,9 @@ var variant_override: Dictionary = {}
 var economy_loot := false
 var contract: Dictionary = {}
 var loot_plan: LootPlacement
+# v16: the prepared route of a summit climb (LevelCatalog.ROUTES); empty for
+# endless climbs and older generators.
+var route: Dictionary = {}
 
 func setup(world_seed: int, biome: int) -> void:
 	super.setup(world_seed,biome)
@@ -98,8 +101,15 @@ func act_rng(act: int, local: int, stream: int) -> RandomNumberGenerator:
 func variant_count(act: int) -> int:
 	return 1+span(act)["def"].get("variants",[]).size()
 
+# The authored settings of an act on a prepared route (first cycle only).
+func route_act(act: int) -> Dictionary:
+	if route.is_empty() or act<0 or act>=spans.size(): return {}
+	var acts: Array = route.get("acts",[])
+	return acts[act] if act<acts.size() else {}
+
 func variant_of(act: int) -> int:
 	if variant_override.has(act): return int(variant_override[act])
+	if not route_act(act).is_empty(): return clampi(int(route_act(act).get("variant",0)),0,variant_count(act)-1)
 	return act_rng(act,0,61).randi_range(0,variant_count(act)-1)
 
 # Beats of an act with its contract variant applied (same row counts).
@@ -153,6 +163,10 @@ func landform(index: int) -> Dictionary:
 func start_point(act: int) -> Vector2:
 	var info := span(act)
 	var random := act_rng(act,0,18)
+	var authored := route_act(act)
+	if not authored.is_empty():
+		var x := clampf(float(authored.get("x",0.0)),-1.6,1.6)
+		return Vector2(x,4.0) if act==0 else Vector2(x,float(info["y_start"])+1.0)
 	if act==0:
 		return Vector2(random.randf_range(.9,1.6)*(-1 if random.randf()<.5 else 1),4.0)
 	return Vector2(random.randf_range(-1.6,1.6),float(info["y_start"])+1.0)
@@ -200,6 +214,10 @@ func _plan_act(act: int) -> void:
 	var plan := {"index":act,"id":info["id"],"first_row":first_row,"start":start,"target":target,"beats":beats,"counts":counts,"variant":variant_of(act),"forks":[]}
 	var point := start
 	var direction := -1 if random.randf()<.5 else 1
+	# A prepared route sets the first swing side and the zigzag width.
+	var authored := route_act(act)
+	var sway := clampf(float(authored.get("sway",1.0)),.8,1.2)
+	if not authored.is_empty(): direction = -1 if int(authored.get("dir",1))<0 else 1
 	var last_direction := 0
 	var fork_side := 1
 	var remaining := steps.size()
@@ -215,7 +233,7 @@ func _plan_act(act: int) -> void:
 				if template[2]=="flip": direction = -direction
 				# Close to the exit the route turns towards the next act.
 				if remaining<=5 and absf(point.x-target.x)>3.0 and signf(target.x-point.x)!=direction: direction = -direction
-				dx = float(template[0])*direction
+				dx = float(template[0])*direction*sway
 				if absf(point.x+dx)>11.0:
 					direction = -direction
 					dx = -dx
@@ -391,7 +409,7 @@ func _beat_detour(index: int, point: Vector2, entry: int, zone: int, info: Dicti
 		anchors[branch_id]["role"] = "branch"
 		anchors[branch_id]["permanent"] = false
 		if kind==GripSpec.SPRING: anchors[branch_id]["exit_dir"] = (exit-bonus).normalized()
-		if GripSpec.network_kind(kind): edges.append(Vector2i(entry,branch_id))
+		if GripSpec.network_kind(kind): _add_edge(Vector2i(entry,branch_id))
 		var record: Dictionary
 		if kind==GripSpec.CRYSTAL:
 			var reward_id := _add_anchor(reward,GripSpec.STONE,Vector2(1.3,.6))
@@ -454,7 +472,7 @@ func _fork(index: int, point: Vector2, entry: int, zone: int, info: Dictionary) 
 		anchors[branch_id]["role"] = "branch"
 		anchors[branch_id]["permanent"] = false
 		if kind==GripSpec.SPRING: anchors[branch_id]["exit_dir"] = (exit-spot).normalized()
-		if GripSpec.network_kind(kind): edges.append(Vector2i(entry,branch_id))
+		if GripSpec.network_kind(kind): _add_edge(Vector2i(entry,branch_id))
 		var record := record_branch(entry,branch_id,index+3,exit,"fork")
 		_tag_branch(record,info,str(beat.get("tag","risky_shortcut")))
 		# A collection fork carries a rare find on its short branch.
@@ -664,7 +682,7 @@ func _sand_bridge(index: int, info: Dictionary, ledge: Dictionary) -> void:
 		anchors[id]["broken"] = true
 		anchors[id]["hidden"] = true
 		anchors[id]["act"] = info["act"]
-		edges.append(Vector2i(main_route[-1],id))
+		_add_edge(Vector2i(main_route[-1],id))
 		var definition := LevelCatalog.hazard("sand_bridge")
 		var hazard := {"def":"sand_bridge","kind":"collapse","act":info["act"],"beat":"rest","row":index,
 			"telegraph_time":definition["telegraph_time"],"active_time":0.0,"calm_time":0.0,
@@ -698,9 +716,27 @@ func _place_encounter(index: int) -> void:
 	encounters.append(encounter)
 	if index>=5: _build_obstacles(index,encounter)
 
+# Hand-placed extras of a prepared route on the beat row they belong to.
+func _route_extras(index: int, info: Dictionary) -> void:
+	var act := int(info["act"])
+	if route.is_empty() or act>=spans.size(): return
+	var point := main_point(index)
+	var key := func(entry: Array) -> bool: return int(entry[0])==act and str(entry[1])==str(info["type"]) and int(entry[2])==int(info["step"])
+	for entry in route.get("decor",[]):
+		if key.call(entry): landmarks.append({"act":act,"family":str(entry[4]),"pos":point+Vector2(int(entry[3])*5.0,.6),"role":"route"})
+	if not economy_loot: return
+	for entry in route.get("coins",[]):
+		if key.call(entry) and not (finite and main_point(index+1).y>=summit-.8):
+			loot_plan.request(index,point+Vector2(0,-2.05),"trail",main_point(index+1)+Vector2(0,-2.05),{"count":int(entry[3])})
+	for entry in route.get("caches",[]):
+		if key.call(entry): loot_plan.request(index,point+Vector2(int(entry[3])*2.4,-1.3),"route_cache")
+	for entry in route.get("treasures",[]):
+		if key.call(entry): loot_plan.request(index,point+Vector2(int(entry[3])*2.5,-1.1),"route_treasure")
+
 func _generate_row(index: int) -> void:
 	super._generate_row(index)
 	var info := row_of(index)
+	_route_extras(index,info)
 	# The last grip of an act points at the landmark that marks the way on.
 	var next := row_of(index+1)
 	if info["type"]=="exit" and next["act"]!=info["act"] and (not finite or main_point(index).y<summit-1.0):

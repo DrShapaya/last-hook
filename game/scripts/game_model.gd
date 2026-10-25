@@ -78,7 +78,8 @@ static func fresh_profile() -> Dictionary:
 		"endless_best": 0.0, "reached_zones": 1, "summit_cleared": false, "locations": [0],
 		"cleared_locations": [], "runs": 0, "wins": 0, "last_settled": "", "active": {},
 		"sound": true, "vibration": true, "notifications": true, "graphics_quality": "balanced",
-		"selected_location":0,"run_history":[],"learned_controls":[],"camera_zoom":1.0}
+		"selected_location":0,"run_history":[],"learned_controls":[],"camera_zoom":1.0,
+		"records":{},"music":true,"route_choices":{}}
 
 # --- Save and migration -----------------------------------------------------------
 
@@ -121,6 +122,7 @@ func load_profile() -> void:
 				profile[key] = [0] if key=="locations" else []
 			profile[key] = profile[key].map(func(id): return int(id))
 		profile["reached_zones"] = clampi(int(profile["reached_zones"]), 1, 6)
+		_sanitize_records(parsed.has("records"))
 		profile["camera_zoom"] = snap_camera_zoom(float(profile["camera_zoom"]) if (profile["camera_zoom"] is float or profile["camera_zoom"] is int) else 1.0)
 		profile["selected_location"] = clampi(int(profile["selected_location"]),0,balance["locations"].size()-1)
 		if not profile["locations"].has(profile["selected_location"]):
@@ -565,6 +567,57 @@ func recommended_upgrade() -> int:
 func next_goal() -> String:
 	var stage := int(profile["reached_zones"])
 	return "Следующая зона · %d м" % roundi(stage*float(balance["zone_units"])*10) if stage<6 else "Следующая цель · вершина"
+
+# --- Prepared routes: the one chosen per expedition ---------------------------------
+
+func route_choice(location: int) -> int:
+	var choices = profile.get("route_choices",{})
+	var index := int(choices.get(str(location),0)) if choices is Dictionary else 0
+	return clampi(index,0,LevelCatalog.routes(location).size()-1)
+
+func set_route_choice(location: int, index: int) -> void:
+	if not profile.get("route_choices",null) is Dictionary: profile["route_choices"] = {}
+	profile["route_choices"][str(location)] = clampi(index,0,LevelCatalog.routes(location).size()-1)
+
+# --- Records: one per route and mode ------------------------------------------------
+# records = {"summit":{"0":m,"1":m,...},"endless":{...},"practice":{"0":m}}.
+# "best" stays the overall record (save compatibility, act gates of old saves).
+
+const RECORD_MODES := ["summit","endless","practice"]
+
+func record(location: int, mode: String = "summit") -> float:
+	var table = profile["records"].get(mode,{})
+	return float(table.get(str(location),0.0)) if table is Dictionary else 0.0
+
+# Returns true when the height is a new record of that route and mode.
+func note_record(location: int, mode: String, meters: float) -> bool:
+	if mode not in RECORD_MODES or meters<=record(location,mode): return false
+	if not profile["records"].get(mode,null) is Dictionary: profile["records"][mode] = {}
+	profile["records"][mode][str(location)] = snappedf(meters,.1)
+	return true
+
+# A record table read from a save keeps only known modes and numbers. A save
+# from before per-route records rebuilds them from its run history; the old
+# overall record goes to the first route when the history has no better one.
+func _sanitize_records(stored: bool) -> void:
+	var source = profile.get("records",{})
+	var clean := {}
+	if source is Dictionary:
+		for mode in RECORD_MODES:
+			if source.get(mode,null) is Dictionary:
+				var table := {}
+				for key in source[mode].keys():
+					if str(key).is_valid_int() and int(key)>=0 and int(key)<balance["locations"].size(): table[str(int(key))] = maxf(0.0,float(source[mode][key]))
+				clean[mode] = table
+	profile["records"] = clean
+	if stored: return
+	for entry in profile["run_history"]:
+		if not entry is Dictionary: continue
+		var mode := str(entry.get("mode","summit"))
+		note_record(clampi(int(entry.get("location",0)),0,balance["locations"].size()-1),mode,float(entry.get("height",0)))
+	var overall := float(profile.get("best",0.0))
+	if overall>0 and record(0,"summit")<=0 and record(1,"summit")<=0 and record(2,"summit")<=0: note_record(0,"summit",overall)
+	if float(profile.get("endless_best",0.0))>0: note_record(0,"endless",float(profile["endless_best"]))
 
 func reach(units: float) -> Array:
 	profile["best"] = maxf(float(profile["best"]), units * float(balance["meters_per_unit"]))

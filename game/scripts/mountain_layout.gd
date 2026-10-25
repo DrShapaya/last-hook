@@ -8,16 +8,21 @@ const ROW_HEIGHT := 2.9
 const LINK_REACH := 5.25
 var seed_value := 0
 var location := 0
+var generation_version := 0
+var generation_row_budget := -1
 var finite := false
 var summit := 120.0
 var row := 0
 var anchors: Array[Dictionary] = []
 var main_route: Array[int] = []
 var edges: Array[Vector2i] = []
+var edge_set: Dictionary = {}
+var edge_nodes: Dictionary = {}
 var obstacles: Array[Dictionary] = []
 var ledges: Array[Dictionary] = []
 var finds: Array[Dictionary] = []
 var bins: Dictionary = {}
+var network_anchor_ids: Array[int] = []
 var features: Dictionary = {}
 var summit_added := false
 var route_points: Array[Vector2] = []
@@ -97,6 +102,7 @@ func _add_anchor(point: Vector2, kind: int, dimensions: Vector2, primary: bool =
 	object["permanent"] = (location!=0 and kind!=GripSpec.ROOT) or (GripSpec.network_kind(kind) and rng(id,91).randf()<.08)
 	if kind==GripSpec.ICE: object["slide_dir"] = slide_direction_at(point)
 	anchors.append(object)
+	if GripSpec.network_kind(kind): network_anchor_ids.append(id)
 	var key := int(floor(point.y/CHUNK_HEIGHT))
 	if not bins.has(key):
 		bins[key] = []
@@ -115,20 +121,41 @@ func nearby_ids(low: float, high: float) -> Array[int]:
 			result.append(id)
 	return result
 
+func _edge_key(edge: Vector2i) -> String:
+	return "%d:%d" % [edge.x,edge.y]
+
+func _add_edge(edge: Vector2i) -> void:
+	var key := _edge_key(edge)
+	if edge_set.has(key): return
+	edges.append(edge)
+	edge_set[key] = true
+	edge_nodes[edge.x] = true
+	edge_nodes[edge.y] = true
+
+func _rebuild_edge_index() -> void:
+	edge_set.clear()
+	edge_nodes.clear()
+	for edge in edges:
+		edge_set[_edge_key(edge)] = true
+		edge_nodes[edge.x] = true
+		edge_nodes[edge.y] = true
+
 func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 	finite = is_finite
 	summit = summit_height
 	# Complete a chunk plus its neighbour seam before rendering it.
 	var planned_height: float = ceil(height/CHUNK_HEIGHT)*CHUNK_HEIGHT+6
-	while main_point(row).y<planned_height and (not finite or main_point(row).y<summit-.8):
+	var rows_built := 0
+	while main_point(row).y<planned_height and (not finite or main_point(row).y<summit-.8) and (generation_row_budget<0 or rows_built<generation_row_budget):
 		_generate_row(row)
 		row += 1
-	if finite and height>=summit and not summit_added:
+		rows_built += 1
+	if finite and height>=summit and not summit_added and main_point(row).y>=summit-.8:
 		var last: Vector2 = anchors[main_route[-1]]["pos"]
 		var id := _add_anchor(Vector2(last.x,summit+.9),0,Vector2(2,.65),true)
 		anchors[id]["permanent"] = true
 		anchors[id]["role"] = "rest"
-		edges.append(Vector2i(main_route[-1],id))
+		_add_edge(Vector2i(main_route[-1],id))
 		main_route.append(id)
 		ledges.append({"left":last.x-1.6,"right":last.x+1.6,"top":summit-.4})
 		summit_added = true
@@ -148,7 +175,7 @@ func _generate_row(index: int) -> void:
 		anchors[id]["exit_dir"] = (main_point(index+1)-point).normalized()
 	_main_created(index,id)
 	if not main_route.is_empty():
-		edges.append(Vector2i(main_route[-1],id))
+		_add_edge(Vector2i(main_route[-1],id))
 	main_route.append(id)
 	# Stratified jitter avoids empty sides; it is not a fixed ladder of platforms.
 	for column in range(4 if (index%4==2 if sparse_route else index%3==1) else 0):
@@ -163,10 +190,29 @@ func _generate_row(index: int) -> void:
 				safe = false
 		if not safe: continue
 		var supported := false
-		for other in anchors:
-			if GripSpec.in_network(other) and transition_clear(other["pos"],candidate):
-				supported = true
-				break
+		if generation_version>=14:
+			# A candidate can only be supported by nearby rows. Keep a fallback for
+			# unusual seeds, but make the common path use vertical bins.
+			var support_ids := nearby_ids(candidate.y-8.0,candidate.y+8.0)
+			for other_id in support_ids:
+				if other_id>=anchors.size(): continue
+				var other: Dictionary = anchors[other_id]
+				if GripSpec.in_network(other) and transition_clear(other["pos"],candidate):
+					supported = true
+					break
+		if not supported:
+			if generation_version>=14:
+				for other_id in network_anchor_ids:
+					if other_id>=anchors.size(): continue
+					var other: Dictionary = anchors[other_id]
+					if transition_clear(other["pos"],candidate):
+						supported = true
+						break
+			else:
+				for other in anchors:
+					if GripSpec.in_network(other) and transition_clear(other["pos"],candidate):
+						supported = true
+						break
 		if not supported: continue
 		var auxiliary_kind := _auxiliary_kind(random)
 		if auxiliary_kind==GripSpec.SPRING and calibrated_routes and not spring_lane_clear(candidate,auxiliary_exit(candidate)): auxiliary_kind = GripSpec.STONE
@@ -181,19 +227,20 @@ func _generate_row(index: int) -> void:
 			var other_pos: Vector2 = anchors[other_id]["pos"]
 			if new_pos.distance_to(other_pos)<=LINK_REACH and transition_clear(other_pos,new_pos):
 				var edge := Vector2i(other_id,new_id)
-				if not edges.has(edge):
-					edges.append(edge)
+				_add_edge(edge)
 		# Repair isolated samples with short, supported intermediate grips.
-		var has_connection := false
-		for edge in edges:
-			if edge.x==new_id or edge.y==new_id:
-				has_connection = true
-				break
+		var has_connection := edge_nodes.has(new_id)
 		if not has_connection:
 			var closest := -1
 			var best_distance := INF
 			var bridge_clear := false
-			for other_id in range(new_id):
+			var local_ids: Array[int] = []
+			if generation_version>=14:
+				local_ids = nearby_ids(new_pos.y-8.0,new_pos.y+8.0)
+			else:
+				for legacy_id in range(new_id): local_ids.append(legacy_id)
+			for other_id in local_ids:
+				if other_id>=new_id: continue
 				var other: Dictionary = anchors[other_id]
 				var distance: float = new_pos.distance_to(other["pos"])
 				if not GripSpec.in_network(other) or not transition_clear(other["pos"],new_pos): continue
@@ -203,15 +250,29 @@ func _generate_row(index: int) -> void:
 					closest = other_id
 					best_distance = distance
 					bridge_clear = clear
+			# Preserve the old long-range repair as a fallback only when no local
+			# network anchor works. This keeps unusual legacy seeds valid without
+			# paying the full scan for every generated grip.
+			if generation_version>=14 and closest<0 and local_ids.size()<new_id:
+				for other_id in network_anchor_ids:
+					if other_id>=new_id or local_ids.has(other_id): continue
+					var other: Dictionary = anchors[other_id]
+					var distance: float = new_pos.distance_to(other["pos"])
+					if not GripSpec.in_network(other) or not transition_clear(other["pos"],new_pos): continue
+					var clear := not calibrated_routes or bridge_spacious(other["pos"],new_pos)
+					if (clear and not bridge_clear) or (clear==bridge_clear and distance<best_distance):
+						closest = other_id
+						best_distance = distance
+						bridge_clear = clear
 			if closest>=0:
 				var start: Vector2 = anchors[closest]["pos"]
 				var steps := maxi(1,int(ceil(best_distance/3.8)))
 				var previous := closest
 				for step in range(1,steps):
 					var bridge := _add_anchor(start.lerp(new_pos,float(step)/steps),0,Vector2(1.15,.5))
-					edges.append(Vector2i(previous,bridge))
+					_add_edge(Vector2i(previous,bridge))
 					previous = bridge
-				edges.append(Vector2i(previous,new_id))
+				_add_edge(Vector2i(previous,new_id))
 	if (index%9==8 if sparse_route else index%6==4):
 		ledges.append({"left":point.x-1.3,"right":point.x+1.3,"top":point.y-2.5})
 	var zone := clampi(int(point.y/20),0,5)
@@ -399,6 +460,7 @@ func _try_obstacle(candidate: Dictionary, index: int) -> bool:
 	if not stable_network_connected(kept):
 		return false
 	edges = kept
+	_rebuild_edge_index()
 	obstacles.append(candidate)
 	return true
 

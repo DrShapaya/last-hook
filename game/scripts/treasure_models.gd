@@ -76,6 +76,10 @@ static func idle_animation(kind: String) -> String:
 # The painted treasure an item shows: from its kind's pool, the expedition's
 # own sheet when it has one there, the same one for the same item.
 static func sprite_for(item: Dictionary) -> String:
+	# Finds of the current generator carry their set's picture (ItemCatalog.dress).
+	if not str(item.get("sprite","")).is_empty():
+		var own := SPRITES.path_join(str(item["sprite"])+".png")
+		if ResourceLoader.exists(own): return own
 	var kind := kind_for(item)
 	if kind=="material":
 		var set_id := str(item.get("set_id",""))

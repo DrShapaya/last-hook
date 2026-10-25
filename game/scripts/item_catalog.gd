@@ -21,6 +21,78 @@ const VISUAL_RARITY_COLORS := [Color("e0a83a"),Color("e8833a"),Color("e9bf4f"),C
 const VISUAL_MATERIAL_COLORS := {"fiber":Color("c9a46a"),"silk":Color("e9e4f2"),"sinew":Color("7fc48a"),"core":Color("8fd8ee")}
 static var _balance: Dictionary = {}
 
+# Each expedition has its own treasure set: the standard mountain keeps
+# travellers' keepsakes, the canyon the relics of an old desert empire, the
+# summit winter keepsakes. A find takes its picture and name from the set of
+# the route it lies on (dress()), so nothing from one set turns up on another
+# route. Entries are [sprite under assets/sprites, name]; valuables are listed
+# by tier (0 lowest, 5 highest).
+const TREASURE_SETS := {
+	"green_peak":{"title":"Горные находки",
+		"valuable":[
+			[["treasures/treasure_b_1","Старый ключ"],["treasures/treasure_a_4","Свиток с печатью"]],
+			[["treasures/treasure_a_1","Горный фонарь"],["treasures/treasure_b_3","Карта перевала"]],
+			[["treasures/treasure_a_2","Компас проводника"],["treasures/treasure_a_5","Песочные часы"],["treasures/treasure_b_5","Часы смотрителя"]],
+			[["treasures/treasure_a_3","Перстень-печатка"],["treasures/treasure_b_2","Рубиновое кольцо"]],
+			[["treasures/treasure_a_6","Подзорная труба"],["treasures/treasure_b_9","Труба капитана"],["treasures/treasure_b_7","Корабль в бутылке"]],
+			[["treasures/treasure_a_8","Горная жемчужина"],["treasures/treasure_b_6","Аметистовая жемчужина"]]],
+		"artifact":[["treasures/treasure_a_9","Золотая арфа"],["treasures/treasure_b_8","Маска хранителя"],["treasures/treasure_a_10","Резная птица"]],
+		"relic":[["treasures/treasure_a_7","Сундучок лесника"],["treasures/treasure_b_10","Окованный сундук"]],
+		"materials":{"fiber":"vegetation/vine_green_2","silk":"vegetation/grass_blades_2","sinew":"vegetation/vine_root_2","core":"crystals/crystal_blue_3"}},
+	"stone_spires":{"title":"Сокровища пустыни",
+		"valuable":[
+			[["treasures/treasure_desert_9","Флакон благовоний"],["treasures/treasure_desert_8","Бирюзовый браслет"]],
+			[["treasures/treasure_desert_10","Фигурка верблюда"],["treasures/treasure_desert_3","Изогнутый кинжал"]],
+			[["treasures/treasure_desert_2","Солнечный медальон"],["treasures/treasure_b_4","Бирюзовый скарабей"]],
+			[["treasures/treasure_desert_4","Канопа сокола"]],
+			[["treasures/treasure_desert_6","Звёздная астролябия"],["treasures/treasure_desert_5","Солнечная скрижаль"]],
+			[["treasures/treasure_desert_1","Крылатый скарабей"],["treasures/treasure_desert_7","Страж гробницы"]]],
+		"artifact":[["treasures/treasure_desert_7","Страж гробницы"],["treasures/treasure_desert_1","Крылатый скарабей"],["treasures/treasure_desert_5","Солнечная скрижаль"]],
+		"relic":[["treasures/treasure_desert_4","Канопа каравана"],["treasures/treasure_desert_2","Знак караванщика"]],
+		"materials":{"fiber":"vegetation/vine_dry_2","silk":"vegetation/dry_plant_2","sinew":"vegetation/vine_dry_4","core":"crystals/crystal_amber_1"}},
+	"sky_city":{"title":"Зимние находки",
+		"valuable":[
+			[["treasures/treasure_winter_7","Шишка с лентой"],["treasures/treasure_winter_5","Тёплая варежка"]],
+			[["treasures/treasure_winter_10","Шарф экспедиции"],["treasures/treasure_winter_1","Серебряный колокольчик"]],
+			[["treasures/treasure_winter_8","Ветряные колокольчики"],["treasures/treasure_winter_2","Амулет из рога"]],
+			[["treasures/treasure_winter_4","Снежная сова"]],
+			[["treasures/treasure_winter_9","Тотем перевала"]],
+			[["treasures/treasure_winter_3","Музыкальная шкатулка"],["treasures/treasure_winter_6","Снежный шар"]]],
+		"artifact":[["treasures/treasure_winter_6","Снежный шар"],["treasures/treasure_winter_4","Снежная сова"],["treasures/treasure_winter_9","Тотем перевала"]],
+		"relic":[["treasures/treasure_winter_3","Шкатулка станции"],["treasures/treasure_winter_8","Колокольчики станции"]],
+		"materials":{"fiber":"vegetation/vine_frost_2","silk":"treasures/treasure_winter_10","sinew":"treasures/treasure_winter_2","core":"crystals/crystal_ice_1"}},
+}
+
+static func treasure_set(location_id: String) -> Dictionary:
+	return TREASURE_SETS.get(location_id,TREASURE_SETS["green_peak"])
+
+# Gives a find its own picture and name from its route's set. Called once the
+# find has its final item id, so the same find always looks the same.
+static func dress(item: Dictionary) -> Dictionary:
+	var family := str(item.get("family",""))
+	if family=="coin": return item
+	var set_data := treasure_set(str(item.get("location_id","")))
+	var key := str(item.get("item_id","")) if not str(item.get("item_id","")).is_empty() else str(item.get("id",0))
+	var pick := func(entries: Array) -> Array: return entries[posmod(hash(key),entries.size())]
+	match family:
+		"valuable":
+			if str(item.get("rarity",""))=="artifact":
+				var entry: Array = pick.call(set_data["artifact"])
+				item["sprite"] = entry[0]
+				item["name"] = "Артефакт · "+str(entry[1])
+			else:
+				var entry: Array = pick.call(set_data["valuable"][clampi(int(item.get("tier",0)),0,5)])
+				item["sprite"] = entry[0]
+				item["name"] = str(entry[1])
+		"relic":
+			var pool: Array = set_data["artifact"] if str(item.get("use_tag",""))=="landmark" else set_data["relic"]
+			item["sprite"] = (pick.call(pool) as Array)[0]
+		"contract":
+			item["sprite"] = (pick.call(set_data["relic"]) as Array)[0]
+		"material":
+			item["sprite"] = str(set_data["materials"].get(str(item.get("set_id","")),set_data["materials"]["fiber"]))
+	return item
+
 static func balance() -> Dictionary:
 	if _balance.is_empty():
 		_balance = JSON.parse_string(FileAccess.get_file_as_string("res://data/balance.json"))

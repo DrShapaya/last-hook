@@ -215,6 +215,80 @@ const ACTS := {
 		"objectives":["outer_fast_path","inner_anchors"],"reward_tag":"crown_signal","contract_tag":"outer_gust"},
 }
 
+# --- Authored routes (generator v16) ---------------------------------------------
+# A summit climb is one of three prepared routes per expedition. A route fixes
+# the seed (grip shapes, decor and weather are then always the same) and, act
+# by act, its contract variant (`variant`), where the act starts (`x`), the
+# side the first link swings to (`dir`) and how wide the zigzag runs
+# (`sway`). On top of the act beats it places hand-picked coin trails, coin
+# caches, rare treasures and landmarks, each anchored to a beat row:
+#   coins     [act, beat, step, count]   a trail along the swing below a link
+#   caches    [act, beat, step, side]    a coin cache beside a main grip
+#   treasures [act, beat, step, side]    a rare treasure beside a main grip
+#   decor     [act, beat, step, side, family]  a landmark beside the route
+# The route's grips are checked like every generated act (RouteGraph.audit,
+# test_levels), so a prepared route is always climbable with the base kit.
+const ROUTES := [
+	[
+		{"id":"forester_trail","name":"Тропа лесника","hint":"Мягкий подъём, много монет у корней","seed":1333,
+			"acts":[{"variant":1,"x":-1.2,"dir":1,"sway":.92},{"variant":1,"x":1.0,"dir":-1,"sway":.95},{"variant":0,"x":-.6,"dir":1,"sway":.9}],
+			"coins":[[0,"intro",0,4],[0,"combo",1,5],[1,"intro",1,4],[1,"combo",0,5],[2,"combo",1,5],[2,"exit",0,3]],
+			"caches":[[0,"rest",1,-1],[2,"rest",1,1]],"treasures":[[1,"rest",1,1]],
+			"decor":[[0,"teach",1,-1,"pine"],[1,"rest",0,1,"flag_line"],[2,"intro",0,-1,"signal_flags"]]},
+		{"id":"windy_ridge","name":"Ветреный гребень","hint":"Широкие перелёты над пропастью","seed":11148,
+			"acts":[{"variant":2,"x":1.4,"dir":-1,"sway":1.1},{"variant":2,"x":-1.4,"dir":1,"sway":1.12},{"variant":2,"x":1.2,"dir":-1,"sway":1.08}],
+			"coins":[[0,"teach",1,5],[0,"combo",0,4],[1,"teach",2,5],[1,"combo",1,4],[2,"intro",1,4],[2,"combo",0,5]],
+			"caches":[[0,"exit",0,1],[1,"rest",1,-1]],"treasures":[[2,"rest",1,-1]],
+			"decor":[[0,"rest",0,1,"root_bridge"],[1,"intro",0,-1,"hanging_frame"],[2,"rest",0,1,"post_gate"]]},
+		{"id":"risky_couloir","name":"Кулуар смельчаков","hint":"Короткие опасные срезки и тайники","seed":21111,
+			"acts":[{"variant":0,"x":0.3,"dir":-1,"sway":1.0},{"variant":0,"x":.4,"dir":1,"sway":1.0},{"variant":1,"x":-.4,"dir":1,"sway":1.02}],
+			"coins":[[0,"intro",0,3],[0,"exit",0,4],[1,"combo",0,4],[2,"intro",0,4],[2,"exit",0,4]],
+			"caches":[[0,"rest",1,1],[1,"rest",1,1],[2,"rest",1,-1]],"treasures":[[0,"combo",1,-1],[2,"combo",0,1]],
+			"decor":[[0,"intro",0,1,"pine"],[1,"combo",1,-1,"flag_line"],[2,"teach",0,1,"post_gate"]]},
+	],
+	[
+		{"id":"dry_riverbed","name":"Русло пересохшей реки","hint":"Безопасные полки и звонкие монеты","seed":101481,
+			"acts":[{"variant":1,"x":-1.0,"dir":1,"sway":.92},{"variant":0,"x":1.2,"dir":-1,"sway":.95},{"variant":2,"x":-.8,"dir":1,"sway":.92}],
+			"coins":[[0,"intro",0,4],[0,"combo",1,5],[1,"intro",1,4],[1,"combo",0,5],[2,"intro",0,4],[2,"exit",0,3]],
+			"caches":[[0,"rest",1,-1],[2,"rest",1,1]],"treasures":[[1,"rest",1,-1]],
+			"decor":[[0,"teach",1,1,"bones"],[1,"rest",0,-1,"wagon"],[2,"intro",0,1,"mirror_mast"]]},
+		{"id":"caravan_path","name":"Тропа каравана","hint":"Длинные траверсы между повозками","seed":111185,
+			"acts":[{"variant":2,"x":1.3,"dir":-1,"sway":1.1},{"variant":2,"x":-1.3,"dir":1,"sway":1.1},{"variant":1,"x":1.0,"dir":-1,"sway":1.05}],
+			"coins":[[0,"teach",1,5],[0,"combo",0,4],[1,"teach",2,5],[1,"combo",1,4],[2,"combo",0,5]],
+			"caches":[[0,"exit",0,-1],[1,"rest",1,1]],"treasures":[[2,"rest",1,1]],
+			"decor":[[0,"rest",0,-1,"cactus_grove"],[1,"intro",0,1,"sail"],[2,"rest",0,-1,"lens_ring"]]},
+		{"id":"storm_watch","name":"Дозор бурь","hint":"Ветер, срезки и редкие артефакты","seed":121000,
+			"acts":[{"variant":0,"x":.2,"dir":1,"sway":1.0},{"variant":1,"x":-.3,"dir":-1,"sway":1.02},{"variant":0,"x":.5,"dir":1,"sway":1.0}],
+			"coins":[[0,"intro",0,3],[0,"exit",0,4],[1,"combo",0,4],[2,"intro",1,4],[2,"exit",0,4]],
+			"caches":[[0,"rest",1,1],[1,"rest",1,-1],[2,"rest",1,1]],"treasures":[[0,"combo",1,1],[2,"combo",0,-1]],
+			"decor":[[0,"intro",0,-1,"bones"],[1,"combo",1,1,"wagon"],[2,"teach",0,-1,"mirror_mast"]]},
+	],
+	[
+		{"id":"north_face","name":"Северный склон","hint":"Ровный подъём по снежным полкам","seed":202998,
+			"acts":[{"variant":1,"x":-1.1,"dir":1,"sway":.92},{"variant":1,"x":1.1,"dir":-1,"sway":.94},{"variant":0,"x":-.7,"dir":1,"sway":.92}],
+			"coins":[[0,"intro",0,4],[0,"combo",1,5],[1,"intro",1,4],[1,"combo",0,5],[2,"combo",1,5],[2,"exit",0,3]],
+			"caches":[[0,"rest",1,1],[2,"rest",1,-1]],"treasures":[[1,"rest",1,1]],
+			"decor":[[0,"teach",1,-1,"snow_pines"],[1,"rest",0,1,"ice_columns"],[2,"intro",0,-1,"signal_light"]]},
+		{"id":"ice_crevasse","name":"Ледяная расщелина","hint":"Широкие махи над синими трещинами","seed":211185,
+			"acts":[{"variant":2,"x":1.4,"dir":-1,"sway":1.1},{"variant":2,"x":-1.2,"dir":1,"sway":1.1},{"variant":2,"x":1.1,"dir":-1,"sway":1.06}],
+			"coins":[[0,"teach",1,5],[0,"combo",0,4],[1,"teach",2,5],[1,"combo",1,4],[2,"intro",1,4],[2,"combo",0,5]],
+			"caches":[[0,"exit",0,-1],[1,"rest",1,1]],"treasures":[[2,"rest",1,1]],
+			"decor":[[0,"rest",0,1,"ice_needles"],[1,"intro",0,-1,"chains"],[2,"rest",0,1,"tower_ring"]]},
+		{"id":"wind_crown","name":"Корона ветров","hint":"Опасные карнизы и тайники вершины","seed":221259,
+			"acts":[{"variant":0,"x":-.2,"dir":-1,"sway":1.0},{"variant":0,"x":.3,"dir":1,"sway":1.0},{"variant":1,"x":-.5,"dir":1,"sway":1.02}],
+			"coins":[[0,"intro",0,3],[0,"exit",0,4],[1,"combo",0,4],[2,"intro",0,4],[2,"exit",0,4]],
+			"caches":[[0,"rest",1,-1],[1,"rest",1,1],[2,"rest",1,-1]],"treasures":[[0,"combo",1,1],[2,"combo",0,-1]],
+			"decor":[[0,"intro",0,1,"snow_pines"],[1,"combo",1,-1,"ice_columns"],[2,"teach",0,1,"signal_light"]]},
+	],
+]
+
+static func routes(location: int) -> Array:
+	return ROUTES[clampi(location,0,ROUTES.size()-1)]
+
+static func route(location: int, index: int) -> Dictionary:
+	var list := routes(location)
+	return list[clampi(index,0,list.size()-1)] if index>=0 else {}
+
 static func level(location: int) -> Dictionary:
 	return LEVELS[clampi(location,0,LEVELS.size()-1)]
 

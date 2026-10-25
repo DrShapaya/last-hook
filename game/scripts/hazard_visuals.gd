@@ -74,7 +74,13 @@ func build_near(center_y: float, limit: int = -1) -> bool:
 	var count := 0
 	for hazard in layout.hazards:
 		var id: int = hazard["id"]
-		if built.has(id) or absf(hazard_y(hazard,layout.ledges)-center_y)>40: continue
+		if built.has(id):
+			# A streamed bridge may be discovered one frame before its ledge
+			# chunk. Retry the visual hookup once the normal platform exists.
+			if str(hazard["def"])=="sand_bridge" and not is_instance_valid(built[id]["parts"].get("slab")):
+				_build(hazard,built[id])
+			continue
+		if absf(hazard_y(hazard,layout.ledges)-center_y)>40: continue
 		if limit>=0 and count>=limit: return true
 		count += 1
 		var node := Node3D.new()
@@ -265,35 +271,19 @@ func _build_icicle(hazard: Dictionary, entry: Dictionary, _random: RandomNumberG
 	crack.visible = false
 	entry["parts"] = {"spike":spike,"shadow":shadow_material,"crack":crack,"z":z}
 
-func _build_bridge(hazard: Dictionary, entry: Dictionary, random: RandomNumberGenerator) -> void:
-	var node: Node3D = entry["node"]
+func _build_bridge(hazard: Dictionary, entry: Dictionary, _random: RandomNumberGenerator) -> void:
 	var ledge: Dictionary = layout.ledges[int(hazard["ledge"])]
-	var left := float(ledge["left"])
-	var right := float(ledge["right"])
-	var top := float(ledge["top"])
-	var center := Vector2((left+right)*.5,top)
-	var z := _surface_z(center-Vector2(0,.3))
-	var slab := Node3D.new()
-	slab.name = "Песчаная перемычка"
-	slab.position = Vector3(center.x,top,z+.35)
-	node.add_child(slab)
-	var palette: Dictionary = world.profile_at(top).rock_palette
-	var sand := world.mat("bridge_sand",(palette["warm"] as Color).lerp(Color("d4a56a"),.5))
-	var dark := world.mat("bridge_sand_dark",(palette["base"] as Color).darkened(.1))
-	# A packed-sand span over a few wedged stones, its top a little uneven.
-	for index in range(3):
-		var part := world.box("Плита",Vector3.ZERO,Vector3((right-left)/3.0+.25,.3+random.randf_range(-.04,.06),1.3+random.randf_range(-.1,.1)),sand,slab)
-		part.position = Vector3(lerpf(left-center.x,right-center.x,(index+.5)/3.0),-.15+random.randf_range(-.03,.03),0)
-		part.rotation.z = random.randf_range(-.05,.05)
-	for index in range(5):
-		var piece := world.box("Каменный блок",Vector3.ZERO,Vector3(random.randf_range(.35,.6),.26,.55),dark,slab)
-		piece.position = Vector3(lerpf(left-center.x+.3,right-center.x-.3,index/4.0),-.42,.3)
-		piece.rotation.z = random.randf_range(-.3,.3)
-	var cracks := world.box("Трещины",Vector3.ZERO,Vector3(right-left-.4,.03,.02),world.mat("bridge_crack",Color("4a3122")),slab)
-	cracks.position = Vector3(0,.01,.72)
-	cracks.visible = false
-	entry["parts"] = {"slab":slab,"cracks":cracks,"rest":slab.position}
-	if bool(ledge.get("collapsed",false)): slab.visible = false
+	# Bridges use the same authored timber platform as every other rest ledge.
+	# The hazard only owns its visibility and collapse state.
+	var existing = ledge.get("visual")
+	if is_instance_valid(existing):
+		entry["parts"] = {"slab":existing}
+		if bool(ledge.get("collapsed",false)): (existing as Node3D).visible = false
+		return
+	# If streaming reaches the hazard before its chunk, retry on the next pass
+	# instead of showing the old low-detail sand slab.
+	entry["parts"] = {}
+	return
 
 func collapse(hazard: Dictionary, animate: bool = true) -> void:
 	var entry: Dictionary = built.get(int(hazard["id"]),{})
@@ -303,9 +293,10 @@ func collapse(hazard: Dictionary, animate: bool = true) -> void:
 	slab.visible = false
 	if not animate: return
 	var dark := world.mat("bridge_sand_dark",Color("a8784a"))
+	var origin := (entry["node"] as Node3D).to_local(slab.global_position)
 	for index in range(7):
 		var chip := world.box("Обломок",Vector3.ZERO,Vector3(.3,.2,.3),dark,entry["node"])
-		chip.position = slab.position+Vector3((index-3)*.32,-.2,.1)
+		chip.position = origin+Vector3((index-3)*.32,-.2,.1)
 		var tween := world.create_tween().set_parallel(true)
 		tween.tween_property(chip,"position",chip.position+Vector3((index-3)*.2,-3.2,0),.7).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 		tween.tween_property(chip,"scale",Vector3.ZERO,.7)

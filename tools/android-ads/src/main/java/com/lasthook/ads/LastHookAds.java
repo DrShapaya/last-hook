@@ -74,6 +74,11 @@ public final class LastHookAds extends GodotPlugin {
         try {
             AppMetricaConfig config = AppMetricaConfig.newConfigBuilder(appMetricaApiKey).build();
             AppMetrica.activate(getActivity().getApplicationContext(), config);
+            // Activation alone does not wire Android Activity lifecycle events.
+            // Without this call AppMetrica can miss ordinary user sessions in
+            // a Godot app because the SDK is initialized from the plugin,
+            // rather than from Application.onCreate().
+            AppMetrica.enableActivityAutoTracking(getActivity().getApplication());
             appMetricaActivated = true;
         } catch (Throwable error) {
             failed("appmetrica_initialize", error.toString());

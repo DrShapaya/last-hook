@@ -334,13 +334,12 @@ func run_tests() -> void:
 	game.hud.show_menu()
 	await process_frame
 	var start_center := lobby(game).start_button.position+lobby(game).start_button.size*.5
+	# Sections run equipment | expedition | settings; the climb is the middle one.
 	await swipe(game,start_center+Vector2(60,0),Vector2(-160,0))
-	check(game.hud.menu_tab=="equipment" and game.state=="menu","a left swipe over the start button switches section without starting a run")
+	check(game.hud.menu_tab=="settings" and game.state=="menu","a left swipe over the start button switches section without starting a run")
 	await process_frame
 	var focused: Control = root.gui_get_focus_owner()
-	check(focused is Button and (focused as Button).text=="Снаряжение","after a swipe the new section's tab has focus")
-	await swipe(game,Vector2(270,600),Vector2(-160,0))
-	check(game.hud.menu_tab=="settings","the next swipe opens settings")
+	check(not (focused is Button and (focused as Button).text in ["Снаряжение","Восхождение","Настройки"]),"after a swipe no section tab keeps a focus outline")
 	await swipe(game,Vector2(270,600),Vector2(-160,0))
 	check(game.hud.menu_tab=="settings","swiping past the last section stays there")
 	await swipe(game,Vector2(270,600),Vector2(30,0),2)
@@ -348,18 +347,23 @@ func run_tests() -> void:
 	await swipe(game,Vector2(270,600),Vector2(60,-200))
 	check(game.hud.menu_tab=="settings","a mostly vertical drag is not a swipe")
 	await swipe(game,Vector2(270,600),Vector2(160,0))
-	check(game.hud.menu_tab=="equipment","a right swipe goes back one section")
+	check(game.hud.menu_tab=="expedition","a right swipe goes back one section")
+	await swipe(game,Vector2(270,600),Vector2(160,0))
+	check(game.hud.menu_tab=="equipment","the next right swipe opens equipment")
+	await swipe(game,Vector2(270,600),Vector2(160,0))
+	check(game.hud.menu_tab=="equipment","swiping before the first section stays there")
 	game.go_back()
 	await process_frame
 	check(game.hud.menu_tab=="expedition","Back returns to the main section")
-	await swipe(game,Vector2(270,600),Vector2(160,0))
-	check(game.hud.menu_tab=="expedition","swiping before the first section stays there")
 	var key := InputEventKey.new()
 	key.keycode = KEY_E
 	key.pressed = true
 	root.push_input(key)
 	await process_frame
-	check(game.hud.menu_tab=="equipment","the keyboard switches sections too")
+	check(game.hud.menu_tab=="settings","the keyboard switches sections too")
+	await process_frame
+	focused = root.gui_get_focus_owner()
+	check(focused is Button and (focused as Button).text=="Настройки","after a key switch the new section's tab has focus")
 	game.go_back()
 	await process_frame
 	# Swiping the route card selects neighbouring routes, including locked ones.

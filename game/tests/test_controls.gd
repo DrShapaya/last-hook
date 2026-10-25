@@ -215,10 +215,18 @@ func run_tests() -> void:
 	await process_frame
 	check(game.primary_touch==4 and game.pressed,"native touch can start over the noninteractive height HUD")
 	var pause_point: Vector2 = game.hud.pause_button.get_global_rect().get_center()
+	var shots_held: int = game.shots
 	root.push_input(touch(9,pause_point,true),true)
 	root.push_input(touch(9,pause_point,false),true)
 	await process_frame
-	check(game.state=="play" and game.primary_touch==4 and game.sim.attached,"an extra finger cannot press Pause during an owned stick gesture")
+	check(game.state=="pause" and game.primary_touch<0 and not game.pressed and game.sim.attached and game.shots==shots_held,"a second finger presses Pause during a stick gesture: the gesture drops without a shot and the hook holds")
+	# The first finger lifting while paused changes nothing.
+	root.push_input(touch(4,Vector2(50,40),false),true)
+	await process_frame
+	check(game.state=="pause" and game.sim.attached and game.shots==shots_held,"the steering finger lifting during the pause neither shoots nor detaches")
+	game.unpause()
+	root.push_input(touch(4,Vector2(50,40),true),true)
+	await process_frame
 	root.push_input(touch(4,Vector2(50,40),false,true),true)
 	await process_frame
 	check(not game.pressed and game.sim.attached,"native cancellation over the HUD keeps the attachment")

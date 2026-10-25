@@ -139,7 +139,10 @@ func set_view(center: Vector2) -> void:
 			view_size = size
 			var top_left := camera.project_position(Vector2.ZERO,50)
 			var bottom_right := camera.project_position(size,50)
-			var wanted := Vector2(absf(bottom_right.x-top_left.x),absf(bottom_right.y-top_left.y)) * 1.002
+			# Leave a real overscan margin. A near-exact quad edge can expose the
+			# environment clear colour after a zoom or a fractional resize,
+			# producing intermittent black wedges around the mountain on phones.
+			var wanted := Vector2(absf(bottom_right.x-top_left.x),absf(bottom_right.y-top_left.y)) * 1.08
 			if wanted!=quad_size:
 				quad_size = wanted
 				(mesh as QuadMesh).size = wanted

@@ -669,6 +669,8 @@ func _build_masses(index: int, parent: Node3D) -> void:
 func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	# A timber platform model standing on the face: the deck's back edge is
 	# the walking line (_place_platform).
+	if is_instance_valid(object.get("visual")):
+		return
 	var left: float = object["left"]
 	var right: float = object["right"]
 	var top: float = object["top"]
@@ -681,8 +683,6 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	holder.position = mount.holder_position()
 	object["visual"] = holder
 	object["mount"] = mount
-	# A sand bridge is its own slab (HazardVisuals): it must be able to fall.
-	if object.has("bridge"): return
 	_place_platform(holder,object,mount)
 
 # --- Decor --------------------------------------------------------------------------

@@ -6,6 +6,7 @@ var tint := Color("f3c668")
 var tip_count := 3
 var hook_count := 1
 var badge := false
+const COIN_ICON := preload("res://assets/models/treasures/icon_coin.png")
 
 func hook_icon(offset: Vector2) -> void:
 	draw_set_transform(size*.5+offset*minf(size.x,size.y)/32,0,Vector2.ONE*minf(size.x,size.y)/32*(.58 if hook_count==2 else 1.0))
@@ -86,10 +87,12 @@ func _draw() -> void:
 			var side := -1 if kind==10 else 1
 			stroke([Vector2(-side*3,-7),Vector2(side*4,0),Vector2(-side*3,7)],2.5)
 		12:
-			draw_circle(Vector2.ZERO,11,soft)
-			draw_arc(Vector2.ZERO,10,0,TAU,32,tint,2,true)
-			draw_arc(Vector2.ZERO,6,0,TAU,24,Color(tint,.65),1,true)
-			stroke([Vector2(0,-4),Vector2(0,4)],2)
+			# The coin of the climb itself, rendered from its 3D model; a
+			# grey tint (a price out of reach) dims it.
+			var picture: Texture2D = COIN_ICON
+			var box := Vector2(26,26*picture.get_height()/float(picture.get_width()))
+			var dim := tint.s<.15 and tint.v<.8
+			draw_texture_rect(picture,Rect2(-box*.5,box),false,Color(.62,.62,.64,.75) if dim else Color(1.08,1.06,1.02))
 		13:
 			var gem := PackedVector2Array([Vector2(-11,-4),Vector2(-6,-10),Vector2(6,-10),Vector2(11,-4),Vector2(0,12),Vector2(-11,-4)])
 			draw_colored_polygon(gem,soft)
@@ -119,3 +122,12 @@ func _draw() -> void:
 		19:
 			draw_arc(Vector2.ZERO,12,0,TAU,32,tint,1.8,true)
 			stroke([Vector2(0,-7),Vector2(0,0),Vector2(5,3)],2)
+		20: # Triple grappling hook: ring, shaft and three barbed prongs.
+			draw_arc(Vector2(0,-11),3,0,TAU,20,tint,2,true)
+			stroke([Vector2(0,-8),Vector2(0,9)],2.6)
+			stroke([Vector2(-4,-3),Vector2(4,-3)],1.6,Color(tint,.7))
+			for side in [-1,1]:
+				draw_polyline(PackedVector2Array([Vector2(0,9),Vector2(side*5,11),Vector2(side*10,8),Vector2(side*12,3),Vector2(side*11,-1)]),tint,2.4,true)
+				draw_colored_polygon(PackedVector2Array([Vector2(side*11,-1),Vector2(side*13.5,1),Vector2(side*9.5,2)]),tint)
+			stroke([Vector2(0,9),Vector2(0,13)],2.4)
+			draw_colored_polygon(PackedVector2Array([Vector2(-2.2,12),Vector2(2.2,12),Vector2(0,15)]),tint)

@@ -31,7 +31,8 @@ func outside(point: Vector2, _margin: float = .65) -> bool:
 func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 	finite = is_finite
 	summit = summit_height
-	while next_point.y<height and (not finite or next_point.y<=summit-.4):
+	var rows_built := 0
+	while next_point.y<height and (not finite or next_point.y<=summit-.4) and (generation_row_budget<0 or rows_built<generation_row_budget):
 		var random := rng(row,1)
 		var point := next_point
 		var zone := clampi(int(point.y/20),0,5)
@@ -51,13 +52,14 @@ func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 			obstacles.append({"pos":Vector2(side*5.8,point.y-.65),"dimensions":Vector2(random.randf_range(1.2,1.8),random.randf_range(.7,1.3))})
 		previous_point = point
 		row += 1
+		rows_built += 1
 		var step_random := rng(row,2)
 		var rise := step_random.randf_range(2.7,3.35)
 		var x := -signf(point.x)*step_random.randf_range(1.5,2.2)
 		var span := Vector2(x-point.x,rise)
 		if span.length()>5: x = point.x+signf(span.x)*sqrt(25-rise*rise)
 		next_point = Vector2(x,point.y+rise)
-	if finite and height>=summit and not summit_added:
+	if finite and height>=summit and not summit_added and next_point.y>=summit-.4:
 		var top := _add_anchor(Vector2(previous_point.x,summit+.9),0,Vector2(2,.6),true)
 		anchors[top]["role"] = "rest"
 		main_route.append(top)

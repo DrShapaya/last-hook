@@ -151,7 +151,7 @@ func run_tests() -> void:
 		var partial_legacy := make_world(58273,15,true,biome,4)
 		partial_legacy.generate_to(126,true,120)
 		var fresh := make_world(58273,30,true,biome)
-		check(world.layout is LegacyMountainLayout and world.anchors[0]["shape"]=="rectangle" and fresh.layout is ExpeditionLayout and MountainWorld.generation_version_for(biome)==15,"a saved v4 attempt keeps generator v4 and its hook geometry, a new one is an expedition: %d" % biome)
+		check(world.layout is LegacyMountainLayout and world.anchors[0]["shape"]=="rectangle" and fresh.layout is ExpeditionLayout and MountainWorld.generation_version_for(biome)==16,"a saved v4 attempt keeps generator v4 and its hook geometry, a new one is an expedition: %d" % biome)
 		check(signature(world)==signature(partial_legacy),"legacy location remains deterministic across generation requests: %d" % biome)
 		fresh.free()
 		partial_legacy.free()

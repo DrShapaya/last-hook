@@ -17,7 +17,10 @@ var lobby_location := 0
 var lobby_endless := false
 var run_id := ""
 var run_seed := 0
+# The prepared route of the current summit climb (LevelCatalog.ROUTES).
+var run_route := -1
 var summit_height := 120.0
+const INITIAL_WORLD_HEIGHT := 65.0
 var anchor_id := -1
 var anchor_time := 0.0
 var anchor_contact := Vector2.ZERO
@@ -50,6 +53,7 @@ var gesture_last_msec := 0
 var climb_gesture := ClimbGesture.new()
 var touch_controls: Dictionary = {}
 var aim_stick_valid := false
+var gesture_suppressed := false
 var aim_point := Vector2.ZERO
 var pump := 0.0
 var reel := 0.0
@@ -117,6 +121,7 @@ var last_loot_price_aim := Vector2.INF
 var last_loot_price_playing := false
 var last_loot_price_always := false
 var audio: AudioStreamPlayer
+var music: MusicPlayer
 var preview := false
 var run_seconds := 0.0
 var shots := 0
@@ -180,6 +185,9 @@ func _ready() -> void:
 	focus_audio = AudioStreamPlayer.new()
 	focus_audio.volume_db = -20
 	add_child(focus_audio)
+	music = MusicPlayer.new()
+	add_child(music)
+	music.enabled = bool(model.profile.get("music",true))
 	hud = GameHud.new()
 	add_child(hud)
 	hud.setup(self)
@@ -348,6 +356,7 @@ func _ready() -> void:
 			camera_x = 0
 	else:
 		hud.show_menu()
+		if DisplayServer.get_name()!="headless" and OS.get_environment("LASTHOOK_NO_SPLASH").is_empty(): hud.show_splash()
 	add_child(ads)
 	ads.availability_changed.connect(_refresh_ad_actions)
 	ads.rewarded_finished.connect(_on_ad_revive_finished)
@@ -481,18 +490,25 @@ func _apply_graphics_quality(quality: String, save: bool = true) -> void:
 func set_graphics_quality(quality: String) -> void:
 	_apply_graphics_quality(quality)
 
-func _create_world(seed_number: int, location_number: int, height: float, saved_version: int = 0, menu_preview: bool = false) -> void:
+func _create_world(seed_number: int, location_number: int, height: float, saved_version: int = 0, menu_preview: bool = false, visual_budget: int = -1, route: int = -1) -> void:
 	if is_instance_valid(world):
 		world.queue_free()
 	if is_instance_valid(explorer):
 		explorer.queue_free()
 	world = MountainWorld.new()
+	# Runtime worlds build visual chunks incrementally. Tests and offline tools
+	# keep MountainWorld's default synchronous budget for deterministic queries.
+	world.visual_build_budget = visual_budget
+	# Build the initial playable area in one deterministic pass, then extend
+	# endless/finite routes one generator row at a time during the run.
+	world.generation_row_budget = -1
 	world.visuals_enabled = not menu_preview
 	add_child(world)
-	world.setup(seed_number,location_number,saved_version,run_mode=="practice")
+	world.setup(seed_number,location_number,saved_version,run_mode=="practice",route)
 	world.set_visual_quality(str(model.profile.get("graphics_quality","balanced")))
 	scene_environment.background_color = Color("88bfd9") if location_number==0 else Color("142438")
 	world.generate_to(height,run_mode in ["summit","practice"],summit_height)
+	world.generation_row_budget = 1 if visual_budget>=0 and not (world.layout is LegacyMountainLayout) else -1
 	if not menu_preview:
 		explorer = ExplorerView.new()
 		add_child(explorer)
@@ -519,9 +535,16 @@ func start_run(endless: bool) -> void:
 	var practice := practice_return_model!=null
 	run_mode = "practice" if practice else "endless" if endless else "summit"
 	run_seed = PracticeLayout.SEED if practice else randi_range(1000,999999)
+	# A summit climb runs on the prepared route chosen in the lobby; its seed
+	# is fixed, so the route is the same on every attempt.
+	run_route = model.route_choice(selected_location) if run_mode=="summit" else -1
+	if run_route>=0: run_seed = int(LevelCatalog.route(selected_location,run_route)["seed"])
 	run_id = "%d-%d" % [Time.get_unix_time_from_system(),randi()]
 	summit_height = PracticeLayout.HEIGHT if practice else float(model.balance["locations"][selected_location]["height_units"])
-	_create_world(run_seed,selected_location,summit_height+6 if not endless else 65)
+	# Generate the finite route graph before play starts so the summit and its
+	# final platform always exist in the same world snapshot. Visual chunks are
+	# still streamed incrementally by MountainWorld.
+	_create_world(run_seed,selected_location,summit_height+6 if not endless else INITIAL_WORLD_HEIGHT,0,false,1,run_route)
 	sim = RopeSim.new()
 	sim.pos = Vector2(0,START_Y)
 	sim.highest = START_Y
@@ -603,9 +626,11 @@ func resume_run() -> void:
 	run_mode = snapshot.get("mode","summit")
 	selected_location = int(snapshot.get("location",0))
 	run_seed = int(snapshot["seed"])
+	run_route = int(snapshot.get("route",-1))
 	run_id = snapshot["id"]
 	summit_height = PracticeLayout.HEIGHT if run_mode=="practice" else float(model.balance["locations"][selected_location]["height_units"])
-	_create_world(run_seed,selected_location,maxf(float(snapshot["highest"])+40,65) if run_mode=="endless" else summit_height+6,saved_version)
+	var resume_height := maxf(float(snapshot["highest"])+40,INITIAL_WORLD_HEIGHT) if run_mode=="endless" else summit_height+6
+	_create_world(run_seed,selected_location,resume_height,saved_version,false,1,run_route)
 	sim = RopeSim.new()
 	sim.pos = Vector2(snapshot["x"],snapshot["y"])
 	sim.vel = Vector2(snapshot["vx"],snapshot["vy"])
@@ -730,6 +755,13 @@ func _input(event: InputEvent) -> void:
 	if state!="play" or preview:
 		return
 	if primary_touch>=0 and (event is InputEventScreenTouch or event is InputEventScreenDrag) and event.index!=primary_touch:
+		# Pause stays in reach of a second finger while the first one steers:
+		# the held gesture is dropped without a shot and the run pauses.
+		if event is InputEventScreenTouch and event.pressed and hud.pause_at(event.position):
+			_cancel_primary()
+			pause_run()
+			get_viewport().set_input_as_handled()
+			return
 		# A second finger may still tap an item while the first one steers.
 		if event is InputEventScreenTouch and hud.item_button_at(event.position): return
 		get_viewport().set_input_as_handled()
@@ -791,6 +823,7 @@ func pointer_down(point: Vector2, from_touch: bool = false) -> void:
 	if state!="play" or ads.fullscreen or pressed or not hud.world_input_allowed(point):
 		return
 	pressed = true
+	gesture_suppressed = false
 	press_start = point
 	pointer = point
 	touch_gesture = from_touch
@@ -836,7 +869,7 @@ func pointer_up(point: Vector2) -> void:
 		if touch_gesture:
 			model.learn_control("release")
 			release_hook()
-	elif not touch_gesture or aim_stick_valid:
+	elif not touch_gesture or (aim_stick_valid and not gesture_suppressed):
 		fire_hook(aim_direction)
 	_cancel_primary()
 
@@ -855,11 +888,15 @@ func _refresh_aim() -> void:
 	if not touch_gesture and aim_point.distance_squared_to(sim.pos)>.04:
 		aim_direction = direction_to_target(aim_point)
 
-func _recenter_climb_control() -> void:
-	press_start = pointer
-	climb_gesture.begin(pointer,Time.get_ticks_msec()*.001,_gesture_scale())
+func _recenter_climb_control(suppress_fire: bool = false) -> void:
+	# Keep the floating stick's base where the finger started. Physical
+	# releases (a broken root or a routed rope) can happen while the finger is
+	# held high; moving the base to pointer makes the whole stick jump on
+	# screen. Reset only the gesture state so the current touch becomes neutral.
+	climb_gesture.begin(press_start,Time.get_ticks_msec()*.001,_gesture_scale())
 	touch_controls = {}
 	aim_stick_valid = false
+	gesture_suppressed = suppress_fire
 	pump = 0
 	reel = 0
 
@@ -868,6 +905,7 @@ func _cancel_primary() -> void:
 	primary_touch = -1
 	touch_gesture = false
 	aim_stick_valid = false
+	gesture_suppressed = false
 	pump = 0
 	reel = 0
 	walk = 0
@@ -1124,7 +1162,7 @@ func release_hook(keep_primary: bool = false, reason: String = "manual") -> void
 		print("HOOK_RELEASE reason=%s keep_primary=%s position=%s" % [reason,keep_primary,sim.pos])
 	_sound(310,.07)
 	if keep_primary:
-		_recenter_climb_control()
+		_recenter_climb_control(true)
 		_refresh_aim()
 	else:
 		_reset_input()
@@ -1252,6 +1290,8 @@ func _physics_process(delta: float) -> void:
 	_collect_finds()
 	if state!="play":
 		return
+	# Every route keeps its own record per mode (see GameModel.record).
+	model.note_record(selected_location if run_mode!="practice" else 0,run_mode,maxf(0,sim.highest-START_Y)*10)
 	if run_mode=="practice":
 		model.profile["best"] = maxf(float(model.profile["best"]),maxf(0,sim.highest-START_Y)*10)
 	else:
@@ -1269,8 +1309,14 @@ func _physics_process(delta: float) -> void:
 	if run_mode in ["summit","practice"] and (sim.pos.y-START_Y>=summit_height-.02 or summit_landed):
 		sim.highest = maxf(sim.highest,summit_height+START_Y)
 		finish_run(true)
-	elif run_mode=="endless" and sim.pos.y+35>world.generated_height:
-		world.generate_to(world.generated_height+40,false)
+	# Keep a playable buffer ahead of the camera. Finite runs used to build the
+	# whole summit synchronously before the first frame; extend the same streamed
+	# path to finite runs to remove that startup hitch.
+	elif sim.pos.y+35>world.generated_height and not world.layout.summit_added:
+		if run_mode=="endless":
+			world.generate_to(world.generated_height+40,false,summit_height)
+		else:
+			world.generate_to(minf(summit_height+6,world.generated_height+40),true,summit_height)
 
 func _hazard_knock(knock: Dictionary) -> void:
 	# The ordinary release path: a spring or ice effect is not granted, the
@@ -1343,7 +1389,10 @@ func _update_bolt(step: float) -> void:
 		if fraction<1 or hook_flight.age>2.0:
 			hook_flight.position = bolt_pos
 			hook_flight.trail[-1] = bolt_pos
-			_begin_hook_return("Канат размотан — крюк возвращается")
+			# Reaching the range limit is a normal miss. The returning head and
+			# sound already communicate it; a toast here covers the aim area and
+			# makes a routine miss look like a failure.
+			_begin_hook_return()
 
 func _catch_contact(hit: Dictionary, contact: Vector2) -> void:
 	bolt_active = false
@@ -1421,13 +1470,13 @@ func _register_hook_impact(point: Vector2, kind: String) -> void:
 	hook_impact_kind = kind
 	if OS.has_feature("mobile") and kind=="catch" and model.profile.get("vibration",true): Input.vibrate_handheld(18,.25)
 
-func _begin_hook_return(message: String, rebound := Vector2.ZERO, kind := "limit") -> void:
+func _begin_hook_return(message: String = "", rebound := Vector2.ZERO, kind := "limit") -> void:
 	bolt_active = false
 	bolt_returning = true
 	return_velocity = rebound
 	_register_hook_impact(bolt_pos,kind)
 	_hook_sound("rock" if kind=="rock" else "return")
-	toast(message,1.3,"hook")
+	if not message.is_empty(): toast(message,1.3,"hook")
 
 func _update_return(dt: float) -> void:
 	if hook_volley!=null:
@@ -2019,7 +2068,7 @@ func save_snapshot() -> void:
 			broken.append(point["id"])
 		elif point.get("reserve",false):
 			active_reserves.append(point["id"])
-	model.profile["active"] = {"id":run_id,"seed":run_seed,"generation_version":world.generation_version,"mode":run_mode,"location":selected_location,
+	model.profile["active"] = {"id":run_id,"seed":run_seed,"route":world.route_index,"generation_version":world.generation_version,"mode":run_mode,"location":selected_location,
 		"camera_y":camera_y,"camera_x":camera_x,"camera_dip":camera_dip,
 		"x":sim.pos.x,"y":sim.pos.y,"vx":sim.vel.x,"vy":sim.vel.y,"length":sim.length,"target_length":sim.target_length,"reel_velocity":sim.reel_velocity,
 		"highest":sim.highest,"flight_peak":sim.flight_peak,"launched":sim.launched,"grounded":sim.grounded,
@@ -2100,6 +2149,7 @@ func _move_camera(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	_update_music()
 	if not AssetWarmup.done(): AssetWarmup.poll()
 	if profile_save_pending:
 		profile_save_timer -= delta
@@ -2162,6 +2212,23 @@ func _process(delta: float) -> void:
 	if not capture_path.is_empty() and elapsed>1.1 and not capture_queued:
 		capture_queued = true
 		_capture_frame()
+
+# The camp theme plays in the menus, the expedition's own theme on the climb;
+# pause, revive and result screens lower it.
+func _update_music() -> void:
+	if music==null or preview or DisplayServer.get_name()=="headless": return
+	if state=="menu":
+		music.play("camp")
+		music.duck(false)
+		return
+	var location_id := "green_peak" if run_mode=="practice" else str(LevelCatalog.level(selected_location)["id"])
+	music.play(MusicPlayer.track_for_location(location_id))
+	music.duck(state in ["pause","revive","result"])
+
+func set_music_enabled(on: bool) -> void:
+	model.profile["music"] = on
+	request_profile_save()
+	if music!=null: music.set_enabled(on)
 
 func _capture_frame() -> void:
 	await RenderingServer.frame_post_draw
@@ -2228,10 +2295,52 @@ func _focus_sound(starting: bool) -> void:
 	focus_audio.stream = stream
 	focus_audio.play()
 
+# A hook glancing off rock: a soft, rounded "tock" (a low body with a pitch
+# drop, two inharmonic stone partials and a muffled click) instead of a burst
+# of noise. Three slightly different pitches alternate so repeated bounces
+# do not sound mechanical.
+var rock_knock_index := 0
+const ROCK_KNOCK_PITCHES := [1.0,.92,1.07]
+
+func _rock_knock() -> void:
+	rock_knock_index = (rock_knock_index+1)%ROCK_KNOCK_PITCHES.size()
+	var key := "hook_rock_%d" % rock_knock_index
+	if not sound_cache.has(key):
+		var stream := AudioStreamWAV.new()
+		stream.format = AudioStreamWAV.FORMAT_16_BITS
+		stream.mix_rate = 44100
+		var pitch: float = ROCK_KNOCK_PITCHES[rock_knock_index]
+		var count := int(.24*stream.mix_rate)
+		var data := PackedByteArray()
+		data.resize(count*2)
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 911+rock_knock_index
+		var body_phase := 0.0
+		var click := 0.0
+		for index in range(count):
+			var t := float(index)/stream.mix_rate
+			var attack := minf(1.0,t/.003)
+			var base := 190.0*pitch*(1.0+.55*exp(-t*38.0))
+			body_phase += TAU*base/stream.mix_rate
+			var body := sin(body_phase)*exp(-t*21.0)
+			var stone := sin(body_phase*2.37)*.32*exp(-t*42.0)+sin(body_phase*3.91)*.14*exp(-t*70.0)
+			# One-pole low-passed noise: a dull tap, not a hiss.
+			click += (rng.randf_range(-1,1)-click)*.18
+			var tap := click*.55*exp(-t*160.0)
+			var sample := tanh((body*.8+stone+tap)*attack*1.1)*.82
+			data.encode_s16(index*2,int(clampf(sample,-1,1)*15000))
+		stream.data = data
+		sound_cache[key] = stream
+	audio.stream = sound_cache[key]
+	audio.play()
+
 func _hook_sound(kind: String) -> void:
 	if not model.profile.get("sound",true) or preview or DisplayServer.get_name()=="headless": return
 	# The samples are fixed per kind (seeded noise): synthesise each once.
 	# Building ~4000 samples in script on every throw stalled the frame.
+	if kind=="rock":
+		_rock_knock()
+		return
 	var key := "hook_"+kind
 	if sound_cache.has(key):
 		audio.stream = sound_cache[key]
@@ -2254,7 +2363,6 @@ func _hook_sound(kind: String) -> void:
 		match kind:
 			"launch": sample = (rng.randf_range(-1,1)*.45+sin(TAU*(1150*t-2300*t*t))*.35)*envelope*sin(minf(1,phase*12)*PI*.5)
 			"catch": sample = (sin(TAU*840*t)+sin(TAU*1337*t)*.45+sin(TAU*2150*t)*.18)*exp(-t*26)*.55
-			"rock": sample = (rng.randf_range(-1,1)*.6+sin(TAU*170*t)*.4)*exp(-t*35)
 			_: sample = sin(TAU*(650*t-1100*t*t))*.4*envelope
 		data.encode_s16(index*2,int(clampf(sample,-1,1)*16000))
 	stream.data = data

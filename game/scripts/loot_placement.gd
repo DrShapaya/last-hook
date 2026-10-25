@@ -22,7 +22,7 @@ extends RefCounted
 #                   the contract cargo (next act if the act has no branch)
 # Nothing here moves a grip, shelf or hazard: geometry stays v14.
 
-const PRIORITY := {"landmark":5,"fork":3,"choice":3,"detour":2,"main_safe":1}
+const PRIORITY := {"landmark":5,"route_treasure":4,"fork":3,"choice":3,"route_cache":3,"detour":2,"main_safe":1,"trail":1}
 const OFFSETS := [Vector2.ZERO,Vector2(.45,0),Vector2(-.45,0),Vector2(0,.4),Vector2(.7,.2),Vector2(-.7,.2)]
 const FIND_SPACING := .8
 const GRIP_CLEARANCE := 1.2
@@ -41,8 +41,10 @@ var dropped: Dictionary = {}
 func _init(owner: ExpeditionLayout) -> void:
 	_owner = weakref(owner)
 
-func request(row: int, point: Vector2, role: String, from: Vector2 = Vector2.INF) -> void:
-	pending.append({"row":row,"pos":point,"role":role,"from":from,"act":int(layout.row_of(row)["act"]),"order":serial})
+func request(row: int, point: Vector2, role: String, from: Vector2 = Vector2.INF, extra: Dictionary = {}) -> void:
+	var entry := {"row":row,"pos":point,"role":role,"from":from,"act":int(layout.row_of(row)["act"]),"order":serial}
+	entry.merge(extra)
+	pending.append(entry)
 	serial += 1
 
 static func priority(role: String) -> int:
@@ -109,6 +111,22 @@ func _resolve(entry: Dictionary) -> void:
 				var dx := (index-(count-1)*.5)*.85
 				_place(point+Vector2(dx,absf(dx)*.3),ItemCatalog.coin(0,location,act_id,int(ItemCatalog.balance()["coins"]["single"])),entry,"main_coin",count==1)
 			return
+		"trail":
+			# Prepared routes: a trail of coins along the swing under a link,
+			# sagging like the rope does.
+			var count := int(entry.get("count",4))
+			var to: Vector2 = entry["from"]
+			# The middle of the link only: its ends belong to the coins under
+			# the grips themselves.
+			for index in range(count):
+				var t := .22+.56*(float(index)+.5)/float(count)
+				_place(point.lerp(to,t)+Vector2(0,-1.1*sin(PI*t)),ItemCatalog.coin(0,location,act_id,int(ItemCatalog.balance()["coins"]["single"]),"trail"),entry,"trail")
+			return
+		"route_cache":
+			var cache_coins: Dictionary = ItemCatalog.balance()["coins"]
+			item = ItemCatalog.coin(0,location,act_id,random.randi_range(int(cache_coins["cache_min"]),int(cache_coins["cache_max"])),"cache")
+		"route_treasure":
+			item = ItemCatalog.valuable(0,location,act_id,mini(5,tier+1),"artifact")
 		"detour":
 			item = ItemCatalog.relic(0,location,act_id,tier,str(definition.get("reward_tag","")))
 			_scatter(entry,act_id)
@@ -141,6 +159,7 @@ func _place(point: Vector2, item: Dictionary, entry: Dictionary, role: String, s
 		var id := layout.finds.size()
 		item["id"] = id
 		item["item_id"] = "%s/%s/%d" % [item["act_id"],role,id]
+		ItemCatalog.dress(item)
 		layout.finds.append({"item":item,"pos":at,"origin":point,"row":int(entry["row"]),"picked":false,"rare":str(item["rarity"]) in ["artifact","set","contract"],"role":role,"act":int(entry["act"])})
 		placed[role] = int(placed.get(role,0))+1
 		return id

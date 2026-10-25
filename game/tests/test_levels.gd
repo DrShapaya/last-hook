@@ -158,7 +158,7 @@ func run_tests() -> void:
 	# --- L1: generator choice and act context -----------------------------------------
 	for location in range(3):
 		var world := make_world(58273,location)
-		check(world.layout is ExpeditionLayout and world.generation_version==15 and MountainWorld.generation_version_for(location)==15,"location %d starts new attempts on the expedition generator" % location)
+		check(world.layout is ExpeditionLayout and world.generation_version==16 and MountainWorld.generation_version_for(location)==16,"location %d starts new attempts on the expedition generator" % location)
 		var shapes_ok := true
 		for a in world.anchors: shapes_ok = shapes_ok and a.get("shape","polygon")!="rectangle"
 		check(shapes_ok,"location %d grips use the shared polygon contract, no legacy rectangles" % location)

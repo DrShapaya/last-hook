@@ -95,12 +95,13 @@ func run_tests() -> void:
 	unlocks.purchase_location(2)
 	check(not unlocks.profile["locations"].has(2),"the third expedition waits for the second summit")
 	unlocks.settle("second-peak","summit",140,true,1)
-	var gems: int = unlocks.profile["diamonds"]
+	unlocks.profile["diamonds"] = 14
 	unlocks.purchase_location(2)
-	check(not unlocks.profile["locations"].has(2) and unlocks.profile["diamonds"]==gems,"the third expedition also needs five mastery tokens")
-	unlocks.profile["mastery_tokens"] = 5
+	check(not unlocks.profile["locations"].has(2) and unlocks.profile["diamonds"]==14,"the third expedition also needs 15 diamonds")
+	unlocks.profile["diamonds"] = 20
 	unlocks.purchase_location(2)
-	check(unlocks.profile["locations"].has(2) and unlocks.profile["diamonds"]==gems-15 and unlocks.profile["mastery_tokens"]==5,"second summit, 5 tokens and 15 diamonds open the third expedition; tokens are a threshold")
+	check(unlocks.profile["locations"].has(2) and unlocks.profile["diamonds"]==5,"second summit and 15 diamonds open the third expedition")
+	check(not unlocks.location_requirement(2).contains("жетон"),"the third expedition no longer asks for mastery tokens")
 	model.profile["gold"] = 10000
 	model.purchase_location(1)
 	check(model.profile["locations"].has(1) and int(model.profile["gold"])==7500,"second location is purchased using gold")

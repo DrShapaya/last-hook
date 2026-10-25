@@ -93,8 +93,11 @@ func rock_material_at(height: float) -> ShaderMaterial:
 		act_materials[profile_id] = material
 	return act_materials[profile_id]
 
+# Distant ranges are painted by the sky shader now: they stand on the bottom
+# of the frame and sink with altitude. The banded 3D peaks (and the pines in
+# front of them) floated in mid-air between bands, so none are built.
 func far_layer_count() -> int:
-	return 1 if quality=="battery" else FAR_LAYERS.size()
+	return 0
 
 # --- Layout hooks ---------------------------------------------------------------
 # The massif only needs the route line, the landform of a region and an
@@ -265,7 +268,7 @@ func _seat(list: Array, band: int, point: Vector2, half: Vector2, random: Random
 	var host: RockMassSpec = null
 	var best := INF
 	for mass in list:
-		if mass.role in ["ledge_shelf","rubble"]: continue
+		if mass.role=="rubble": continue
 		var distance: float = -mass.inside(point)
 		if distance<best:
 			best = distance
@@ -293,36 +296,39 @@ func _carried(list: Array, point: Vector2, half: Vector2) -> bool:
 		if ok: return true
 	return false
 
-func _shelf(list: Array, band: int, role: String, left: float, right: float, top: float, depth: float, front: float, random: RandomNumberGenerator) -> RockMassSpec:
-	# A step of the mountain: its flat top edge is the walking line, the front
-	# stands out of the host face, the sides drop almost straight and the
-	# underside breaks off in a few uneven chamfers. The bottom stays at least
-	# two thirds as wide as the top, so the shelf never ends in a wedge.
-	var width := right-left
-	var left_drop := random.randf_range(.05,.18)*width
-	var right_drop := random.randf_range(.05,.18)*width
-	var contour := PackedVector2Array([Vector2(left,top),Vector2(right,top),
-		Vector2(right+random.randf_range(-.05,.08),top-depth*random.randf_range(.3,.45)),
-		Vector2(right-right_drop,top-depth*random.randf_range(.8,.95)),
-		Vector2(lerpf(left,right,random.randf_range(.4,.6)),top-depth),
-		Vector2(left+left_drop,top-depth*random.randf_range(.8,.95)),
-		Vector2(left-random.randf_range(-.05,.08),top-depth*random.randf_range(.3,.45))])
-	var middle := Vector2((left+right)*.5,top-depth*.6)
-	var host_z := _front_z(list,middle,-1.4)
-	var host: RockMassSpec = null
-	for mass in list:
-		var hit: Dictionary = mass.surface_at(middle)
-		if not hit.is_empty() and is_equal_approx(float(hit["z"]),host_z): host = mass
-	# The shelf starts inside its host's face and steps out of it.
-	var z_rim := clampf(host_z-.25,-1.9,front-.5)
-	var lift := front-z_rim
-	return _add_mass(list,band,role,"shelf",Geometry2D.convex_hull(contour).slice(0,-1),z_rim,random,-3.4,Vector2.ZERO,Vector3(lift,lift*.8,lift*.7),host)
-
 func front_band(band: int) -> Array:
 	# Masses whose layout belongs to one 24 m band. A band depends only on the
 	# seed and the gameplay objects in it, so build order never matters.
 	_refresh_masses()
-	if band_masses.has(band): return band_masses[band]
+	if not band_masses.has(band): _generate_band(band)
+	return band_masses[band]
+
+# True once the band's masses exist, so front_band returns at once.
+func band_ready(band: int) -> bool:
+	_refresh_masses()
+	return band_masses.has(band)
+
+# Generates a band over several frames for the streaming world: `owner` is
+# the job it pauses under (MountainWorld.build_pause).
+func warm_band(band: int, owner: Object) -> void:
+	_refresh_masses()
+	if band_masses.has(band): return
+	await _generate_band(band,owner)
+
+func _layout_signature() -> Vector4i:
+	return Vector4i(layout.anchors.size(),layout.finds.size(),layout.obstacles.size(),layout.ledges.size())
+
+# A paused band gives up when a direct query built it meanwhile or new
+# gameplay objects reset every band; nothing of it is kept then.
+func _band_pause(band: int, owner: Object, signature: Vector4i) -> bool:
+	if owner==null: return true
+	if not await pause(owner): return false
+	return not band_masses.has(band) and _layout_signature()==signature and mass_signature==signature
+
+# Builds the band's masses. With an owner it may pause between pieces; the
+# band is published (band_masses, islands, bins) only once complete.
+func _generate_band(band: int, owner: Object = null) -> void:
+	var signature := mass_signature
 	var list: Array = []
 	var random := layout.rng(band,947)
 	var low := band*BAND
@@ -336,6 +342,7 @@ func front_band(band: int) -> Array:
 	var y := low+random.randf_range(-1.0,1.5)
 	var side := -1.0 if random.randf()<.5 else 1.0
 	while y<high:
+		if not await _band_pause(band,owner,signature): return
 		if y>-3.0 and y<top:
 			var size := Vector2(random.randf_range(5.5,9.0),random.randf_range(4.6,7.0))
 			var center := Vector2(_route_x(y)+side*random.randf_range(.4,2.2),y)
@@ -352,6 +359,7 @@ func front_band(band: int) -> Array:
 	# Body: larger, deeper blocks behind the trunk give the mountain depth.
 	y = low+random.randf_range(0,3.0)
 	while y<high:
+		if not await _band_pause(band,owner,signature): return
 		if y>-3.0 and y<top-1.0:
 			for flank in [-1.0,1.0]:
 				if random.randf()<.35:
@@ -366,6 +374,7 @@ func front_band(band: int) -> Array:
 	for step in range(int(BAND*2)):
 		var at := low+step*.5
 		if at<-2.0 or at>top-1.0: continue
+		if step%4==0 and not await _band_pause(band,owner,signature): return
 		for offset in [-ROUTE_CLEAR+.1,0.0,ROUTE_CLEAR-.1]:
 			var point := Vector2(_route_x(at)+offset,at)
 			if _covering(list,point,.05)!=null: continue
@@ -379,7 +388,9 @@ func front_band(band: int) -> Array:
 		# The grip's outcrop drops about a metre below its hitbox (see
 		# GripVisualSpec): the stone behind it reaches that far down too.
 		var size: Vector2 = anchor["dimensions"]
-		if p.y>=low and p.y<high: _seat(list,band,p-Vector2(0,.5),Vector2(size.x*.68,size.y*.5+.5),random)
+		if p.y>=low and p.y<high:
+			if not await _band_pause(band,owner,signature): return
+			_seat(list,band,p-Vector2(0,.5),Vector2(size.x*.68,size.y*.5+.5),random)
 	for obstacle in layout.obstacles:
 		var p: Vector2 = obstacle["pos"]
 		if p.y>=low and p.y<high: _seat(list,band,p,obstacle["dimensions"]*.5+Vector2(.3,.3),random)
@@ -389,17 +400,20 @@ func front_band(band: int) -> Array:
 		# A sand bridge is its own slab (HazardVisuals): it must be able to fall.
 		if ledge.has("bridge"): continue
 		var middle := Vector2((float(ledge["left"])+float(ledge["right"]))*.5,top_y-.7)
+		# The platform itself is timber (build_ledge); the stone behind it
+		# carries its braces.
 		_seat(list,band,middle,Vector2((float(ledge["right"])-float(ledge["left"]))*.4,.5),random)
-		_shelf(list,band,"ledge_shelf",float(ledge["left"])-.12,float(ledge["right"])+.12,top_y,random.randf_range(1.5,1.9),minf(_front_z(list,middle,-1.0)+1.0,FRONT_LIMIT),random)
 	for find in layout.finds:
 		var p: Vector2 = find["pos"]
 		if p.y<low or p.y>=high: continue
+		if not await _band_pause(band,owner,signature): return
 		# A find lies on the host face itself: no shelf or ledge of its own,
 		# so loot never reads as a platform of the route.
 		_seat(list,band,p,Vector2(.6,.6),random)
 	# Side islands: separate clusters off the route, sky between them.
 	var islands: Array = []
 	for cluster in range(1 if kind in [2,3] else 2):
+		if not await _band_pause(band,owner,signature): return
 		var cy := low+random.randf_range(3.0,20.0)
 		var flank := -1.0 if (cluster==0)==(random.randf()<.5) else 1.0
 		if cy<3.0 or cy>top-3.0: continue
@@ -415,7 +429,6 @@ func front_band(band: int) -> Array:
 				var mass := _block(list,band,"island","pillar" if pillar else "island",center,size,core.z_rim+random.randf_range(-.3,.25),random,-3.4,core,.3)
 				if mass!=null: members.append(mass)
 		islands.append(members)
-	band_islands[band] = islands
 	# Rubble at the feet of big blocks, away from every gameplay object.
 	var bases := list.duplicate()
 	for count in range(random.randi_range(2,4) if not bases.is_empty() else 0):
@@ -427,10 +440,11 @@ func front_band(band: int) -> Array:
 		var at := foot+Vector2(random.randf_range(-.6,.6),random.randf_range(.1,.5))
 		if at.y<low or at.y>=high or _objects_near(at,1.2): continue
 		_block(list,band,"rubble","rubble",at,Vector2(random.randf_range(.9,1.6),random.randf_range(.7,1.2)),_front_z(list,at,-1.4)-.15,random)
+	if not await _band_pause(band,owner,signature): return
 	band_masses[band] = list
+	band_islands[band] = islands
 	for mass in list: _register(mass)
 	_link_neighbors(list)
-	return list
 
 func _overhang(list: Array, band: int, y: float, flank: float, random: RandomNumberGenerator) -> void:
 	# A block thrown out of the face over open space: its broad underside and
@@ -549,14 +563,6 @@ func open_at(point: Vector2) -> bool:
 func support_root_of(object: Dictionary) -> Vector2:
 	return massif.support_root(object) if massif!=null and object.has("id") and object.has("pos") else Vector2.INF
 
-func socket_margin() -> float:
-	# The host face is already the object's stone: a narrow recess round it.
-	return .22
-
-func socket_shade() -> float:
-	# Deep enough to read as a niche, never a black ring.
-	return .7
-
 func grip_tint() -> float:
 	# A grip is a knob of the host rock: the type shows in its tone, strip
 	# and details, not as a pale plate on the face.
@@ -600,9 +606,13 @@ func finds_without_pedestal() -> bool:
 
 func build_chunk(index: int, parent: Node3D) -> void:
 	query_cache.clear()
-	_build_masses(index,parent)
-	_build_decor(index,parent)
-	_build_landmarks(index,parent)
+	decor_rects.erase(index)
+	await _build_masses(index,parent)
+	if not await pause(parent): return
+	# Landmarks claim their place first; small decor fits round them.
+	await _build_landmarks(index,parent)
+	if not await pause(parent): return
+	await _build_decor(index,parent)
 
 func _palette(profile: GripBiomeProfile, height: float, mass: RockMassSpec) -> Dictionary:
 	var rock: Dictionary = profile.rock_material
@@ -613,16 +623,6 @@ func _palette(profile: GripBiomeProfile, height: float, mass: RockMassSpec) -> D
 	var facets: Array = []
 	for color in rock["facet_palette"]: facets.append(base.lerp(color,.5))
 	var under: Color = base.lerp(rock["underside_tint"],.42).darkened(.16)
-	if mass.role=="ledge_shelf":
-		# Rest platforms are a separate material family: warm matte wood with
-		# enough facet variation to keep their thickness readable.
-		base = Color("654635").lerp(profile.rock_palette["cool"],.08)
-		base = base.lightened((mass.tone-.5)*.10) if mass.tone>.5 else base.darkened((.5-mass.tone)*.10)
-		facets = [base.lightened(.12),base.darkened(.10),base.lightened(.03)]
-		under = base.darkened(.32)
-		return {"base":base,"facets":facets,
-			"top":base.lightened(.24),"side":base.darkened(.10),
-			"under":under,"inner":under.darkened(.12),"wood":true}
 	return {"base":base,"facets":facets,
 		"top":base.lerp(rock["top_light_tint"],.26).lightened(.06),
 		"side":base.lerp(rock["underside_tint"],.12).darkened(.04),
@@ -651,6 +651,7 @@ func _build_masses(index: int, parent: Node3D) -> void:
 	var emitted := 0
 	var walls := quality!="battery"
 	for mass in front_band(index):
+		if not await pause(parent): return
 		var center: Vector2 = mass.centroid()
 		emitted += RockMassBuilder.emit(surface,mass,_palette(profile_at(center.y),center.y,mass),_cavity,walls)
 	if emitted==0: return
@@ -666,8 +667,8 @@ func _build_masses(index: int, parent: Node3D) -> void:
 # --- Ledges -------------------------------------------------------------------------
 
 func build_ledge(object: Dictionary, parent: Node3D) -> void:
-	# The shelf itself is a mass of the face (front_band); here only its
-	# mount and the plants on its walking surface.
+	# A timber platform model standing on the face: the deck's back edge is
+	# the walking line (_place_platform).
 	var left: float = object["left"]
 	var right: float = object["right"]
 	var top: float = object["top"]
@@ -680,18 +681,9 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	holder.position = mount.holder_position()
 	object["visual"] = holder
 	object["mount"] = mount
-	var random := RandomNumberGenerator.new()
-	random.seed = int(absf(center.x*997.0+top*131.0))
-	for tuft in range(2 if quality!="battery" else 1):
-		var x := lerpf(left+.3,right-.3,random.randf())
-		var at := Vector2(x,top-.12)
-		var hit := surface_query(at)
-		if not hit.valid() or hit.surface_class!=RockMassSpec.TOP: continue
-		var grass := Node3D.new()
-		grass.position = Vector3(x-center.x,-.12,hit.position.z+.02-holder.position.z)
-		grass.scale = Vector3.ONE*.7
-		holder.add_child(grass)
-		_build_plant(grass,random,1.0,mount.profile,quality!="battery")
+	# A sand bridge is its own slab (HazardVisuals): it must be able to fall.
+	if object.has("bridge"): return
+	_place_platform(holder,object,mount)
 
 # --- Decor --------------------------------------------------------------------------
 
@@ -709,7 +701,9 @@ func _decor_blocked(point: Vector2, reach: float = 0.0) -> bool:
 	for find in layout.finds:
 		if find["pos"].distance_to(point)<.8+reach: return true
 	for ledge in layout.ledges:
-		if point.x>float(ledge["left"])-.5 and point.x<float(ledge["right"])+.5 and absf(point.y-float(ledge["top"]))<.9+reach: return true
+		# The platform's supports reach well under its deck.
+		var below := float(ledge["top"])-point.y
+		if point.x>float(ledge["left"])-.5 and point.x<float(ledge["right"])+.5 and below>-.9-reach and below<1.6+reach: return true
 	return false
 
 func _decor_route_clear(point: Vector2, radius: float) -> bool:
@@ -720,29 +714,97 @@ func _on_face(mass: RockMassSpec, point: Vector2) -> RockSurfaceHit:
 	var hit := surface_query(point)
 	return hit if hit.valid() and hit.mass_id==mass.id else null
 
+# Pieces already standing in a band (landmarks first, then decor), so no
+# two overlap.
+var decor_rects: Dictionary = {}
+
+func _taken(index: int, rect: Rect2) -> bool:
+	for band in [index-1,index,index+1]:
+		for other: Rect2 in decor_rects.get(band,[]):
+			if other.intersects(rect): return true
+	return false
+
+func _take(index: int, rect: Rect2) -> void:
+	if not decor_rects.has(index): decor_rects[index] = []
+	decor_rects[index].append(rect)
+
+# A standing piece needs stone under both sides of its foot, a hanging one
+# stone where it hangs from, a climbing one a wall behind it; none may cover
+# a grip, find, hazard or rest platform anywhere along its height.
+func _decor_fits(rect: Rect2, hanging: bool, climbing: bool = false) -> bool:
+	if hanging:
+		if stone_field(Vector2(rect.get_center().x,rect.end.y+.1))<0: return false
+	else:
+		for share in [.2,.5,.8]:
+			if stone_field(Vector2(rect.position.x+rect.size.x*share,rect.position.y-.15))<0: return false
+	# A climbing vine needs a wall to climb: visible stone behind most of its
+	# height, never a stalk standing up into the sky.
+	if climbing:
+		for share in [.3,.55,.8]:
+			if open_at(Vector2(rect.get_center().x,rect.position.y+rect.size.y*share)): return false
+	for share in [.1,.5,.9]:
+		if _decor_blocked(Vector2(rect.get_center().x,rect.position.y+rect.size.y*share),rect.size.x*.5): return false
+	return true
+
+# The lowest point of visible stone straight above `point` (within a metre),
+# a few centimetres inside it; INF where there is none.
+func _underside_above(point: Vector2) -> Vector2:
+	for step in range(34):
+		var probe := point+Vector2(0,step*.03)
+		if not open_at(probe): return probe+Vector2(0,.06)
+	return Vector2.INF
+
+# The sprite a decor spot gets in the place's climate.
+func _decor_entry(kind: String, profile: GripBiomeProfile, random: RandomNumberGenerator) -> Array:
+	match kind:
+		"grass":
+			# Where nothing green grows, the tops carry stones instead.
+			if not bool(profile.vegetation_set["grass"]) and FloraModels.climate(profile)!="cold": return FloraModels.pick_stone(profile,random)
+			return FloraModels.pick_top(profile,random)
+		"crystal": return FloraModels.pick_crystal(profile,random)
+		"climb": return FloraModels.pick_climber(profile,random)
+		"hanging": return FloraModels.pick_hanging(profile,random)
+	return FloraModels.pick_stone(profile,random)
+
 func _build_decor(index: int, parent: Node3D) -> void:
-	# Decor grows from the faces of the masses: plants and scree from lit
-	# tops (where the face is the frontmost stone), crystals from the sides of
-	# islands and pillars open to the sky, roots or icicles from undersides
-	# over open space. Everything is drawn, nothing collides.
-	var budget := 36 if quality=="high" else 22 if quality=="balanced" else 8
-	var crystal_budget := 5 if quality=="high" else 3 if quality=="balanced" else 1
-	var hanging_budget := 4 if quality=="high" else 2 if quality=="balanced" else 0
+	# Decor stands on the lit tops of the masses - plants, stones, now and then
+	# a crystal, vines climbing the wall above a top - and hangs from the
+	# undersides over open space: ivy, seed pods, icicles. Every piece is a painted sprite (FloraModels) placed so it rests
+	# on stone, covers no gameplay object and overlaps no other piece; it sits
+	# in front of the stone it covers. Everything is drawn, nothing collides.
+	var budget := 40 if quality=="high" else 28 if quality=="balanced" else 10
+	var crystal_budget := 3 if quality=="high" else 2 if quality=="balanced" else 1
+	# Vines are a green place's: a desert keeps a few dry ones, the snow
+	# hangs icicles rather than creepers.
+	var climate := FloraModels.climate(profile_at(index*BAND+BAND*.5))
+	var vines: float = {"green":1.0,"dry":.4,"cold":.6}[climate]
+	var hanging_budget := roundi((6 if quality=="high" else 4 if quality=="balanced" else 1)*(1.0 if climate=="cold" else vines))
+	var climb_budget := roundi((5 if quality=="high" else 4 if quality=="balanced" else 1)*vines)
 	var detail := quality!="battery"
 	var random := layout.rng(index,902)
 	var candidates: Array = []
 	for mass in front_band(index):
 		if mass.role in ["fill","body"]: continue
+		if not await pause(parent): return
 		var count: int = mass.outer_contour.size()
 		for i in range(count):
 			var j := (i+1)%count
-			var t := random.randf_range(.25,.75)
-			var rim: Vector2 = mass.outer_contour[i].lerp(mass.outer_contour[j],t)
-			var ring: Vector2 = mass.inner_contour[i].lerp(mass.inner_contour[j],t)
 			var span: float = mass.outer_contour[i].distance_to(mass.outer_contour[j])
-			if mass.top_edges.has(i): candidates.append([mass,rim.lerp(ring,.4),"grass" if random.randf()>.3 else "pebbles",rim,span])
-			elif mass.bottom_edges.has(i) and mass.role!="shelf": candidates.append([mass,rim.lerp(ring,.1),"hanging",rim,span])
-			elif mass.side_edges.has(i) and mass.role in ["island","overhang","arch"]: candidates.append([mass,rim.lerp(ring,.5),"crystal",rim,span])
+			# Longer edges offer a few spots along them.
+			var spots := clampi(int(span/1.2),1,3)
+			for spot in range(spots):
+				var t := (spot+random.randf_range(.25,.75))/spots
+				var rim: Vector2 = mass.outer_contour[i].lerp(mass.outer_contour[j],t)
+				var ring: Vector2 = mass.inner_contour[i].lerp(mass.inner_contour[j],t)
+				if mass.top_edges.has(i):
+					var roll := random.randf()
+					candidates.append([mass,rim.lerp(ring,.4),"grass" if roll<.6 else "pebbles" if roll<.85 else "crystal",rim,span/spots])
+				elif mass.bottom_edges.has(i) and mass.role!="shelf":
+					# Over open space an underside carries hanging vines; where the
+					# mass rests on another, a climbing vine roots in the seam and
+					# goes up its face.
+					var below := open_at(rim+(rim-ring).normalized()*.4)
+					candidates.append([mass,rim.lerp(ring,.1),"hanging" if below else "climb",rim,span/spots,ring])
 	for i in range(candidates.size()-1,0,-1):
 		var j := random.randi_range(0,i)
 		var swap = candidates[i]
@@ -751,8 +813,11 @@ func _build_decor(index: int, parent: Node3D) -> void:
 	var placed := 0
 	var crystals := 0
 	var hanging := 0
+	var climbing := 0
+	var clearance := {"grass":.9,"crystal":2.0,"hanging":1.6,"climb":1.6}
 	for candidate in candidates:
 		if placed>=budget: break
+		if not await pause(parent): return
 		var mass: RockMassSpec = candidate[0]
 		var point: Vector2 = candidate[1]
 		var kind: String = candidate[2]
@@ -760,74 +825,73 @@ func _build_decor(index: int, parent: Node3D) -> void:
 		var hit := _on_face(mass,point)
 		if hit==null: continue
 		var outward := (rim-point).normalized()
-		var open := open_at(rim+outward*.4)
+		if kind!="climb" and not open_at(rim+outward*.4): continue
+		if kind=="crystal" and crystals>=crystal_budget: continue
+		if kind=="hanging" and hanging>=hanging_budget: continue
+		if kind=="climb" and climbing>=climb_budget: continue
+		if not _decor_route_clear(point,float(clearance.get(kind,.6))): continue
 		var profile := profile_at(point.y)
-		match kind:
-			"grass":
-				if not open or not _decor_route_clear(point,.9) or _decor_blocked(point): continue
-			"crystal":
-				if not open or crystals>=crystal_budget or not _decor_route_clear(point,2.4) or _decor_blocked(point,.7): continue
-				crystals += 1
-			"hanging":
-				if not open or hanging>=hanging_budget or not _decor_route_clear(point,1.6) or _decor_blocked(point,.4): continue
-				if float(profile.weathering_rules["snow"])<.5 and float(profile.weathering_rules["moss"])<.3: continue
-				hanging += 1
-			_:
-				if not open or not _decor_route_clear(point,.6) or _decor_blocked(point): continue
 		# On the expeditions some tops carry the act's own small props.
 		var prop := ""
 		if kind in ["grass","pebbles"] and layout is ExpeditionLayout and random.randf()<.42:
 			var expedition := layout as ExpeditionLayout
 			var props: Array = expedition.span(expedition.act_index_at(point.y))["def"].get("props",[])
 			if not props.is_empty(): prop = str(props[random.randi_range(0,props.size()-1)])
+		var entry: Array = []
+		var size := Vector2(.9,.9)
+		var scale := 1.0
+		if prop.is_empty():
+			entry = _decor_entry(kind,profile,random)
+			if entry.is_empty(): continue
+			# Sizes come from the catalogue; a tuft on a short edge stays a
+			# little smaller.
+			scale = clampf(float(candidate[4])/1.6,.85,1.0) if kind=="grass" else 1.0
+			size = FloraModels.size_of(entry,scale)
+		var hangs := not entry.is_empty() and FloraModels.hangs(entry)
+		var anchor := point
+		if kind=="climb": anchor = (candidate[5] as Vector2)+Vector2(0,-.04)
+		if hangs:
+			# The underside slopes back from the front face to the rim and faces
+			# away from the camera: the visible edge is the front face's, so the
+			# piece hangs from there, tucked a little into it.
+			anchor = (candidate[5] as Vector2)+Vector2(0,.05) if candidate.size()>5 else _underside_above(rim)
+			if not anchor.is_finite(): continue
+		var rect := Rect2(anchor.x-size.x*.5,anchor.y-size.y if hangs else anchor.y,size.x,size.y)
+		var climbs := not entry.is_empty() and FloraModels.climbs(entry)
+		if _taken(index,rect.grow(.06)) or not _decor_fits(rect,hangs,climbs): continue
+		if kind=="crystal": crystals += 1
+		if kind=="hanging": hanging += 1
+		if kind=="climb": climbing += 1
 		var holder := Node3D.new()
-		holder.name = "Процедурный декор_%d" % placed
+		holder.name = "Декор_%d" % placed
 		parent.add_child(holder)
-		holder.position = hit.position+Vector3(0,0,.02)
-		# Grow along the face: lean back with its slope, out with its side.
-		holder.rotation.x = -clampf(hit.normal.y,-.6,.6)*.5
-		var size := clampf(float(candidate[4])/2.4,.8,1.25)
-		if not prop.is_empty():
-			holder.rotation.z = clampf(-outward.x*.4,-.4,.4)
-			ActProps.build(self,prop,holder,random,profile,detail)
-			placed += 1
-			continue
-		match kind:
-			"crystal":
-				holder.rotation.z = clampf(-outward.x*.4,-.4,.4)
-				_build_crystal(holder,random,detail,random.randi_range(3,6) if quality=="high" else random.randi_range(3,4),profile)
-				_decor_shade(holder,Vector2(1.3,.6),.18)
-			"grass":
-				holder.rotation.z = clampf(-outward.x*.5,-.5,.5)
-				_build_plant(holder,random,size,profile,detail)
-			"hanging":
-				holder.position = Vector3(rim.x,rim.y,mass.z_rim+.05)
-				if float(profile.weathering_rules["snow"])>=.5: _icicles(holder,.06,clampf(float(candidate[4])*.4,.6,1.4),int(absf(rim.x*31.0+rim.y*17.0)))
-				else: _build_roots(holder,random,profile,size)
-			_:
-				_build_pebbles(holder,random,zone_color(point.y).darkened(.04),quality=="high")
-				_decor_shade(holder,Vector2(1.1,.45),.14)
+		# In front of every stone the piece covers, never inside one.
+		holder.position = Vector3(anchor.x,anchor.y,maxf(hit.position.z,_front_over(rect))+.03)
+		if not prop.is_empty(): ActProps.build(self,prop,holder,random,profile,detail)
+		else: FloraModels.plant(holder,entry,quality!="battery",scale)
+		_take(index,rect)
 		placed += 1
 
-func _decor_shade(holder: Node3D, size: Vector2, opacity: float) -> void:
-	# Decor carries a small soft decal under its root; it leaves with it.
-	_contact_shade(holder,size,-.01,opacity)
+func _build_plant(holder: Node3D, random: RandomNumberGenerator, rim: float, profile: GripBiomeProfile, _detail: bool) -> void:
+	# The plant a place grows on a lit top: grass and bushes, desert plants
+	# and cacti, or snow plants (FloraModels).
+	FloraModels.plant(holder,FloraModels.pick_top(profile,random),quality!="battery",clampf(rim,.85,1.1))
 
-func _build_plant(holder: Node3D, random: RandomNumberGenerator, rim: float, profile: GripBiomeProfile, detail: bool) -> void:
-	# The plant a profile grows on a lit top: grass in the seam, dry scrub
-	# and now and then a cactus, or a snow cornice where nothing grows.
-	var plants: Dictionary = profile.vegetation_set
-	if not bool(plants["grass"]):
-		_build_snow_cap(holder,random,rim)
-		return
-	if bool(plants.get("dry",false)) and random.randf()<.35:
-		holder.scale = Vector3.ONE*random.randf_range(.8,1.0)
-		_build_cactus(holder,random,profile,quality=="high")
-		return
-	holder.scale = Vector3.ONE*random.randf_range(.9,1.15)*rim*(.85 if bool(plants.get("sparse",false)) else 1.0)
-	_build_grass(holder,random,quality=="high",rim,profile,detail)
+# No stone stands in front of a landmark anywhere over its height: a tree
+# never grows behind a boulder that hides its crown. Stone behind it is
+# fine; so is the top it stands on.
+func _landmark_unhidden(point: Vector2, family: String, z: float) -> bool:
+	var rect := _landmark_rect(point,family)
+	for row in [.25,.5,.75,.95]:
+		for column in [.2,.5,.8]:
+			var probe := rect.position+rect.size*Vector2(column,row)
+			if not open_at(probe) and wall_depth(probe)>z-.05: return false
+	return true
 
-# --- Landmarks ----------------------------------------------------------------------
+# The space a landmark takes on the face, for the decor round it.
+func _landmark_rect(point: Vector2, family: String) -> Rect2:
+	var height := LandmarkVisuals.family_height(family)
+	return Rect2(point.x-height*.45,point.y-.1,height*.9,height+.1)
 
 func _landmark_clear(point: Vector2, height: float) -> bool:
 	# The whole set piece, not only its foot, keeps clear of the route and of
@@ -854,6 +918,7 @@ func _build_landmarks(index: int, parent: Node3D) -> void:
 	var placed := 0
 	for members in band_islands.get(index,[]):
 		if placed>=budget: break
+		if not await pause(parent): return
 		var best: RockMassSpec = null
 		for mass in members:
 			if best==null or mass.bounds.end.y>best.bounds.end.y: best = mass
@@ -870,11 +935,13 @@ func _build_landmarks(index: int, parent: Node3D) -> void:
 		if hit==null: continue
 		var family := landmark_family(point,random)
 		if not _landmark_clear(point,LandmarkVisuals.family_height(family)): continue
+		if not _landmark_unhidden(point,family,hit.position.z+.05): continue
 		var holder := Node3D.new()
 		holder.name = "Крупный элемент_%d" % placed
 		parent.add_child(holder)
 		holder.position = hit.position+Vector3(0,0,.05)
-		LandmarkVisuals.build_family(self,family,holder,random,quality=="high")
+		LandmarkVisuals.build_family(self,family,holder,random,quality!="battery")
+		_take(index,_landmark_rect(point,family))
 		placed += 1
 	# Act landmarks (v14) mark a fork or the way into the next act; they take
 	# the nearest clear spot of the face around their planned point.
@@ -891,11 +958,13 @@ func _build_landmarks(index: int, parent: Node3D) -> void:
 			var point: Vector2 = at+Vector2(offset.x*outward,offset.y)
 			var hit := surface_query(point)
 			if not hit.valid() or not _mark_clear(point,LandmarkVisuals.family_height(family)): continue
+			if not _landmark_unhidden(point,family,hit.position.z+.05): continue
 			var holder := Node3D.new()
 			holder.name = "Ориентир акта_%s" % family
 			parent.add_child(holder)
 			holder.position = hit.position+Vector3(0,0,.05)
-			LandmarkVisuals.build_family(self,family,holder,layout.rng(int(roundf(at.y*10)),978),quality=="high")
+			LandmarkVisuals.build_family(self,family,holder,layout.rng(int(roundf(at.y*10)),978),quality!="battery")
+			_take(index,_landmark_rect(point,family))
 			mark["built_at"] = point
 			break
 

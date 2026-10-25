@@ -204,8 +204,12 @@ func model_tests() -> void:
 	check(model.craft_consumable("booster")=="Не хватает материалов","crafting needs the whole recipe")
 	model.set_loadout(1,"glide")
 	check(model.set_loadout(0,"tape").begins_with("Не сочетается") and model.profile["active_loadout"]==["beacon","glide"],"rescue items that do not stack cannot share the loadout")
-	var items := model.run_items()
-	check(items.size()==2 and model.spend_item(items,0) and model.stock("beacon")==0 and not model.spend_item(items,0),"a charge is spent exactly once")
+	# Everything bought goes into the next run, one charge of each, taken from
+	# the stock when the run starts.
+	check(model.run_items().map(func(entry): return entry["id"])==["beacon","glide","tape"],"the next run carries one of every item in stock, no slots needed")
+	var items := model.take_run_items()
+	check(items.size()==3 and model.stock("beacon")==0 and model.stock("glide")==1 and model.stock("tape")==0,"starting a run takes one charge of each carried item from the stock")
+	check(model.spend_item(items,0) and not model.spend_item(items,0),"a carried charge is used exactly once")
 	model.profile["active"] = {"id":"busy"}
 	check(model.buy_consumable("beacon")=="Сначала заверши текущую попытку","nothing is bought during a run")
 
@@ -272,20 +276,19 @@ func scene_tests() -> void:
 	game._collect_finds()
 	check(game.model.profile["gold"]==24 and game.model.run_coins(game.run_id)==24,"after a restart the same coin cannot be banked again")
 	# Active items: beacon in flight.
-	game.model.profile["active_loadout"] = ["beacon","glide"]
-	game.model.profile["consumable_stock"] = {"beacon":1,"glide":1,"tape":1,"booster":1}
-	game.run_items = game.model.run_items()
+	game.model.profile["consumable_stock"] = {"beacon":1,"glide":1}
+	game.run_items = game.model.take_run_items()
 	game.hud.show_play()
-	check(game.hud.item_buttons.size()==2,"the HUD shows one button per carried item")
+	check(game.hud.item_buttons.size()==2 and game.model.stock("beacon")==0 and game.model.stock("glide")==0,"the HUD shows one button per carried item; their charges left the stock at the start")
 	attach_first(game)
 	game.activate_item(0)
-	check(game.run_items[0]["used"]==false and game.model.stock("beacon")==1,"an item that needs flight is not spent while hanging")
+	check(game.run_items[0]["used"]==false,"an item that needs flight is not used while hanging")
 	game.release_hook(false,"test")
 	game.sim.vel = Vector2(0,3)
 	game.activate_item(0)
-	check(game.run_items[0]["used"] and game.model.stock("beacon")==0 and game.item_effect_id()=="beacon" and not game.beacon_targets.is_empty(),"the beacon starts in flight, spends its charge and marks valid exits")
+	check(game.run_items[0]["used"] and game.item_effect_id()=="beacon" and not game.beacon_targets.is_empty(),"the beacon starts in flight, is used up and marks valid exits")
 	game.activate_item(1)
-	check(not game.run_items[1]["used"] and game.model.stock("glide")==1,"a second item waits for the running effect")
+	check(not game.run_items[1]["used"],"a second item waits for the running effect")
 	game.save_snapshot()
 	var saved_items: Array = saved_profile(game)["active"]["run_items"]
 	check(saved_items.size()==2 and bool(saved_items[0]["used"]) and not bool(saved_items[1]["used"]) and int(saved_profile(game)["consumable_stock"]["beacon"])==0,"used charges and the loadout are saved with the run")
@@ -297,26 +300,43 @@ func scene_tests() -> void:
 	game.sim.vel = Vector2(0,-7)
 	game.activate_item(1)
 	game._apply_item_effect(1.0/120)
-	check(game.item_effect_id()=="glide" and game.sim.vel.y>=-2.2001 and game.model.stock("glide")==0,"glide caps the fall speed")
+	check(game.item_effect_id()=="glide" and game.sim.vel.y>=-2.2001 and game.run_items[1]["used"],"glide caps the fall speed")
 	game._update_item_effect(3.6)
 	game.sim.vel = Vector2(0,-7)
 	game._apply_item_effect(1.0/120)
 	check(game.item_effect.is_empty() and game.sim.vel.y<-6.9,"after glide the fall is normal again")
-	# Booster only towards a visible grip, and only in flight.
+	# Booster: tapped on the ground it waits for flight, then pushes the
+	# flight along, capped. A second tap takes a waiting item back.
 	game.run_items = [{"id":"booster","used":false},{"id":"tape","used":false}]
+	game.sim.attached = false
 	game.sim.grounded = true
 	game.activate_item(0)
-	check(not game.run_items[0]["used"],"the booster refuses on the ground")
-	game.sim.grounded = false
-	game.sim.vel = Vector2(0,-6)
-	var exits: Array = game.reachable_exits(6)
-	var toward: Vector2 = (exits[0]-game.sim.pos).normalized()*4.0 if not exits.is_empty() else Vector2.ZERO
-	game.sim.vel = toward
+	check(not game.run_items[0]["used"] and game.item_armed() and game.item_effect_id()=="booster","on the ground the booster waits for flight without spending")
 	game.activate_item(0)
+	check(game.item_effect.is_empty() and not game.run_items[0]["used"],"a second tap cancels a waiting booster")
+	game.activate_item(0)
+	game._update_item_effect(1.0/120)
+	check(game.item_armed(),"a waiting booster stays armed on the ground")
+	game.sim.grounded = false
+	game.sim.vel = Vector2(3,4)
+	game._update_item_effect(1.0/120)
 	var before: float = game.sim.vel.length()
 	game._apply_item_effect(.1)
-	check(game.run_items[0]["used"] and game.sim.vel.length()>before and game.sim.vel.length()<=13.001,"the booster speeds a flight towards a visible grip, capped")
+	check(game.run_items[0]["used"] and not game.item_armed() and game.sim.vel.length()>before and game.sim.vel.length()<=13.001,"the booster fires on take-off and speeds the flight, capped")
 	game._end_item_effect()
+	# A parachute nobody tapped opens by itself on a fall about to cross the
+	# lower edge, so a bought item always does its job.
+	var carried: Array = game.run_items
+	game.run_items = [{"id":"glide","used":false}]
+	game.item_effect = {}
+	game.sim.attached = false
+	game.sim.grounded = false
+	game.sim.vel = Vector2(0,-9)
+	game.sim.pos.y = game.screen_bottom_y()+2.0
+	game._update_item_effect(1.0/120)
+	check(game.item_running("glide") and game.run_items[0]["used"],"an untapped parachute opens by itself on a dangerous fall")
+	game._end_item_effect()
+	game.run_items = carried
 	# Strap: a fatal fall returns to safety once; the last find falls out.
 	attach_first(game)
 	game.model.bag = [ItemCatalog.valuable(910,0,"root_wall",0),ItemCatalog.valuable(911,0,"root_wall",1)]

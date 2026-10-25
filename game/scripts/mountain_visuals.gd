@@ -16,6 +16,12 @@ const ROCK_COLORS := [Color("657478"),Color("777667"),Color("929387"),Color("3b4
 # use the same rule, so every object has one contact with the stone.
 const GRIP_STANDOFF := .30
 const LEDGE_STANDOFF := .30
+const WoodPlatform := preload("res://scripts/wood_platform.gd")
+const FloraModels := preload("res://scripts/flora_models.gd")
+# A platform's back stands this far off the stone; its front stays behind
+# the hero's plane (z 3.2).
+const PLATFORM_GAP := .04
+const PLATFORM_FRONT := 2.9
 const OBSTACLE_STANDOFF := .32
 # Soft, cool contact shade for styles without a baked occlusion term.
 const CONTACT_SHADER := "shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_never, shadows_disabled; uniform float opacity = .22; void fragment(){ vec2 p=UV*2.0-1.0; float d=length(p); ALBEDO=vec3(.07,.09,.12); ALPHA=smoothstep(1.0,.15,d)*opacity; }"
@@ -69,24 +75,81 @@ func open_at(point: Vector2) -> bool:
 func support_root_of(_object: Dictionary) -> Vector2:
 	return Vector2.INF
 
-# Widest ring of the stone nest outside an object's root.
-func socket_margin() -> float:
-	return .35
-
 # How far a grip's stone leans from the host rock to its type's material.
 func grip_tint() -> float:
 	return .55
 
-# Rest platforms use a warm, matte wood material so their walking surface is
-# distinct from the climbing rock while keeping the same faceted lighting.
-func ledge_wood_material(profile: GripBiomeProfile) -> StandardMaterial3D:
-	var material_color := Color("654635").lerp(profile.rock_palette["cool"],.08)
-	var material: StandardMaterial3D = world.mat("ledge_wood_%s" % profile.id,material_color,false)
-	material.vertex_color_use_as_albedo = true
-	material.vertex_color_is_srgb = true
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	material.roughness = .82
-	return material
+# Rest platforms are authored timber models (WoodPlatform): the shared grain
+# under the models' own tones, the wood nudged towards the place's cool rock
+# so it sits in the light.
+func ledge_materials(profile: GripBiomeProfile) -> Dictionary:
+	var wood: StandardMaterial3D = world.mat("ledge_wood_%s" % profile.id,Color.WHITE.lerp(profile.rock_palette["cool"],.10),false)
+	wood.albedo_texture = load(WoodPlatform.grain_path())
+	wood.vertex_color_use_as_albedo = true
+	wood.roughness = .86
+	var iron: StandardMaterial3D = world.mat("ledge_iron",Color.WHITE,false)
+	iron.vertex_color_use_as_albedo = true
+	iron.metallic = .5
+	iron.roughness = .45
+	var rope: StandardMaterial3D = world.mat("ledge_rope",Color.WHITE,false)
+	rope.vertex_color_use_as_albedo = true
+	rope.roughness = .95
+	return {"wood":wood,"iron":iron,"rope":rope}
+
+# The platform model of a rest ledge: the style whose supports fit the free
+# face under the ledge, its back plane on the frontmost stone anywhere over
+# its footprint (deck and supports), so no part of it enters the mountain,
+# and its front short of the hero's plane.
+func _place_platform(holder: Node3D, object: Dictionary, mount: SurfaceMount) -> Node3D:
+	var left: float = object["left"]
+	var right: float = object["right"]
+	var top: float = object["top"]
+	var width := right-left+.24
+	var style := WoodPlatform.style_for(_room_under_ledge(object))
+	var drop: float = WoodPlatform.DROP[style]
+	var back := _front_over(Rect2(left-.12,top-drop-.02,width,drop+.02))+PLATFORM_GAP
+	var model := WoodPlatform.instantiate(style,width,ledge_materials(mount.profile),quality!="battery")
+	model.scale.z = clampf((PLATFORM_FRONT-back)/WoodPlatform.DEPTH,.55,1.0)
+	model.position = Vector3(0,0,back-holder.position.z)
+	holder.add_child(model)
+	object["platform_style"] = style
+	return model
+
+# Free height under a ledge before the first grip, find, hazard or ledge
+# below it that its supports would run into.
+func _room_under_ledge(object: Dictionary) -> float:
+	var left: float = object["left"]-.2
+	var right: float = object["right"]+.2
+	var top: float = object["top"]
+	var room := 3.0
+	for id in layout.nearby_ids(top-3.5,top+.5):
+		var grip: Dictionary = layout.anchors[id]
+		if grip.get("reserve",false) or grip.get("hidden",false): continue
+		var q: Vector2 = grip["pos"]
+		var size: Vector2 = grip["dimensions"]
+		# The stone block of a grip reaches past its hitbox at the sides.
+		if q.y<top and q.x+size.x*.65>left and q.x-size.x*.65<right: room = minf(room,top-q.y-size.y*.5-.12)
+	for find in layout.finds:
+		var q: Vector2 = find["pos"]
+		if q.y<top and q.x+.45>left and q.x-.45<right: room = minf(room,top-q.y-.5)
+	for obstacle in layout.obstacles:
+		var q: Vector2 = obstacle["pos"]
+		var half: Vector2 = obstacle["dimensions"]*.5
+		if q.y<top and q.x+half.x>left and q.x-half.x<right: room = minf(room,top-q.y-half.y-.12)
+	for ledge in layout.ledges:
+		var other_top := float(ledge["top"])
+		if other_top<top and float(ledge["right"])>left and float(ledge["left"])<right: room = minf(room,top-other_top-.3)
+	return room
+
+# The frontmost stone over an area, sampled finer than any facet.
+func _front_over(area: Rect2) -> float:
+	var front := -INF
+	var columns := maxi(2,ceili(area.size.x/.2))
+	var rows := maxi(2,ceili(area.size.y/.2))
+	for column in range(columns+1):
+		for row in range(rows+1):
+			front = maxf(front,wall_depth(area.position+area.size*Vector2(float(column)/columns,float(row)/rows)))
+	return front
 
 # Give the playable stone a controlled contrast step against the host face.
 # Type colour carries identity, while the luminance adjustment keeps the hold
@@ -97,10 +160,6 @@ func grip_stone_color(rock: Color, profile: GripBiomeProfile, kind: int) -> Colo
 	if luminance<.48:
 		return stone.lightened(.12)
 	return stone.darkened(.09)
-
-# How dark the socket ring around an object is, as a share of the profile's.
-func socket_shade() -> float:
-	return 1.0
 
 # Mountains whose finds lie on the face itself, with only a contact shade.
 func finds_without_pedestal() -> bool:
@@ -170,6 +229,12 @@ func _clip_triangle(surface: SurfaceTool, points: Array[Vector2], fields: Array[
 	# Do not close rock-field holes with dark triangles. They are deliberate
 	# mountain voids and must reveal the continuous sky backdrop behind them.
 
+# Lets a long section build yield to the next frame while the world streams
+# it in (see MountainWorld.build_pause). False: the section was unloaded.
+func pause(owner) -> bool:
+	if world is MountainWorld: return await (world as MountainWorld).build_pause(owner)
+	return true
+
 func build_chunk(index: int, parent: Node3D) -> void:
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -212,7 +277,7 @@ func build_chunk(index: int, parent: Node3D) -> void:
 		parent.add_child(holder)
 		holder.position = Vector3(point.x,point.y,wall_depth(point)+.02)
 		holder.scale = Vector3.ONE*1.2
-		_build_grass(holder,random,quality=="high",1.0,profile_at(point.y),quality!="battery")
+		_build_grass(holder,random,quality!="battery",1.0,profile_at(point.y),quality!="battery")
 
 func beam(a: Vector3, b: Vector3, radius: float, color: Color, parent: Node3D) -> MeshInstance3D:
 	var cylinder := CylinderMesh.new()
@@ -320,9 +385,8 @@ func build_grip(object: Dictionary, parent: Node3D, mount: SurfaceMount) -> void
 	# plate laid on the face.
 	var stone := grip_stone_color(rock,profile,kind)
 	var front := _block_mesh(block,spec,stone,profile,kind)
-	# Keep the socket as a clean stone contact. Decorative chips, moss and
-	# hanging tufts were being rendered inside the playable grip silhouette.
-	_contact_seam(socket,spec,rock,profile,id,{})
+	# No seam, ring or recess round the block: it stands out of the face,
+	# and its contact is the real shadow it casts.
 	_paint_band(block,spec,front,id)
 	_block_cracks(object,block,spec,stone,front,profile)
 	match kind:
@@ -431,8 +495,19 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 		var dip := 0.0
 		for crack in spec.cracks: dip = maxf(dip,clampf(1.0-absf(x-float(crack))/.16,0,1))
 		return dip*.07
+	# The part buried in the rock runs straight back along the view axis, not
+	# along the tilted face normal: a deep back (an outcrop lifted out of a
+	# hollow) would otherwise slide sideways and show past the silhouette as
+	# a long slanted tail.
+	var view_basis := Basis.IDENTITY
+	var node: Node = block
+	while node is Node3D:
+		view_basis = (node as Node3D).basis*view_basis
+		node = node.get_parent()
+	var into_rock := view_basis.inverse()*Vector3.FORWARD
+	into_rock *= spec.back_embed/maxf(.2,-into_rock.z)
 	var back: Array = []
-	for point in spec.ring(spec.rear_scale*.94,.04): back.append(Vector3(point.x,point.y,-spec.back_embed))
+	for point in spec.ring(spec.rear_scale*.94,.04): back.append(Vector3(point.x,point.y,0.0)+into_rock)
 	var wall: Array = []
 	for point in spec.ring(.96): wall.append(Vector3(point.x,point.y,0.0))
 	var silhouette: Array = []
@@ -608,128 +683,6 @@ func _face_strip(triangles: Array, path: PackedVector2Array, width: float, lift:
 		for corner in corners: lifted.append(Vector3(corner.x,corner.y,_face_z(triangles,corner,depth)+lift))
 		result.append_array(PackedVector3Array([lifted[0],lifted[1],lifted[2],lifted[0],lifted[2],lifted[3]]))
 	return result
-
-# The contact with the host rock: an uneven seam along the rear footprint,
-# darker than the wall without an outline, with a few chips running off
-# into the face. No ring of equal width and no disc.
-func _contact_seam(socket: Node3D, spec: GripVisualSpec, rock: Color, profile: GripBiomeProfile, id: int, footing: Dictionary = {}) -> void:
-	var random := layout.rng(id,943)
-	var rear := spec.outline
-	var center := Vector2.ZERO
-	for point in rear: center += point
-	center /= rear.size()
-	var points := PackedVector3Array()
-	var colors := PackedColorArray()
-	var shade := float(profile.light_and_shadow_tuning["socket"])
-	var widths: Array[float] = []
-	# The crevice opens under the outcrop and on its lower flanks, where it
-	# leaves the face; along the top the stone runs on without a line.
-	var bounds := spec.bounds()
-	for index in range(rear.size()):
-		var lower := clampf((bounds.end.y-rear[index].y)/bounds.size.y*1.6-.5,0,1)
-		widths.append(random.randf_range(.05,.13)*lower)
-	for i in range(rear.size()):
-		var j := (i+1)%rear.size()
-		if widths[i]<.005 and widths[j]<.005: continue
-		var oi := rear[i]+(rear[i]-center).normalized()*widths[i]
-		var oj := rear[j]+(rear[j]-center).normalized()*widths[j]
-		var deep := rock.darkened(shade*random.randf_range(.75,1.05))
-		points.append_array(PackedVector3Array([Vector3(rear[i].x,rear[i].y,.004),Vector3(rear[j].x,rear[j].y,.004),Vector3(oj.x,oj.y,.016)]))
-		colors.append(deep)
-		points.append_array(PackedVector3Array([Vector3(rear[i].x,rear[i].y,.004),Vector3(oj.x,oj.y,.016),Vector3(oi.x,oi.y,.016)]))
-		colors.append(deep.lerp(rock,.45))
-	# Keep only the dark stone seam. Chips, sticks and tufts are intentionally
-	# omitted so nothing protrudes through the playable grip silhouette.
-	var seam := _flat_surface(socket,"Каменное гнездо",points,colors,stone_material,false)
-	seam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	seam.set_meta("chips",int(footing.get("chip_count",0)))
-	return
-
-# The boulder's footing on the host face: a few chips of the same stone at
-# its lower corners and beside its top, and moss (or snow, or grit) in the
-# seam at its foot. Moderate by design: the preset sets the count. Contact
-# comes from real shadows; only battery, which has none, gets a soft shade
-# under the boulder instead of the chips.
-func _grip_footing(socket: Node3D, spec: GripVisualSpec, rock: Color, profile: GripBiomeProfile, id: int) -> Dictionary:
-	var bounds := spec.bounds()
-	if quality=="battery":
-		_contact_shade(socket,Vector2(bounds.size.x*1.08,bounds.size.y*.8),.006,.30)
-		var shade := socket.get_child(socket.get_child_count()-1) as Node3D
-		shade.position = Vector3(.10,bounds.position.y+bounds.size.y*.12,.006)
-		return {}
-	var random := layout.rng(id,957)
-	var rear := spec.outline
-	var center := Vector2.ZERO
-	for point in rear: center += point
-	center /= rear.size()
-	var chips: Array = []
-	# The lowest corners of each flank, then now and then one beside the top.
-	var left := 0
-	var right := 0
-	for index in range(rear.size()):
-		var point := rear[index]
-		if point.x<0 and point.y-absf(point.x)*.4<rear[left].y-absf(rear[left].x)*.4: left = index
-		if point.x>0 and point.y-absf(point.x)*.4<rear[right].y-absf(rear[right].x)*.4: right = index
-	chips.append([rear[left],random.randf_range(.13,.19)])
-	chips.append([rear[right],random.randf_range(.11,.17)])
-	if quality=="high" or random.randf()<.5: chips.append([rear[left].lerp(rear[right],random.randf_range(.3,.7))+Vector2(0,-.04),random.randf_range(.07,.10)])
-	if random.randf()<(.7 if quality=="high" else .4):
-		var corner := rear[spec.top_left] if random.randf()<.5 else rear[spec.top_right]
-		chips.append([corner,random.randf_range(.08,.12)])
-	var points := PackedVector3Array()
-	var colors := PackedColorArray()
-	var tone := rock.lightened(.07)
-	for chip in chips:
-		var at: Vector2 = chip[0]
-		var r: float = chip[1]
-		var away := (at-center).normalized()
-		var c := at+away*r*.35+Vector2(random.randf_range(-.04,.04),-r*.2)
-		var corners := 6
-		var base := PackedVector3Array()
-		var crown := PackedVector3Array()
-		for k in range(corners):
-			var angle := TAU*k/corners+random.randf_range(-.25,.25)
-			var d := Vector2(cos(angle)*r*random.randf_range(.9,1.25),sin(angle)*r*random.randf_range(.65,.85))
-			base.append(Vector3(c.x+d.x,c.y+d.y,.01))
-			crown.append(Vector3(c.x+d.x*.55,c.y+d.y*.55+r*.08,r*.55))
-		var apex := Vector3(c.x-r*.12,c.y+r*.18,r*.8)
-		for k in range(corners):
-			var n := (k+1)%corners
-			var facing := Vector2(cos(TAU*(k+.5)/corners),sin(TAU*(k+.5)/corners))
-			var lit := facing.dot(Vector2(-.62,.62))
-			var face := tone.lightened(.10*lit) if lit>0 else tone.darkened(-.22*lit)
-			points.append_array(PackedVector3Array([base[k],base[n],crown[n],base[k],crown[n],crown[k]]))
-			colors.append(face.darkened(.06))
-			colors.append(face.darkened(.08))
-			points.append_array(PackedVector3Array([crown[k],crown[n],apex]))
-			colors.append(face.lightened(.04))
-	# Moss, snow or grit in the seam at the foot and on one lower flank.
-	var plants: Dictionary = profile.vegetation_set
-	var weather: Dictionary = profile.weathering_rules
-	var fill: Color = plants["leaf"]
-	var light: Color = plants["tip"]
-	if float(weather["snow"])>.5:
-		fill = Color("e6eef2")
-		light = Color("f7fafb")
-	elif bool(plants.get("dry",false)) or not bool(plants["grass"]):
-		fill = (plants["soil"] as Color).lerp(profile.rock_palette["warm"],.5)
-		light = fill.lightened(.12)
-	var tufts := PackedVector3Array()
-	var tuft_colors := PackedColorArray()
-	var low := rear[left].lerp(rear[right],.5)
-	var span := absf(rear[right].x-rear[left].x)
-	for index in range(random.randi_range(4,6) if quality=="high" else random.randi_range(3,4)):
-		var x := low.x+span*random.randf_range(-.5,.5)
-		var y := bounds.position.y-random.randf_range(.04,.09)
-		var w := random.randf_range(.07,.13)
-		var h := random.randf_range(.06,.12)
-		var lean := random.randf_range(-.04,.04)
-		var z := random.randf_range(.03,.08)
-		tufts.append_array(PackedVector3Array([Vector3(x-w,y,z),Vector3(x+w,y,z),Vector3(x+lean,y+h,z+.02)]))
-		tuft_colors.append(fill.darkened(random.randf_range(.05,.2)))
-		tufts.append_array(PackedVector3Array([Vector3(x-w*.5,y,z+.01),Vector3(x+w*.6,y+.01,z+.01),Vector3(x+lean*1.5+w*.2,y+h*1.3,z+.03)]))
-		tuft_colors.append(fill.lerp(light,random.randf_range(.3,.6)))
-	return {"chips":points,"chip_colors":colors,"chip_count":chips.size(),"tufts":tufts,"tuft_colors":tuft_colors,"tuft_count":tufts.size()/6}
 
 # Paint across the top of the boulder: most of its width, a broad stroke laid
 # on the real surface just under the top edge, with ragged ends, a wavering
@@ -936,7 +889,9 @@ func _hardware(block: Node3D, spec: GripVisualSpec, profile: GripBiomeProfile, f
 	accent.metallic = .7
 	accent.roughness = .3
 	var y := spec.bounds().position.y+spec.front_height*.3
-	var reach := spec.protrusion()+spec.back_embed
+	# Only as deep as the unlifted block: the lifted back runs along the view
+	# axis, and a pin along the tilted normal would poke out of it.
+	var reach := spec.protrusion()+minf(spec.back_embed,.45)
 	var face_z := func(x: float) -> float: return _face_z(front,Vector2(x,y),spec.protrusion())
 	match str(hardware["style"]):
 		"ring":
@@ -992,37 +947,6 @@ func _masonry_outline(outline: PackedVector2Array) -> PackedVector2Array:
 		if Geometry2D.is_point_in_polygon(point,outline): result.append(point)
 	return result if result.size()>=4 else outline
 
-func _socket(holder: Node3D, outline: PackedVector2Array, mount: SurfaceMount, wall: float, rock: Color) -> void:
-	# The stone nest: an uneven ring of the host rock just outside the root,
-	# recessed towards the object and flush with the face outside, so the
-	# object sits in a cavity instead of standing on the wall.
-	var center := Vector2.ZERO
-	for point in outline: center += point
-	center /= maxf(1,outline.size())
-	var random := RandomNumberGenerator.new()
-	random.seed = int(absf(mount.position.x*733.0+mount.position.y*977.0))+11
-	var socket := float(mount.profile.light_and_shadow_tuning["socket"])*socket_shade()
-	var points := PackedVector3Array()
-	var colors := PackedColorArray()
-	var inner := PackedVector2Array()
-	var outer := PackedVector2Array()
-	for point in outline:
-		var direction := (point-center).normalized()
-		var base := point+direction*(.14+.30*clampf(-direction.y,0,1))+Vector2(0,-.30*.35)
-		inner.append(base)
-		var margin := Vector2(mount.cavity_scale.x-absf(point.x-center.x),mount.cavity_scale.y-absf(point.y-center.y)).max(Vector2(.12,.10))
-		outer.append(base+direction*minf(margin.length(),socket_margin())*random.randf_range(.75,1.2))
-	for i in range(outline.size()):
-		var j := (i+1)%outline.size()
-		var facing := ((outline[i]+outline[j])*.5-center).normalized()
-		var deep := rock.darkened(socket*(1.0+.4*clampf(-facing.y,0,1)))
-		var lip := rock.lightened(.04*clampf(facing.dot(Vector2(-.6,.8)),0,1))
-		points.append_array(PackedVector3Array([Vector3(inner[i].x,inner[i].y,wall-.10),Vector3(outer[j].x,outer[j].y,wall+.01),Vector3(inner[j].x,inner[j].y,wall-.10)]))
-		colors.append(deep)
-		points.append_array(PackedVector3Array([Vector3(inner[i].x,inner[i].y,wall-.10),Vector3(outer[i].x,outer[i].y,wall+.01),Vector3(outer[j].x,outer[j].y,wall+.01)]))
-		colors.append(deep.lerp(lip,.55))
-	_flat_surface(holder,"Каменное гнездо",points,colors,stone_material,false)
-
 func _contact_shade(holder: Node3D, size: Vector2, z: float, opacity: float) -> void:
 	var quad := QuadMesh.new()
 	quad.size = size
@@ -1045,8 +969,8 @@ func build_obstacle(object: Dictionary, parent: Node3D) -> void:
 	parent.add_child(holder)
 	var p: Vector2 = object["pos"]
 	var mount := mount_at(p,object["dimensions"],{},OBSTACLE_STANDOFF)
-	# Hazards are set into the rock like any other block: a low profile on its
-	# mount, a dark seam all round, and rubble at the foot. Danger reads from
+	# Hazards stand out of the rock like any other block: a low profile on its
+	# mount, no recess or painted shade round it. Danger reads from
 	# the red-brown stone silhouette, without decorative sticks or bright lines.
 	holder.position = mount.holder_position()
 	object["visual"] = holder
@@ -1061,32 +985,18 @@ func build_obstacle(object: Dictionary, parent: Node3D) -> void:
 	var top := _polygon_top(polygon)
 	var bottom := -_polygon_top(_mirror_y(polygon))
 	var height := top-bottom
-	_socket(holder,refined,mount,wall,zone_color(p.y))
 	_outcrop(holder,refined,clampf(wall-.3,-2.4,-.5),.18,.56,height*.20,height*.24,.84,color,obstacle_material)
-	var width := _polygon_width(polygon)
 	# Keep the obstacle as a clean stone hazard. Cracks, warm edge glints and
 	# ember overlays looked like wooden sticks embedded in the rock.
-	if not baked_contact(): _contact_shade(holder,Vector2(width,height)+Vector2(1.0,.9),wall+.03,float(mount.profile.light_and_shadow_tuning["contact"]))
 
 func build_ledge(object: Dictionary, parent: Node3D) -> void:
-	# A rest ledge is a shelf of the mountain: its top bevel is exactly the
-	# physical top, the front has thickness, the root runs into the stone
-	# through a socket, the underside is dark, and grass only grows on the lip.
+	# A rest ledge is a timber platform model standing on the face: its deck
+	# is the physical top (_place_platform).
 	var left: float = object["left"]
 	var right: float = object["right"]
 	var top: float = object["top"]
 	var center := Vector2((left+right)*.5,top)
 	var width := right-left
-	var style := int(object.get("style",posmod(int(absf(center.x*97.0+top*31.0)),3)))
-	var polygon := PackedVector2Array()
-	if style==0: # broad cantilever with a broken front lip
-		polygon = PackedVector2Array([Vector2(-width*.50,0),Vector2(width*.40,0),Vector2(width*.50,-.16),Vector2(width*.34,-.48),Vector2(-width*.44,-.42),Vector2(-width*.54,-.16)])
-	elif style==1: # saddle shaped shelf, slightly asymmetric
-		polygon = PackedVector2Array([Vector2(-width*.50,0),Vector2(-width*.12,.07),Vector2(width*.46,0),Vector2(width*.50,-.22),Vector2(width*.28,-.5),Vector2(-width*.42,-.38)])
-	else: # wedge anchored into the mountain
-		polygon = PackedVector2Array([Vector2(-width*.50,0),Vector2(width*.50,.04),Vector2(width*.39,-.30),Vector2(width*.08,-.58),Vector2(-width*.47,-.35)])
-	# The stone is sampled under the lip, where the shelf enters the wall; the
-	# holder stays on the layout's walking line.
 	var mount := mount_at(center-Vector2(0,.3),Vector2(width,.6),{},LEDGE_STANDOFF)
 	mount.layout_point = center
 	var holder := Node3D.new()
@@ -1095,148 +1005,35 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	holder.position = mount.holder_position()
 	object["visual"] = holder
 	object["mount"] = mount
-	var wood_material := ledge_wood_material(mount.profile)
-	var wood := Color("654635").lerp(mount.profile.rock_palette["cool"],.08)
-	var wall := mount.wall_local()
-	_socket(holder,polygon,mount,wall,zone_color(top))
-	_outcrop(holder,polygon,clampf(wall-.3,-2.2,-.5),.30,.62,.16,.20,.84,wood,wood_material)
-	# A deep skirt under the shelf is its underside: it falls back into the
-	# wall in cool shade, so the shelf has visible thickness from the front.
-	_skirt(holder,polygon,.29,wall-.06,wood.darkened(.28),.16,.55,wood_material)
-	# Light walking surface over a shaded front edge, so the landing reads
-	# against the rock and the sky behind it.
-	_contour(holder,polygon,.09,.84,wood.darkened(.42),wood.lightened(.24))
-	if not baked_contact(): _contact_shade(holder,Vector2(width+1.0,1.4),wall+.03,float(mount.profile.light_and_shadow_tuning["contact"]))
-	var lip := RandomNumberGenerator.new()
-	lip.seed = int(absf(center.x*997.0+top*131.0))
-	for tuft in range(3 if quality!="battery" else 1):
-		var grass := Node3D.new()
-		grass.position = Vector3(lerpf(-width*.4,width*.4,lip.randf()),-.02,.62)
-		grass.scale = Vector3.ONE*.75
-		holder.add_child(grass)
-		_build_grass(grass,lip,false,1.0,mount.profile,quality!="battery")
+	_place_platform(holder,object,mount)
 
 # --- Decor clusters -------------------------------------------------------------
 
 func _build_grass(holder: Node3D, random: RandomNumberGenerator, shadows: bool, spread: float = 1.0, profile: GripBiomeProfile = null, detail: bool = true) -> void:
-	# A clump that grows from a dark cushion of soil: 3-5 broad leaves give
-	# the silhouette, stems and fine blades fill it, lengths and tints vary.
-	# Without detail the fine blades go, the cushion and broad leaves stay.
+	# A painted plant of the place's climate (FloraModels): tufts and bushes,
+	# desert plants or snow plants, swaying from the root.
 	var used := profile if profile!=null else GripBiomeProfile.named("forest")
-	var plants: Dictionary = used.vegetation_set
-	var dark: Color = plants["root"]
-	var mid: Color = plants["leaf"]
-	var light: Color = plants["tip"]
-	var frost := bool(plants.get("frost",false))
-	var dry := bool(plants.get("dry",false))
-	var points := PackedVector3Array()
-	var colors := PackedColorArray()
-	# Cushion: a low faceted mound of soil and grit in the crack, close to the
-	# host rock's tone so it reads as filled crevice, not a hole.
-	var soil: Color = (plants["soil"] as Color).lerp(used.rock_palette["base"],.45)
-	var corners := 7
-	var cushion := PackedVector3Array()
-	for corner in range(corners):
-		var angle := TAU*corner/corners+random.randf_range(-.2,.2)
-		cushion.append(Vector3(cos(angle)*.26*spread,sin(angle)*.07-.02,.0))
-	var crown := Vector3(0,.03,.07)
-	for corner in range(corners):
-		points.append_array(PackedVector3Array([crown,cushion[corner],cushion[(corner+1)%corners]]))
-		colors.append(soil.darkened(.04 if corner%2==0 else .12))
-	var leaves := random.randi_range(3,5)
-	var stems := random.randi_range(4,6)
-	var fine := random.randi_range(6,10) if detail else 0
-	for blade in range(leaves+stems+fine):
-		var group := 0 if blade<leaves else 1 if blade<leaves+stems else 2
-		var u := random.randf_range(-.5,.5)
-		var angle := u*(1.9 if group==0 else 2.4)+random.randf_range(-.15,.15)
-		var length: float = [random.randf_range(.42,.62),random.randf_range(.30,.48),random.randf_range(.18,.34)][group]*(1.0-absf(u)*.4)
-		var w: float = [random.randf_range(.08,.12),random.randf_range(.04,.06),random.randf_range(.02,.035)][group]
-		if dry: length *= .8
-		var z := .04+float(group)*.02+random.randf_range(0,.02)
-		var root := Vector3(u*.34*spread,random.randf_range(-.02,.02),z)
-		var direction := Vector3(sin(angle),cos(angle),0)
-		var across := Vector3(direction.y,-direction.x,0)*w
-		var bend := Vector3(direction.x*.18,-absf(direction.x)*.14,0)*length
-		var middle := root+direction*length*.5
-		var tip := root+direction*length+bend+Vector3(0,0,.03)
-		var tone := mid.lerp(light,random.randf_range(.2,.7))
-		var tip_tone := Color("f2f7f8") if frost else light if blade%3!=1 else mid
-		points.append_array(PackedVector3Array([root-across,root+across,middle+across*.8]))
-		colors.append(dark)
-		points.append_array(PackedVector3Array([root-across,middle+across*.8,middle-across*.8]))
-		colors.append(dark.lerp(tone,.4))
-		points.append_array(PackedVector3Array([middle-across*.8,middle+across*.8,tip]))
-		colors.append(tone.lerp(tip_tone,.6))
-	_flat_surface(holder,"Трава",points,colors,_vertex_material("decor_grass_v5"),shadows)
+	FloraModels.plant(holder,FloraModels.pick_top(used,random),shadows,clampf(spread,.85,1.15))
 
-func _build_cactus(holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, shadows: bool) -> void:
-	# Desert rim plant: a ribbed trunk with one or two raised arms, rooted in
-	# a small mound of sand and grit.
-	var plants: Dictionary = profile.vegetation_set
-	var body: Color = (plants["leaf"] as Color).lerp(Color("5f7a3a"),.6)
-	var points := PackedVector3Array()
-	var colors := PackedColorArray()
-	var height := random.randf_range(.9,1.3)
-	_column(points,colors,Vector3(0,-.05,.12),Vector3.UP,.13,.10,height,body)
-	for arm in range(random.randi_range(1,2)):
-		var side := -1.0 if (arm==0)==(random.randf()<.5) else 1.0
-		var at := random.randf_range(.3,.55)*height
-		var elbow := Vector3(side*.26,at+.05,.12)
-		_column(points,colors,Vector3(side*.06,at,.12),Vector3(side,.25,0).normalized(),.07,.07,.22,body.darkened(.05))
-		_column(points,colors,elbow,Vector3.UP,.075,.06,random.randf_range(.25,.4),body)
-	_flat_surface(holder,"Кактус",points,colors,_vertex_material("decor_plant"),shadows)
-	var mound := Node3D.new()
-	mound.name = "Песчаный холмик"
-	mound.scale = Vector3.ONE*.7
-	holder.add_child(mound)
-	_build_pebbles(mound,random,(plants["soil"] as Color).lerp(profile.rock_palette["warm"],.5),false)
-
-func _column(points: PackedVector3Array, colors: PackedColorArray, base: Vector3, axis: Vector3, bottom: float, top: float, length: float, color: Color) -> void:
-	# A six-sided faceted column with a pointed cap, lit from the upper left.
-	var side := Vector3(axis.y,-axis.x,0).normalized()
-	var tip := base+axis*length
-	for corner in range(6):
-		var a0 := TAU*corner/6.0
-		var a1 := TAU*(corner+1)/6.0
-		var d0 := side*cos(a0)+Vector3.BACK*sin(a0)
-		var d1 := side*cos(a1)+Vector3.BACK*sin(a1)
-		var facing := -(cos(a0)+cos(a1))*.4
-		var face := color.lightened(.14*facing) if facing>0 else color.darkened(-.2*facing)
-		points.append_array(PackedVector3Array([base+d0*bottom,tip+d0*top,tip+d1*top,base+d0*bottom,tip+d1*top,base+d1*bottom]))
-		colors.append(face)
-		colors.append(face.darkened(.03))
-		points.append_array(PackedVector3Array([tip+d0*top,tip+axis*top*.8,tip+d1*top]))
-		colors.append(face.lightened(.08))
+func _build_cactus(holder: Node3D, random: RandomNumberGenerator, _profile: GripBiomeProfile, shadows: bool) -> void:
+	# Desert rim plant: one of the painted cacti.
+	FloraModels.plant(holder,FloraModels.pick_cactus(random),shadows)
 
 func _build_snow_cap(holder: Node3D, random: RandomNumberGenerator, rim: float) -> void:
-	# Where nothing grows, an upper rim keeps a cornice of old snow: a lens
-	# lying on the stone with a brighter lip and a soft blue underside.
-	var outline := PackedVector2Array()
-	var width := random.randf_range(.7,1.1)*rim
-	for corner in range(8):
-		var angle := TAU*corner/8.0
-		outline.append(Vector2(cos(angle)*width,sin(angle)*.16+(.05 if sin(angle)>0 else -.02)))
-	var snow := _outcrop(holder,outline,-.12,.02,.16,.08,.05,.8,Color("e9f1f4"),_vertex_material("decor_snow"))
-	snow.name = "Снежный карниз"
-	snow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Where nothing grows, a rim keeps snowy stones or a drift of snowy scree.
+	FloraModels.plant(holder,FloraModels.pick(["stone_snow","scree_snow"][random.randi_range(0,1)],random),quality!="battery",clampf(rim,.9,1.15))
 
 func _build_roots(holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, rim: float) -> void:
-	# Under a forest overhang, roots of the plants above hang out of the
-	# crack: thin tapering strands with a tuft of moss where they emerge.
-	var color: Color = (profile.vegetation_set["root"] as Color).lerp(Color("5a4630"),.6)
-	for strand in range(random.randi_range(2,4)):
-		var x := random.randf_range(-.45,.45)*rim
-		var path := PackedVector2Array([Vector2(x,.05)])
-		for step in range(random.randi_range(2,4)):
-			path.append(path[-1]+Vector2(random.randf_range(-.1,.1),-random.randf_range(.18,.32)))
-		_crack(holder,path,.028,.06,color.darkened(random.randf_range(0,.15)))
-	var moss := Node3D.new()
-	moss.position = Vector3(0,.06,0)
-	moss.scale = Vector3(1,-.5,1)*.6
-	holder.add_child(moss)
-	_build_grass(moss,random,false,rim,profile,false)
+	# Under an overhang the place's vines, roots, frosted creepers or icicles
+	# hang out of the crack.
+	FloraModels.plant(holder,FloraModels.pick_hanging(profile,random),quality!="battery",clampf(rim,.9,1.1))
 
+# A crystal cluster of the place's kind for decor and landmarks
+# (FloraModels).
+func _crystal_sprite(holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, shadows: bool, scale: float = 1.0) -> void:
+	FloraModels.plant(holder,FloraModels.pick_crystal(profile,random),shadows,scale)
+
+# The small faceted cluster a crystal grip carries on its top.
 func _build_crystal(holder: Node3D, random: RandomNumberGenerator, shadows: bool, count: int = 4, profile: GripBiomeProfile = null) -> void:
 	# A mineral grown from a crack: a dark cup at the root, the tallest
 	# crystal sunk deepest, 2-5 side crystals of their own height and lean,
@@ -1295,7 +1092,7 @@ func _build_crystal(holder: Node3D, random: RandomNumberGenerator, shadows: bool
 		bits.position = Vector3(0,-.06,.05)
 		bits.scale = Vector3.ONE*.5
 		holder.add_child(bits)
-		_build_pebbles(bits,random,body.darkened(.3),false)
+		_crystal_bits(bits,random,body.darkened(.3),false)
 
 # --- Shared mesh helpers (used by every mountain style) ----------------------
 
@@ -1332,7 +1129,12 @@ func _vertex_material(key: String, emission: float = 0.0) -> StandardMaterial3D:
 		material.emission_energy_multiplier = emission
 	return material
 
-func _build_pebbles(holder: Node3D, random: RandomNumberGenerator, base: Color, shadows: bool) -> void:
+func _build_pebbles(holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, shadows: bool) -> void:
+	# Loose stones of the place: a boulder or a little scree (FloraModels).
+	FloraModels.plant(holder,FloraModels.pick_stone(profile,random),shadows)
+
+# Small faceted bits at the foot of a grip's crystal.
+func _crystal_bits(holder: Node3D, random: RandomNumberGenerator, base: Color, shadows: bool) -> void:
 	for index in range(random.randi_range(1,3)):
 		var r := random.randf_range(.12,.24)
 		var outline := PackedVector2Array()

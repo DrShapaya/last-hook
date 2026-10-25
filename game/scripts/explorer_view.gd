@@ -264,10 +264,10 @@ func draw(sim: RopeSim, target: Vector2, tether: bool, flying_bolt: bool, time: 
 				for index in range(1,points.size()-1):
 					var t := float(index)/(points.size()-1)
 					points[index] += axis*sin(t*PI)*sin(t*TAU*2+catch_age*35)*.09*exp(-catch_age*12)
-		rope.mesh = rope_tube(points,.033)
-		rope_outer.mesh = rope_strip(points,.047)
+		rope.mesh = rope_tube(points,.033,_mesh_of(rope))
+		rope_outer.mesh = rope_strip(points,.047,_mesh_of(rope_outer))
 		rope_outer.position.z = -.045
-	rope_material.albedo_color = Color("ff9d6d") if warning else Color.WHITE
+	_set_rope_tint(warning)
 	contact_glow.visible = sim.attached or flying_bolt
 	contact_glow.position = to+Vector3(0,0,.15)
 	if sim.attached and not was_attached: catch_time = time
@@ -311,10 +311,10 @@ func _draw_volley(sim: RopeSim, time: float, warning: bool, volley: Array) -> vo
 			points.append_array(rope_points(rope_from,head.to_global(HOOK_EYE),0))
 		else:
 			points = flight_rope_points(rope_from,head.to_global(HOOK_EYE),float(shot.get("age",0)),state=="returning")
-		line.mesh = rope_tube(points,.033)
-		outline.mesh = rope_strip(points,.047)
+		line.mesh = rope_tube(points,.033,_mesh_of(line))
+		outline.mesh = rope_strip(points,.047,_mesh_of(outline))
 		outline.position.z = -.045
-	rope_material.albedo_color = Color("ff9d6d") if warning else Color.WHITE
+	_set_rope_tint(warning)
 	var any_flying := false
 	for item in volley:
 		if str(item.get("state","")) in ["flying","returning"]:
@@ -344,73 +344,123 @@ func _draw_effects(flight: Dictionary, flying: bool, time: float) -> void:
 	var history: PackedVector2Array = flight.get("trail",PackedVector2Array())
 	trail_mesh.visible = flying and history.size()>1
 	if trail_mesh.visible:
-		var surface := SurfaceTool.new()
-		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var segments := history.size()-1
+		var vertices := PackedVector3Array()
+		vertices.resize(segments*6)
+		var colors := PackedColorArray()
+		colors.resize(segments*6)
+		var v_idx := 0
 		for index in range(1,history.size()):
 			var a := Vector3(history[index-1].x,history[index-1].y,3.42)
 			var b := Vector3(history[index].x,history[index].y,3.42)
-			var fade := float(index)/(history.size()-1)
+			var fade := float(index)/segments
 			var normal := Vector3(-(b-a).y,(b-a).x,0).normalized()*.052*fade
-			surface.set_color(Color(1,.84,.48,fade*.38))
-			for point in [a+normal,a-normal,b-normal,a+normal,b-normal,b+normal]:
-				surface.add_vertex(point)
-		trail_mesh.mesh = surface.commit()
+			var color := Color(1,.84,.48,fade*.38)
+			vertices[v_idx] = a+normal; vertices[v_idx+1] = a-normal; vertices[v_idx+2] = b-normal
+			vertices[v_idx+3] = a+normal; vertices[v_idx+4] = b-normal; vertices[v_idx+5] = b+normal
+			for corner in range(6): colors[v_idx+corner] = color
+			v_idx += 6
+		trail_mesh.mesh = _fill_mesh(_mesh_of(trail_mesh),vertices,colors)
 	var age := time-impact_time
 	impact_mesh.visible = age>=0 and age<.28 and not impact_kind.is_empty()
 	if not impact_mesh.visible: return
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var color := Color("a8efcc") if impact_kind=="catch" else Color("ffd38b")
 	color.a = pow(1-age/.28,2)
-	surface.set_color(color)
 	var radius := .12+age*1.9
+	var vertices := PackedVector3Array()
+	vertices.resize(48)
+	var colors := PackedColorArray()
+	colors.resize(48)
+	colors.fill(color)
+	var center := Vector3(impact_point.x,impact_point.y,3.7)
 	for index in range(8):
 		var radial := Vector3(cos(index*TAU/8),sin(index*TAU/8),0)
 		var tangent := Vector3(-radial.y,radial.x,0)*.018
-		var center := Vector3(impact_point.x,impact_point.y,3.7)
 		var a := center+radial*radius
 		var b := center+radial*(radius+.12*(1-age/.28))
-		for point in [a+tangent,a-tangent,b-tangent,a+tangent,b-tangent,b+tangent]: surface.add_vertex(point)
-	impact_mesh.mesh = surface.commit()
+		var v_idx := index*6
+		vertices[v_idx] = a+tangent; vertices[v_idx+1] = a-tangent; vertices[v_idx+2] = b-tangent
+		vertices[v_idx+3] = a+tangent; vertices[v_idx+4] = b-tangent; vertices[v_idx+5] = b+tangent
+	impact_mesh.mesh = _fill_mesh(_mesh_of(impact_mesh),vertices,colors)
 
-static func rope_tube(points: PackedVector3Array, radius: float) -> ArrayMesh:
+# The mesh an instance already owns, created once: the rope, trail and impact
+# are rebuilt every frame and should refill one buffer, not allocate a new one.
+static func _mesh_of(instance: MeshInstance3D) -> ArrayMesh:
+	if instance.mesh is ArrayMesh: return instance.mesh as ArrayMesh
+	return ArrayMesh.new()
+
+static func _fill_mesh(mesh: ArrayMesh, vertices: PackedVector3Array, colors: PackedColorArray) -> ArrayMesh:
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_COLOR] = colors
+	mesh.clear_surfaces()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+func _set_rope_tint(warning: bool) -> void:
+	var tint := Color("ff9d6d") if warning else Color.WHITE
+	if rope_material.albedo_color!=tint: rope_material.albedo_color = tint
+
+const TUBE_SIDES := 8
+static var _tube_ring := PackedVector2Array()
+
+# One shared ring per rope point (the segment ends already used the same
+# per-point axis), indexed, with the seam duplicated for the UV wrap. Passing
+# `target` refills an existing mesh instead of allocating one every frame.
+static func rope_tube(points: PackedVector3Array, radius: float, target: ArrayMesh = null) -> ArrayMesh:
 	var count := points.size() - 1
-	if count <= 0: return null
-	var sides := 8
-	var total_verts := count * sides * 6
+	if count <= 0:
+		if target!=null: target.clear_surfaces()
+		return target
+	if _tube_ring.is_empty():
+		for side in range(TUBE_SIDES+1):
+			var angle := TAU*side/TUBE_SIDES
+			_tube_ring.append(Vector2(cos(angle),sin(angle)))
+	var ring := TUBE_SIDES+1
 	var vertices := PackedVector3Array()
-	vertices.resize(total_verts)
+	vertices.resize(points.size()*ring)
 	var normals := PackedVector3Array()
-	normals.resize(total_verts)
+	normals.resize(vertices.size())
 	var uvs := PackedVector2Array()
-	uvs.resize(total_verts)
-	var v_idx := 0
+	uvs.resize(vertices.size())
 	var distance := 0.0
+	var last := points.size()-1
+	for index in range(points.size()):
+		if index>0: distance += points[index-1].distance_to(points[index])
+		var tangent := (points[mini(index+1,last)]-points[maxi(index-1,0)]).normalized()
+		var axis := Vector3(-tangent.y,tangent.x,0).normalized()
+		var point := points[index]
+		var v := distance/.45
+		var base := index*ring
+		for side in range(ring):
+			var around := _tube_ring[side]
+			var normal := axis*around.x+Vector3.BACK*around.y
+			vertices[base+side] = point+normal*radius
+			normals[base+side] = normal
+			uvs[base+side] = Vector2(float(side)/TUBE_SIDES,v)
+	var indices := PackedInt32Array()
+	indices.resize(count*TUBE_SIDES*6)
+	var i_idx := 0
 	for index in range(count):
-		var a := points[index]
-		var b := points[index+1]
-		var segment_length := a.distance_to(b)
-		var tangent_a := (points[mini(index+1,points.size()-1)]-points[maxi(index-1,0)]).normalized()
-		var tangent_b := (points[mini(index+2,points.size()-1)]-points[index]).normalized()
-		var axis_a := Vector3(-tangent_a.y,tangent_a.x,0).normalized()
-		var axis_b := Vector3(-tangent_b.y,tangent_b.x,0).normalized()
-		for side in range(sides):
-			for corner in [Vector2i(0,0),Vector2i(1,0),Vector2i(1,1),Vector2i(0,0),Vector2i(1,1),Vector2i(0,1)]:
-				var angle: float = TAU*(side+corner.y)/sides
-				var normal := (axis_a if corner.x==0 else axis_b)*cos(angle)+Vector3.BACK*sin(angle)
-				var vert := (a if corner.x==0 else b)+normal*radius
-				var uv := Vector2(float(side+corner.y)/sides,(distance+segment_length*corner.x)/.45)
-				vertices[v_idx] = vert
-				normals[v_idx] = normal
-				uvs[v_idx] = uv
-				v_idx += 1
-		distance += segment_length
+		var a := index*ring
+		var b := a+ring
+		for side in range(TUBE_SIDES):
+			indices[i_idx] = a+side
+			indices[i_idx+1] = b+side
+			indices[i_idx+2] = b+side+1
+			indices[i_idx+3] = a+side
+			indices[i_idx+4] = b+side+1
+			indices[i_idx+5] = a+side+1
+			i_idx += 6
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
 	arrays[Mesh.ARRAY_NORMAL] = normals
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
-	var mesh := ArrayMesh.new()
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := target if target!=null else ArrayMesh.new()
+	mesh.clear_surfaces()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
@@ -455,9 +505,11 @@ static func rope_corner_points(from: Vector3, corner: Vector3, to: Vector3) -> P
 		points.append(a.lerp(b,t))
 	return points
 
-static func rope_strip(points: PackedVector3Array, radius: float) -> ArrayMesh:
+static func rope_strip(points: PackedVector3Array, radius: float, target: ArrayMesh = null) -> ArrayMesh:
 	var count := points.size() - 1
-	if count <= 0: return null
+	if count <= 0:
+		if target!=null: target.clear_surfaces()
+		return target
 	var vertices := PackedVector3Array()
 	vertices.resize(count * 6)
 	var normals := PackedVector3Array()
@@ -481,6 +533,7 @@ static func rope_strip(points: PackedVector3Array, radius: float) -> ArrayMesh:
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
 	arrays[Mesh.ARRAY_NORMAL] = normals
-	var mesh := ArrayMesh.new()
+	var mesh := target if target!=null else ArrayMesh.new()
+	mesh.clear_surfaces()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh

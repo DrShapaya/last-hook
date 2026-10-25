@@ -6,287 +6,139 @@ extends RefCounted
 # "rare" flag, so pickup, the bag and run results stay untouched.
 
 const TIER_COLORS := ItemCatalog.VISUAL_RARITY_COLORS
-
-class LootIconCanvas extends Control:
-	var item: Dictionary = {}
-	var time := 0.0
-	func _ready() -> void:
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
-		queue_redraw()
-	func _process(delta: float) -> void:
-		time += delta
-		queue_redraw()
-	func _draw() -> void:
-		if not item.is_empty():
-			LootIcon.draw(self,item,size*.5,minf(size.x,size.y)*.78,time)
+const TreasureModels := preload("res://scripts/treasure_models.gd")
 
 static func kind_of(item: Dictionary) -> String:
-	var kind := str(item.get("kind",""))
-	if kind.is_empty():
-		kind = ["coin","amber","relic","crystal","idol","star"][clampi(int(item.get("tier",0)),0,5)]
-	return kind
+	return TreasureModels.kind_of(item)
 
 static func rarity_color(item: Dictionary) -> Color:
 	return ItemCatalog.visual_color(item)
 
-static func build(world: MountainWorld, find: Dictionary, holder: Node3D, quality: String, wall_local_z: float) -> void:
+# The find's authored model (TreasureModels) idling in front of the face; it
+# casts its own shadow on the rock and bobs and turns with its idle
+# animation. Older mountains still stand it on a pedestal.
+static func build(world: MountainWorld, find: Dictionary, holder: Node3D, quality: String, wall_local_z: float) -> Node3D:
 	var item: Dictionary = find["item"]
-	var tier := clampi(int(item.get("tier",0)),0,5)
 	var rare := bool(find.get("rare",false))
-	var kind := kind_of(item)
+	var kind := TreasureModels.kind_for(item)
 	var shadows := quality!="battery"
-	# On the rock-mass mountain a find hangs on the face with a soft contact
-	# shade only: no shelf of its own, so loot never reads as a platform.
-	# Older mountains keep their pedestals.
 	_pedestal(world,holder,wall_local_z,int(item.get("id",0)),shadows,kind,quality)
-	if world.visuals!=null and world.visuals.finds_without_pedestal():
-		_build_shared_icon(item,holder)
-	else:
-		match kind:
-			"coin": _coin(world,holder,shadows)
-			"amber": _gem(world,holder,Color("e8913f"),Color("ffd28a"),shadows)
-			"crown": _crown(world,holder,shadows)
-			"chalice": _chalice(world,holder,shadows)
-			"idol": _idol(world,holder,shadows)
-			"star", "crystal": _crystal(world,holder,Color("8fd8ee") if kind=="crystal" else Color("cfe9ff"),shadows)
-			"material":
-				var tint: Color = LootIcon.MATERIAL_COLORS.get(str(item.get("set_id","")),Color("c9a46a"))
-				_gem(world,holder,tint.darkened(.2),tint.lightened(.3),shadows)
-			_: _relic(world,holder,shadows)
+	var treasure := TreasureModels.instantiate(item,shadows)
+	treasure.position = Vector3(0,0,MODEL_LIFT)
+	holder.add_child(treasure)
+	TreasureModels.play_idle(treasure,float(int(item.get("id",0))%11)/11.0)
 	if quality!="battery":
 		_sparkle(world,holder,Vector3(.20,.20,.34),.30 if not rare else .42,float(int(item.get("id",0))%7)*.37)
 	if rare:
 		_halo(world,holder,rarity_color(item).lightened(.3),.95 if quality!="battery" else .7)
+	return treasure
 
-static func _build_shared_icon(item: Dictionary, holder: Node3D) -> void:
-	var viewport := SubViewport.new()
-	viewport.name = "Единая модель сокровища"
-	viewport.size = Vector2i(96,96)
-	viewport.transparent_bg = true
-	viewport.handle_input_locally = false
-	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	holder.add_child(viewport)
-	var canvas := LootIconCanvas.new()
-	canvas.item = item.duplicate(true)
-	canvas.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	viewport.add_child(canvas)
-	var sprite := Sprite3D.new()
-	sprite.name = "Модель сокровища"
-	sprite.texture = viewport.get_texture()
-	sprite.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	sprite.pixel_size = .0065
-	sprite.position = Vector3(0,0,.18)
-	sprite.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	holder.add_child(sprite)
+# The model stands this far in front of its holder, clear of the face.
+const MODEL_LIFT := .12
 
-static func _metal(world: MountainWorld, key: String, color: Color, glow: float = .18) -> StandardMaterial3D:
-	var material := world.mat("loot_v2_"+key,color,false)
-	# Metals stay mostly diffuse: the compatibility renderer has no reflection
-	# probes, so a fully metallic surface would read almost black.
-	material.metallic = .35
-	material.roughness = .32
-	material.metallic_specular = .85
-	material.emission_enabled = glow>0
-	material.emission = color.darkened(.35)
-	material.emission_energy_multiplier = glow
-	return material
+# --- Price tag ----------------------------------------------------------------------
 
-static func _mesh(parent: Node3D, mesh: Mesh, material: Material, at: Vector3, shadows: bool, name: String = "") -> MeshInstance3D:
-	var instance := MeshInstance3D.new()
-	if not name.is_empty(): instance.name = name
-	instance.mesh = mesh
-	instance.material_override = material
-	instance.position = at
-	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	parent.add_child(instance)
-	return instance
+# A price tag hanging from the find on a short cord, in the HUD's language: a
+# slate plate with chamfered corners, the rarity colour as its lower lip, a
+# small coin and the value in the HUD font. It is a lit object of the scene,
+# swinging with the find and casting its own shadow, not a label over it.
+const TAG_FONT_SIZE := 64
+const TAG_PIXEL := .0042
+const TAG_HEIGHT := .28
+const TAG_DROP := .09
+const TAG_SLATE := Color("24323d")
+const TAG_TEXT := Color("fff1c4")
+static var _tag_font: Font
 
-static func _prism(points: PackedVector2Array, z_back: float, z_front: float, bevel: float = 0.0) -> ArrayMesh:
-	# Flat-shaded extrusion with an optional chamfer on the front face.
+static func price_tag(world: MountainWorld, treasure: Node3D, item: Dictionary, shadows: bool) -> Node3D:
+	if _tag_font==null: _tag_font = load("res://assets/fonts/RussoOne.ttf")
+	# The cord hangs from the bottom of the model.
+	var tag := treasure.get_node(TreasureModels.TAG) as Node3D
+	var text := str(int(item.get("value",0)))
+	var text_width := _tag_font.get_string_size(text,HORIZONTAL_ALIGNMENT_LEFT,-1,TAG_FONT_SIZE).x*TAG_PIXEL
+	var coin := .15
+	var width := text_width+coin+.15
+	var top := -TAG_DROP
+	var center := Vector3(0,top-TAG_HEIGHT*.5,0)
+	var slate := world.mat("price_tag_slate",Color.WHITE,false)
+	slate.roughness = .55
+	slate.vertex_color_use_as_albedo = true
+	var plate := MeshInstance3D.new()
+	plate.name = "Табличка цены"
+	plate.mesh = _tag_mesh(Vector2(width,TAG_HEIGHT),.045,.045,rarity_color(item))
+	plate.material_override = slate
+	plate.position = center
+	plate.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	tag.add_child(plate)
+	var cord := world.box("Шнурок ценника",Vector3.ZERO,Vector3(.012,TAG_DROP+.02,.012),world.mat("price_tag_cord",Color("5a3b1e")),tag)
+	cord.position = Vector3(0,top*.5+.01,0)
+	cord.cast_shadow = plate.cast_shadow
+	var glyph := (load(TreasureModels.model_path("coin")) as PackedScene).instantiate() as Node3D
+	glyph.name = "Монетка ценника"
+	glyph.scale = Vector3.ONE*coin/.49
+	glyph.position = center+Vector3(-width*.5+.06+coin*.5,.008,.035)
+	tag.add_child(glyph)
+	var label := Label3D.new()
+	label.name = "Цена"
+	label.text = text
+	label.font = _tag_font
+	label.font_size = TAG_FONT_SIZE
+	label.pixel_size = TAG_PIXEL
+	label.outline_size = 0
+	label.modulate = TAG_TEXT
+	label.shaded = false
+	label.alpha_cut = Label3D.ALPHA_CUT_OPAQUE_PREPASS
+	label.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	label.position = center+Vector3(-width*.5+.06+coin+.04,.016,.0235)
+	tag.add_child(label)
+	return tag
+
+# A chamfered slab: slate front with a lighter top edge and the rarity lip
+# along the bottom, darker sides.
+static func _tag_mesh(size: Vector2, chamfer: float, depth: float, lip: Color) -> ArrayMesh:
+	var half := size*.5
+	var outline := [Vector2(-half.x+chamfer,-half.y),Vector2(half.x-chamfer,-half.y),Vector2(half.x,-half.y+chamfer),Vector2(half.x,half.y-chamfer),
+		Vector2(half.x-chamfer,half.y),Vector2(-half.x+chamfer,half.y),Vector2(-half.x,half.y-chamfer),Vector2(-half.x,-half.y+chamfer)]
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var center := Vector2.ZERO
-	for point in points: center += point
-	center /= points.size()
-	var inner := PackedVector2Array()
-	for point in points: inner.append(center+(point-center)*(1.0-bevel))
-	var face_z := z_front+(bevel*.35 if bevel>0 else 0.0)
-	var indices := Geometry2D.triangulate_polygon(inner)
-	for i in range(0,indices.size(),3):
-		for k in [0,2,1]:
-			var p := inner[indices[i+k]]
-			surface.add_vertex(Vector3(p.x,p.y,face_z))
-	for i in range(points.size()):
-		var j := (i+1)%points.size()
-		var a := points[i]
-		var b := points[j]
-		if bevel>0:
-			for v in [Vector3(a.x,a.y,z_front),Vector3(inner[j].x,inner[j].y,face_z),Vector3(b.x,b.y,z_front),Vector3(a.x,a.y,z_front),Vector3(inner[i].x,inner[i].y,face_z),Vector3(inner[j].x,inner[j].y,face_z)]:
-				surface.add_vertex(v)
-		for v in [Vector3(a.x,a.y,z_back),Vector3(b.x,b.y,z_front),Vector3(b.x,b.y,z_back),Vector3(a.x,a.y,z_back),Vector3(a.x,a.y,z_front),Vector3(b.x,b.y,z_front)]:
-			surface.add_vertex(v)
-	surface.generate_normals()
+	var front := depth*.5
+	var face := func(points: Array, normal: Vector3, color: Color) -> void:
+		for index in range(1,points.size()-1):
+			# Godot winds front faces clockwise.
+			for p: Vector3 in [points[0],points[index+1],points[index]]:
+				surface.set_color(color)
+				surface.set_normal(normal)
+				surface.add_vertex(p)
+	var front_points: Array = []
+	for p: Vector2 in outline: front_points.append(Vector3(p.x,p.y,front))
+	face.call(front_points,Vector3.BACK,TAG_SLATE)
+	var back_points: Array = []
+	for p: Vector2 in outline: back_points.append(Vector3(p.x,p.y,-front))
+	back_points.reverse()
+	face.call(back_points,Vector3.FORWARD,TAG_SLATE.darkened(.3))
+	for index in range(outline.size()):
+		var a: Vector2 = outline[index]
+		var b: Vector2 = outline[(index+1)%outline.size()]
+		var normal := Vector3(b.y-a.y,a.x-b.x,0).normalized()
+		var tone := TAG_SLATE.darkened(.25-.2*clampf(normal.y,0,1))
+		face.call([Vector3(a.x,a.y,-front),Vector3(b.x,b.y,-front),Vector3(b.x,b.y,front),Vector3(a.x,a.y,front)],normal,tone)
+	# The lip: a coloured band raised a hair over the bottom of the face.
+	var lip_y := -half.y+.034
+	var band := [Vector3(-half.x+chamfer,-half.y+.004,front+.002),Vector3(half.x-chamfer,-half.y+.004,front+.002),Vector3(half.x-.012,lip_y,front+.002),Vector3(-half.x+.012,lip_y,front+.002)]
+	face.call(band,Vector3.BACK,lip)
+	var shine := [Vector3(-half.x+.012,half.y-.012,front+.001),Vector3(half.x-.012,half.y-.012,front+.001),Vector3(half.x-chamfer*.6,half.y-.004,front+.001),Vector3(-half.x+chamfer*.6,half.y-.004,front+.001)]
+	face.call(shine,Vector3.BACK,TAG_SLATE.lightened(.16))
 	return surface.commit()
-
-static func _coin(world: MountainWorld, holder: Node3D, shadows: bool) -> void:
-	# A large coin facing the camera: thick rim, raised field with a stamped
-	# mountain, and a soft highlight on the upper-left edge.
-	var gold := _metal(world,"coin_gold",Color("e9b53f"),.22)
-	var rim := _metal(world,"coin_rim",Color("c98a2b"),.12)
-	var face := _metal(world,"coin_face",Color("f6cf62"),.26)
-	var shine := _metal(world,"coin_shine",Color("fff0b8"),.55)
-	var coin := Node3D.new()
-	coin.name = "Золотая монетка"
-	coin.rotation = Vector3(.04,.16,.05)
-	holder.add_child(coin)
-	var body := CylinderMesh.new()
-	body.top_radius = .36
-	body.bottom_radius = .36
-	body.height = .09
-	body.radial_segments = 20
-	var disc := _mesh(coin,body,rim,Vector3.ZERO,shadows,"Ребро")
-	disc.rotation.x = PI*.5
-	var top := CylinderMesh.new()
-	top.top_radius = .285
-	top.bottom_radius = .335
-	top.height = .04
-	top.radial_segments = 20
-	var bevel := _mesh(coin,top,gold,Vector3(0,0,.06),false,"Фаска")
-	bevel.rotation.x = PI*.5
-	# Stamped mountain emblem with a lit left slope and a darker right one.
-	var peak := PackedVector2Array([Vector2(-.20,-.11),Vector2(-.06,.13),Vector2(.0,.06),Vector2(.07,.16),Vector2(.20,-.11)])
-	_mesh(coin,_prism(peak,.07,.105,.0),face,Vector3.ZERO,false,"Чеканка")
-	var ridge := PackedVector2Array([Vector2(-.06,.13),Vector2(.0,.06),Vector2(.07,.16),Vector2(.07,-.11),Vector2(-.06,-.11)])
-	_mesh(coin,_prism(ridge,.10,.112,.0),rim,Vector3(.025,0,0),false)
-	var crescent := PackedVector2Array()
-	for step in range(7):
-		var angle := lerpf(1.75,3.05,step/6.0)
-		crescent.append(Vector2(cos(angle),sin(angle))*.33)
-	for step in range(7):
-		var angle := lerpf(3.05,1.75,step/6.0)
-		crescent.append(Vector2(cos(angle),sin(angle))*.29)
-	_mesh(coin,_prism(crescent,.09,.11,.0),shine,Vector3.ZERO,false,"Блик монеты")
-
-static func _gem(world: MountainWorld, holder: Node3D, color: Color, light: Color, shadows: bool) -> void:
-	var material := _metal(world,"gem_%s" % color.to_html(),color,.30)
-	material.metallic = .05
-	material.roughness = .18
-	var outline := PackedVector2Array([Vector2(0,.27),Vector2(.2,.12),Vector2(.16,-.18),Vector2(0,-.27),Vector2(-.17,-.16),Vector2(-.2,.1)])
-	var gem := _mesh(holder,_prism(outline,-.08,.08,.38),material,Vector3.ZERO,shadows,"Янтарь")
-	gem.scale = Vector3.ONE*1.25
-	var shine := _metal(world,"gem_shine_%s" % light.to_html(),light,.45)
-	_mesh(holder,_prism(PackedVector2Array([Vector2(-.12,.08),Vector2(-.02,.2),Vector2(-.04,.04)]),.10,.115),shine,Vector3.ZERO,false)
-
-static func _crown(world: MountainWorld, holder: Node3D, shadows: bool) -> void:
-	var gold := _metal(world,"crown_gold",Color("efbb3e"),.24)
-	var dark := _metal(world,"crown_band",Color("c7862a"),.14)
-	var ruby := _metal(world,"crown_ruby",Color("d8443c"),.35)
-	var crown := Node3D.new()
-	crown.name = "Корона"
-	crown.rotation = Vector3(.06,.18,0)
-	holder.add_child(crown)
-	var shape := PackedVector2Array([Vector2(-.32,-.16),Vector2(.32,-.16),Vector2(.36,.16),Vector2(.20,.02),Vector2(.11,.24),Vector2(0,.06),Vector2(-.11,.24),Vector2(-.20,.02),Vector2(-.36,.16)])
-	_mesh(crown,_prism(shape,-.10,.10,.0),gold,Vector3.ZERO,shadows,"Зубцы")
-	_mesh(crown,_prism(PackedVector2Array([Vector2(-.33,-.18),Vector2(.33,-.18),Vector2(.33,-.07),Vector2(-.33,-.07)]),-.11,.13,.0),dark,Vector3.ZERO,false,"Обод")
-	for x in [-.36,-.11,.11,.36]:
-		var ball := SphereMesh.new()
-		ball.radius = .035
-		ball.height = .07
-		ball.radial_segments = 6
-		ball.rings = 3
-		_mesh(crown,ball,gold,Vector3(x,.17 if absf(x)>.2 else .25,.02),false)
-	var gem := SphereMesh.new()
-	gem.radius = .045
-	gem.height = .09
-	gem.radial_segments = 6
-	gem.rings = 3
-	_mesh(crown,gem,ruby,Vector3(0,-.12,.14),false,"Камень")
-
-static func _chalice(world: MountainWorld, holder: Node3D, shadows: bool) -> void:
-	# Polished silver with gold trim, a touch larger so it reads at a glance.
-	var silver := _metal(world,"chalice_silver_v2",Color("a7adb2"),.10)
-	silver.metallic = .55
-	silver.roughness = .25
-	var gold := _metal(world,"chalice_gold",Color("e2ad45"),.20)
-	var cup := Node3D.new()
-	cup.name = "Кубок"
-	cup.scale = Vector3.ONE*1.25
-	holder.add_child(cup)
-	var bowl := CylinderMesh.new()
-	bowl.top_radius = .23
-	bowl.bottom_radius = .08
-	bowl.height = .28
-	bowl.radial_segments = 10
-	_mesh(cup,bowl,silver,Vector3(0,.10,0),shadows,"Чаша")
-	var band := CylinderMesh.new()
-	band.top_radius = .235
-	band.bottom_radius = .225
-	band.height = .045
-	band.radial_segments = 10
-	_mesh(cup,band,gold,Vector3(0,.235,0),false)
-	var stem := CylinderMesh.new()
-	stem.top_radius = .035
-	stem.bottom_radius = .05
-	stem.height = .17
-	stem.radial_segments = 6
-	_mesh(cup,stem,gold,Vector3(0,-.12,0),shadows)
-	var foot := CylinderMesh.new()
-	foot.top_radius = .09
-	foot.bottom_radius = .15
-	foot.height = .05
-	foot.radial_segments = 10
-	_mesh(cup,foot,silver,Vector3(0,-.22,0),shadows,"Основание")
-	for side in [-1,1]:
-		var handle := TorusMesh.new()
-		handle.inner_radius = .045
-		handle.outer_radius = .075
-		handle.rings = 8
-		handle.ring_segments = 5
-		var instance := _mesh(cup,handle,silver,Vector3(side*.25,.11,0),false,"Ручка")
-		instance.rotation = Vector3(PI*.5,0,0)
-
-static func _idol(world: MountainWorld, holder: Node3D, shadows: bool) -> void:
-	var stone := _metal(world,"idol_stone",Color("8d8f80"),.0)
-	stone.metallic = 0
-	stone.roughness = .9
-	var moss := _metal(world,"idol_eyes",Color("6fe0c8"),.9)
-	var body := PackedVector2Array([Vector2(-.17,-.28),Vector2(.17,-.28),Vector2(.2,.06),Vector2(.14,.27),Vector2(-.14,.27),Vector2(-.2,.06)])
-	_mesh(holder,_prism(body,-.12,.10,.28),stone,Vector3.ZERO,shadows,"Каменный идол")
-	for x in [-.07,.07]:
-		_mesh(holder,_prism(PackedVector2Array([Vector2(x-.035,.07),Vector2(x+.035,.07),Vector2(x+.03,.12),Vector2(x-.03,.12)]),.10,.145),moss,Vector3.ZERO,false,"Глаз")
-	_mesh(holder,_prism(PackedVector2Array([Vector2(-.08,-.08),Vector2(.08,-.08),Vector2(.06,-.04),Vector2(-.06,-.04)]),.10,.14),_metal(world,"idol_mouth",Color("4c4f45"),.0),Vector3.ZERO,false)
-
-static func _crystal(world: MountainWorld, holder: Node3D, color: Color, shadows: bool) -> void:
-	var material := _metal(world,"crystal_%s" % color.to_html(),color,.55)
-	material.metallic = .05
-	material.roughness = .12
-	material.rim_enabled = true
-	material.rim = .7
-	for index in range(3):
-		var spike := CylinderMesh.new()
-		spike.top_radius = 0
-		spike.bottom_radius = .085 if index==0 else .06
-		spike.height = .52 if index==0 else .34
-		spike.radial_segments = 6
-		var shard := _mesh(holder,spike,material,Vector3((index-1)*.11,-.02 if index==0 else -.08,0),shadows and index==0,"Редкий кристалл")
-		shard.rotation.z = (1-index)*.42
-
-static func _relic(world: MountainWorld, holder: Node3D, shadows: bool) -> void:
-	var bronze := _metal(world,"relic_bronze",Color("b0844a"),.12)
-	var gold := _metal(world,"relic_gold",Color("efc35a"),.25)
-	var tablet := PackedVector2Array([Vector2(-.2,-.24),Vector2(.2,-.24),Vector2(.22,.14),Vector2(0,.28),Vector2(-.22,.14)])
-	var node := _mesh(holder,_prism(tablet,-.08,.08,.22),bronze,Vector3.ZERO,shadows,"Древняя реликвия")
-	node.rotation.z = .12
-	_mesh(holder,_prism(PackedVector2Array([Vector2(-.06,-.06),Vector2(.06,-.06),Vector2(.0,.12)]),.09,.12),gold,Vector3(0,0,0),false)
 
 const PEDESTALS := {"coin":[.34,.12,-.47],"amber":[.30,.11,-.40],"crown":[.44,.17,-.40],"chalice":[.44,.17,-.40],"idol":[.40,.14,-.42],"relic":[.40,.14,-.40]}
 
 static func _pedestal(world: MountainWorld, holder: Node3D, wall_local_z: float, id: int, shadows: bool, kind: String, quality: String) -> void:
 	if world.visuals==null: return
 	var visuals: MountainVisuals = world.visuals
-	if visuals.finds_without_pedestal():
-		visuals._contact_shade(holder,Vector2(.62,.5),minf(-.1,wall_local_z+.02),.2)
-		return
+	# A find hangs in front of the face: no pedestal and no painted shade
+	# under it, only its own real shadow.
+	if visuals.finds_without_pedestal(): return
 	var size: Array = PEDESTALS.get(kind,[.32,.11,-.42])
 	var random := RandomNumberGenerator.new()
 	random.seed = id*271+5

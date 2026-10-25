@@ -1,5 +1,11 @@
 extends SceneTree
 
+const FloraModels := preload("res://scripts/flora_models.gd")
+
+const TreasureModels := preload("res://scripts/treasure_models.gd")
+
+const WoodPlatform := preload("res://scripts/wood_platform.gd")
+
 # Visual layer checks: the rock-mass mountain (masses, surface query, shelves,
 # arches, overhangs), object mounting, quality-dependent decor, loot models,
 # timers, profiles and chunk streaming. Gameplay collision is covered by the
@@ -7,6 +13,11 @@ extends SceneTree
 
 var checks := 0
 var failures := 0
+
+func mesh_shadows(node: Node) -> bool:
+	for mesh: MeshInstance3D in node.find_children("*","MeshInstance3D",true,false):
+		if mesh.cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_OFF: return false
+	return true
 
 func check(condition: bool, message: String) -> void:
 	checks += 1
@@ -40,7 +51,7 @@ func skin_signature(world: MountainWorld, index: int) -> Array:
 	for color in colors: color_sum += color.r+color.g+color.b
 	var decor := 0
 	for child in chunk.get_children():
-		if String(child.name).contains("Процедурный декор"): decor += 1
+		if String(child.name).begins_with("Декор_"): decor += 1
 	chunk.free()
 	return [vertices.size(),sum,color_sum,decor]
 
@@ -112,7 +123,7 @@ func run_tests() -> void:
 				seats_big = seats_big and mass.bounds.size.x>=2.4 and mass.bounds.size.y>=2.2
 	check(masses>100 and corners_ok and named,"the mountain is built from many named blocks (%d)" % masses)
 	check(classes.has(RockMassSpec.FACE) and classes.has(RockMassSpec.TOP) and classes.has(RockMassSpec.SIDE) and classes.has(RockMassSpec.UNDERSIDE) and classes.has(RockMassSpec.INNER) and classes.has(RockMassSpec.WALL),"masses have front, top, side, underside, arch and wall faces: %s" % str(classes.keys()))
-	check(landforms.has("arch") and landforms.has("overhang") and landforms.has("island") and landforms.has("pillar") and landforms.has("shelf"),"landforms reach the geometry: %s" % str(landforms.keys()))
+	check(landforms.has("arch") and landforms.has("overhang") and landforms.has("island") and landforms.has("pillar") and not landforms.has("shelf"),"landforms reach the geometry: %s" % str(landforms.keys()))
 	check(seats_big and seats<a.nearby_anchors(0,120).size(),"objects never get a pedestal block of their own (%d seats)" % seats)
 	# Boulders of the reference: large face masses have a rounded rim of many
 	# short edges (no side longer than 40% of the girth) and a high crown, so
@@ -137,11 +148,9 @@ func run_tests() -> void:
 	var boulder_b := RockMassSpec.boulder_contour(Vector2(3,40),Vector2(6,5),a.seeded_rng(7,947),.2)
 	check(boulder_a==boulder_b and boulder_a.size()>=8,"boulder contours are deterministic per seed stream")
 	# Host masses: one body with a front, top, side and underside and real
-	# depth; lobes, seats and shelves fuse into a host instead of standing
-	# alone; shelves keep a broad underside, never a wedge.
+	# depth; lobes and seats fuse into a host instead of standing alone.
 	var hosts_ok := false
 	var fused := true
-	var shelves_square := true
 	var lobes := 0
 	for band in range(0,5):
 		for mass in massif.front_band(band):
@@ -152,24 +161,8 @@ func run_tests() -> void:
 			if mass.role=="lobe":
 				lobes += 1
 				fused = fused and mass.group!=mass.id
-			if mass.role=="ledge_shelf":
-				fused = fused and mass.group!=mass.id
-				var top_width := 0.0
-				var bottom_width := 0.0
-				var top_y: float = mass.bounds.end.y
-				var bottom_y: float = mass.bounds.position.y
-				var low_x := INF
-				var high_x := -INF
-				for point in mass.outer_contour:
-					if absf(point.y-top_y)<.01: top_width = mass.bounds.size.x
-					if point.y<bottom_y+(top_y-bottom_y)*.25:
-						low_x = minf(low_x,point.x)
-						high_x = maxf(high_x,point.x)
-				bottom_width = high_x-low_x
-				shelves_square = shelves_square and bottom_width>=top_width*.25 and mass.bounds.size.y>=.85
 	check(hosts_ok,"large host masses show a front, top, side and underside with real depth")
-	check(lobes>5 and fused,"lobes, seats and shelves fuse into their host body (%d lobes)" % lobes)
-	check(shelves_square,"shelves keep a broad, thick underside instead of a wedge")
+	check(lobes>5 and fused,"lobes and seats fuse into their host body (%d lobes)" % lobes)
 	var practice := MountainWorld.new()
 	practice.visuals_enabled = false
 	root.add_child(practice)
@@ -263,7 +256,7 @@ func run_tests() -> void:
 	var checked := 0
 	for band in range(0,5):
 		for mass in massif.front_band(band):
-			loot_clear = loot_clear and mass.role!="find_shelf" and (mass.landform!="shelf" or mass.role=="ledge_shelf")
+			loot_clear = loot_clear and mass.role!="find_shelf" and mass.landform!="shelf"
 	for find in a.finds:
 		var p: Vector2 = find["pos"]
 		if p.y<4 or p.y>110: continue
@@ -278,9 +271,49 @@ func run_tests() -> void:
 	var stone_meshes := 0
 	for node in loot_holder.find_children("*","MeshInstance3D",true,false):
 		if (node as MeshInstance3D).material_override==massif.stone_material: stone_meshes += 1
-	check(stone_meshes==0 and loot_holder.find_child("Контактная тень",true,false)!=null,"a coin carries no stone of its own, only a soft contact shade")
-	check(loot_holder.find_child("Модель сокровища",true,false)!=null and loot_holder.find_child("Единая модель сокровища",true,false)!=null,
-		"new world loot uses the same shared icon model as the backpack")
+	check(stone_meshes==0 and loot_holder.find_child("Контактная тень",true,false)==null,"a coin hangs free: no stone and no painted shade under it")
+	var treasure := loot_holder.find_child("Сокровище",false,false) as Node3D
+	var player := treasure.get_node("Анимация") as AnimationPlayer if treasure!=null else null
+	check(treasure!=null and treasure.find_child("Модель сокровища",true,false)!=null and treasure.find_children("*","MeshInstance3D",true,false).size()>0 and player.is_playing() and player.current_animation=="idle_spin",
+		"a coin on the face is its authored 3D model turning in its idle animation")
+	# The bag draws the very pictures of the face: the coin's turntable of
+	# its model, the painted treasure itself; each item keeps its picture, and
+	# an expedition's finds come from its own sheet.
+	var icons_ok := TreasureModels.icon_texture({"kind":"coin"}).get_width()==TreasureModels.PORTRAIT_CELL*TreasureModels.PORTRAIT_FRAMES
+	for kind: String in TreasureModels.KINDS:
+		if kind=="coin": continue
+		var item := {"kind":kind,"set_id":"silk","id":7,"location_id":"stone_spires"}
+		var path := TreasureModels.sprite_for(item)
+		icons_ok = icons_ok and ResourceLoader.exists(path) and TreasureModels.icon_texture(item)!=null and path==TreasureModels.sprite_for(item.duplicate())
+	var desert_ok := true
+	var winter_ok := true
+	for kind: String in ["amber","crystal","star","crown","chalice","idol","relic"]:
+		for id in range(6):
+			desert_ok = desert_ok and TreasureModels.sprite_for({"kind":kind,"id":id,"location_id":"stone_spires"}).get_file().begins_with("treasure_desert_")
+			winter_ok = winter_ok and TreasureModels.sprite_for({"kind":kind,"id":id,"location_id":"sky_city"}).get_file().begins_with("treasure_winter_")
+			var general := TreasureModels.sprite_for({"kind":kind,"id":id,"location_id":"green_peak"}).get_file()
+			desert_ok = desert_ok and (general.begins_with("treasure_a_") or general.begins_with("treasure_b_"))
+	check(icons_ok and desert_ok and winter_ok,"every treasure kind has its picture for the face and the bag, from the expedition's own set")
+	# Sizes: every treasure about half a metre, none tiny and none oversized.
+	var sizes_ok := true
+	for kind: String in TreasureModels.KINDS:
+		var model := TreasureModels.instantiate({"kind":kind},true)
+		var model_box := AABB()
+		var empty := true
+		for mesh: MeshInstance3D in model.find_children("*","MeshInstance3D",true,false):
+			model_box = mesh.get_aabb() if empty else model_box.merge(mesh.get_aabb())
+			empty = false
+		var extent := maxf(model_box.size.x,model_box.size.y)
+		sizes_ok = sizes_ok and extent>=.44 and extent<=.6 and mesh_shadows(model)
+		model.free()
+	check(sizes_ok,"treasures are 0.44-0.6 m across and cast real shadows")
+	# The price tag hangs from the find: a lit plate with the value in the
+	# HUD font and the rarity lip, swinging with the model.
+	var tag := LootVisuals.price_tag(a,treasure,{"kind":"coin","value":1250,"tier":0},true)
+	var tag_label := tag.find_child("Цена",false,false) as Label3D
+	var tag_plate := tag.find_child("Табличка цены",false,false) as MeshInstance3D
+	check(tag.get_parent().name==TreasureModels.PIVOT and tag_label!=null and tag_label.text=="1250" and tag_label.font!=null and tag_plate!=null and tag_plate.cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_ON and tag_plate.material_override is StandardMaterial3D and (tag_plate.material_override as StandardMaterial3D).shading_mode!=BaseMaterial3D.SHADING_MODE_UNSHADED,
+		"the price is a lit tag hanging from the find, in the HUD font")
 
 	# Grip shells: several visual variants, collision polygon untouched.
 	var grip_chunk := Node3D.new()
@@ -311,14 +344,13 @@ func run_tests() -> void:
 		var holder: Node3D = anchor["visual"]
 		var spec: GripVisualSpec = anchor["visual_spec"]
 		if spec.split: split += 1
-		var seam := holder.find_child("Каменное гнездо",true,false) as MeshInstance3D
-		var growth := holder.find_child("Мох и снег в шве",true,false) as MeshInstance3D
-		footing_ok = footing_ok and int(seam.get_meta("chips",0))==0 and growth==null
+		# No seam, recess or shade round the block; nothing grows in it.
+		footing_ok = footing_ok and holder.find_child("Каменное гнездо",true,false)==null and holder.find_child("Мох и снег в шве",true,false)==null and holder.find_child("Контактная тень",true,false)==null
 		var strip := holder.find_child("Полоса состояния",true,false) as MeshInstance3D
 		var box: AABB = strip.get_aabb()
 		var block := spec.bounds()
 		paint_on_top = paint_on_top and box.end.y>=block.end.y-.18 and box.size.y<=block.size.y*.36 and box.size.x>=spec.front_width*.36 and box.size.x<=spec.front_width*.72
-	check(footing_ok,"each grip has a clean stone contact with no chips, moss or tufts")
+	check(footing_ok,"each grip stands out of the face with no recess, seam, chips or tufts round it")
 	check(split>0 and split<a.nearby_anchors(20,70).size(),"some wide grips break into two stones, not all (%d)" % split)
 	check(paint_on_top,"the status paint is a short stroke across the crown of the boulder, not a plate over it")
 	var lean := make_world(58273,"battery")
@@ -328,8 +360,7 @@ func run_tests() -> void:
 	for anchor in lean.nearby_anchors(20,40):
 		lean.visuals.build_anchor(anchor,lean_chunk)
 		var holder: Node3D = anchor["visual"]
-		var lean_seam := holder.find_child("Каменное гнездо",true,false)
-		lean_ok = lean_ok and int(lean_seam.get_meta("chips",0))==0 and holder.find_child("Мох и снег в шве",true,false)==null and holder.find_child("Контактная тень",true,false)==null
+		lean_ok = lean_ok and holder.find_child("Каменное гнездо",true,false)==null and holder.find_child("Мох и снег в шве",true,false)==null and holder.find_child("Контактная тень",true,false)==null
 	check(lean_ok,"battery also keeps the grip contact free of decorative sticks and tufts")
 	lean.free()
 	check(shapes.size()>=4,"grips have several distinct visual builds (%d)" % shapes.size())
@@ -337,12 +368,11 @@ func run_tests() -> void:
 	for node in grip_chunk.find_children("Полоса состояния*","MeshInstance3D",true,false):
 		strip_lit = strip_lit and (node as MeshInstance3D).cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	check(strip_lit,"status strips never add a second shadow line")
-	# The block separates by volume: a contact seam and paint on its top
-	# chamfer, never a contrast outline.
-	var seams := grip_chunk.find_children("Каменное гнездо","MeshInstance3D",true,false).size()
+	# The block separates by volume and paint on its top chamfer, never a
+	# contrast outline.
 	var bands := grip_chunk.find_children("Полоса состояния","MeshInstance3D",true,false).size()
 	var outlines := grip_chunk.find_children("Контур","MeshInstance3D",true,false).size()
-	check(seams>=a.nearby_anchors(20,70).size() and bands>=a.nearby_anchors(20,70).size() and outlines==0,"every grip has a contact seam and a painted band, and no outline")
+	check(bands>=a.nearby_anchors(20,70).size() and outlines==0,"every grip has a painted band and no outline")
 	var dials := 0
 	var dial_ok := true
 	for anchor in a.nearby_anchors(4,110):
@@ -394,7 +424,15 @@ func run_tests() -> void:
 		var size: Vector2 = anchor["dimensions"]
 		var spec: GripVisualSpec = anchor["visual_spec"]
 		var drop := spec.front_height-size.y-.05
-		block_sized = block_sized and box.size.x>=size.x*.92 and box.size.x<=size.x*1.15 and drop>=GripVisualSpec.MIN_DROP-.001 and drop<=1.0
+		# Width of what the camera sees: the buried back runs along the view
+		# axis, sideways in block space when the face is turned.
+		var low_x := INF
+		var high_x := -INF
+		for vertex: Vector3 in body.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+			if vertex.z<-.001: continue
+			low_x = minf(low_x,vertex.x)
+			high_x = maxf(high_x,vertex.x)
+		block_sized = block_sized and high_x-low_x>=size.x*.92 and high_x-low_x<=size.x*1.15 and drop>=GripVisualSpec.MIN_DROP-.001 and drop<=1.0
 		block_sized = block_sized and absf(spec.bounds().end.y-(size.y*.5+.05))<=.06 and spec.top_band_height>=.2 and spec.side_depth>=.7
 		block_sized = block_sized and box.position.z<=-spec.back_embed+.001 and box.end.z>=spec.side_depth*.9 and spec.back_embed>=.4
 		before_hero = before_hero and (holder.global_transform*body.transform*box.end).z<3.0
@@ -435,7 +473,7 @@ func run_tests() -> void:
 	massif.set_quality("battery")
 	var battery_layers := massif.far_layer_count()
 	massif.set_quality("high")
-	check(battery_layers==1 and massif.far_layer_count()==2,"distant ranges follow the graphics preset")
+	check(battery_layers==0 and massif.far_layer_count()==0,"distant ranges are painted by the sky, never built as floating 3D bands")
 	var far_a := Node3D.new()
 	var far_b := Node3D.new()
 	a.add_child(far_a)
@@ -502,7 +540,7 @@ func run_tests() -> void:
 		massif.build_anchor(anchor,mount_chunk)
 		var holder: Node3D = anchor["visual"]
 		var mount: SurfaceMount = anchor["mount"]
-		sockets = sockets and holder.find_child("Каменное гнездо",true,false)!=null
+		sockets = sockets and holder.find_child("Каменное гнездо",true,false)==null
 		single_contact = single_contact and is_equal_approx(holder.position.z,mount.wall_z()+MountainVisuals.GRIP_STANDOFF) and is_equal_approx(mount.wall_z(),massif.wall_depth(anchor["pos"]))
 		hosted = hosted and mount.host_mass>=0 and mount.surface_class!="" and mount.socket_center.is_equal_approx(Vector3(anchor["pos"].x,anchor["pos"].y,mount.wall_z()))
 		match GripSpec.kind_of(anchor):
@@ -511,7 +549,7 @@ func run_tests() -> void:
 			GripSpec.CRYSTAL: if holder.find_child("Кристалл",true,false)!=null: cues["crystal"] = true
 			GripSpec.ROOT: if holder.find_child("Трещина",true,false)!=null: cues["root"] = true
 		if anchor["permanent"]: fixed_ok = fixed_ok and holder.find_children("*крепление*","MeshInstance3D",true,false).size()+holder.find_children("Кольцо*","MeshInstance3D",true,false).size()>0
-	check(sockets and single_contact,"every grip sits in a stone socket at one contact depth from its SurfaceMount")
+	check(sockets and single_contact,"every grip stands at one contact depth from its SurfaceMount, with no socket recess")
 	check(hosted,"every grip is mounted on a host mass found by the surface query")
 	check(cues.size()==4 and fixed_ok,"type cues (bend, slide track, crystal, root) and permanent fixings are built: %s" % str(cues.keys()))
 	# Legacy locations use the shared builder: no rectangle boxes remain.
@@ -522,8 +560,10 @@ func run_tests() -> void:
 	for anchor in legacy.nearby_anchors(0,24):
 		legacy.visuals.build_anchor(anchor,legacy_chunk)
 		var holder: Node3D = anchor["visual"]
-		shared = shared and holder.find_child("Прямоугольник",false,false)==null and holder.find_child("Каменное гнездо",true,false)!=null
-	for ledge in legacy.ledges: legacy.visuals.build_ledge(ledge,legacy_chunk)
+		shared = shared and holder.find_child("Прямоугольник",false,false)==null and holder.find_child("Блок",true,false)!=null
+	for ledge in legacy.ledges:
+		legacy.visuals.build_ledge(ledge,legacy_chunk)
+		shared = shared and (ledge["visual"] as Node3D).find_child("Деревянная площадка",false,false)!=null
 	check(shared and legacy_chunk.find_children("Площадка отдыха*","Node3D",false,false).size()==legacy.ledges.size(),"legacy locations build grips and shelves through the shared mount API")
 	legacy.free()
 	await mount_contract_checks()
@@ -555,35 +595,72 @@ func mount_contract_checks() -> void:
 		placed = placed and anchor["pos"]==before and mount.layout_point==before and (anchor["visual"] as Node3D).position.is_equal_approx(mount.holder_position())
 	check(same,"the same seed gives the same mount for every grip")
 	check(placed,"grip holders stand on their mount at the unchanged layout point")
-	# Ledges: a shelf mass whose top edge is the walking line.
+	# Ledges: an authored timber model whose deck top is the walking line,
+	# standing on the stone over its whole footprint without entering it or
+	# any grip, find or hazard, its front behind the hero's plane.
 	var shelf_ok := true
 	var shelves := 0
+	var styles := {}
 	for ledge in a.ledges:
 		var top := float(ledge["top"])
-		if top<4 or top>110: continue
+		if top<4 or top>110 or ledge.has("bridge"): continue
 		var before := [ledge["left"],ledge["right"],ledge["top"]]
 		a.visuals.build_ledge(ledge,chunk_a)
 		shelves += 1
-		var found := false
-		var wood_ok := false
-		for mass in massif.front_band(int(floor(top/24.0))):
-			if mass.role!="ledge_shelf" or absf(mass.bounds.end.y-top)>.01: continue
-			found = mass.bounds.position.x<=float(ledge["left"]) and mass.bounds.end.x>=float(ledge["right"]) and mass.bounds.size.y>=.8 and not mass.top_edges.is_empty()
-			var palette := massif._palette(massif.profile_at(top),top,mass)
-			var wood: Color = palette["base"]
-			wood_ok = wood.r>wood.b*1.25 and wood.r>wood.g
-		shelf_ok = shelf_ok and found and wood_ok and before==[ledge["left"],ledge["right"],ledge["top"]] and (ledge["mount"] as SurfaceMount).host_mass>=0
-	check(shelves>0 and shelf_ok,"every ledge is a shelf of the face with its top on the walking line (%d)" % shelves)
-	# A consumed grip takes its socket and shade with it; the face is clean.
+		var holder: Node3D = ledge["visual"]
+		var model := holder.find_child("Деревянная площадка",false,false) as Node3D
+		var found := model!=null and ResourceLoader.exists(str(model.get_meta("model","")))
+		if found:
+			styles[ledge["platform_style"]] = true
+			var box := AABB()
+			var first := true
+			for mesh: MeshInstance3D in model.find_children("*","MeshInstance3D",true,false):
+				var part := holder.transform*model.transform*mesh.transform*mesh.get_aabb()
+				box = part if first else box.merge(part)
+				first = false
+			var drop: float = WoodPlatform.DROP[ledge["platform_style"]]
+			var clear := true
+			for row in range(9):
+				for column in range(13):
+					var at := Vector2(lerpf(box.position.x,box.end.x,column/12.0),lerpf(box.position.y,box.end.y,row/8.0))
+					clear = clear and massif.wall_depth(at)<box.position.z+.001
+			var room: float = massif._room_under_ledge(ledge)
+			found = found and absf(box.end.y-top)<.03 and box.position.x<=float(ledge["left"]) and box.end.x>=float(ledge["right"]) and box.end.z<=MountainVisuals.PLATFORM_FRONT+.01 and clear and box.size.y<=drop+.12 and (room>=drop or ledge["platform_style"]=="bracket")
+		shelf_ok = shelf_ok and found and before==[ledge["left"],ledge["right"],ledge["top"]] and (ledge["mount"] as SurfaceMount).host_mass>=0
+	check(shelves>0 and shelf_ok,"every ledge is a timber model on the walking line that never enters the stone (%d)" % shelves)
+	check(styles.size()==2,"rest platforms use both support styles: %s" % str(styles.keys()))
+	# A grip lifted out of a hollow runs back into the rock along the view
+	# axis: nothing of it shows past its own silhouette as a slanted tail.
+	var tails_ok := true
+	var lifted := 0
+	for anchor in a.anchors:
+		if not is_instance_valid(anchor.get("visual")) or not anchor.has("visual_spec"): continue
+		var spec: GripVisualSpec = anchor["visual_spec"]
+		if spec.back_embed<.9: continue
+		lifted += 1
+		var block := (anchor["visual"] as Node3D).find_child("Блок",true,false) as Node3D
+		var body := block.find_child("Каменный выступ",false,false) as MeshInstance3D
+		var to_world: Transform3D = (anchor["visual"] as Node3D).transform*(block.get_parent() as Node3D).transform*block.transform
+		# The face and the wall ring (frame z>=0) give the silhouette; the
+		# buried back must project inside it.
+		var silhouette := Rect2()
+		var buried: Array[Vector2] = []
+		for vertex: Vector3 in body.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+			var at := to_world*vertex
+			if vertex.z>=-.001: silhouette = Rect2(Vector2(at.x,at.y),Vector2.ZERO) if silhouette.size==Vector2.ZERO and silhouette.position==Vector2.ZERO else silhouette.expand(Vector2(at.x,at.y))
+			else: buried.append(Vector2(at.x,at.y))
+		for point in buried: tails_ok = tails_ok and silhouette.grow(.1).has_point(point)
+	check(lifted>0 and tails_ok,"lifted grips show no slanted tail past their silhouette (%d)" % lifted)
+	# A consumed grip leaves nothing on the face.
 	var consumed := false
 	for anchor in a.anchors:
 		if anchor.get("permanent",true) or not is_instance_valid(anchor.get("visual")): continue
 		a.consume_anchor(anchor["id"])
 		var holder: Node3D = anchor["visual"]
 		# The seam belongs to the grip; grips cast real shadows instead of a disc decal.
-		consumed = not holder.visible and holder.find_child("Каменное гнездо",true,false)!=null and holder.find_child("Контактная тень",true,false)==null and not massif.has_method("_occlusion")
+		consumed = not holder.visible and holder.find_child("Каменное гнездо",true,false)==null and holder.find_child("Контактная тень",true,false)==null and not massif.has_method("_occlusion")
 		break
-	check(consumed,"consume_anchor hides the grip with its seam; no contact disc and nothing baked stays behind")
+	check(consumed,"consume_anchor hides the grip; no seam, contact disc or anything baked stays behind")
 	# Decor budgets per chunk and profile-specific decor.
 	var budget_ok := true
 	var snow_caps := 0
@@ -595,17 +672,65 @@ func mount_contract_checks() -> void:
 		var decor := 0
 		var crystals := 0
 		for child in decor_chunk.get_children():
-			if not String(child.name).begins_with("Процедурный декор"): continue
+			if not String(child.name).begins_with("Декор_"): continue
 			decor += 1
-			if child.find_child("Кристалл",false,false)!=null: crystals += 1
+			if not child.find_children("Декор_crystal*","",true,false).is_empty(): crystals += 1
 			var at := Vector2(child.position.x,child.position.y)
 			on_faces = on_faces and massif.surface_query(at).valid()
-		snow_caps += count_named(decor_chunk,"Снежный карниз")
-		budget_ok = budget_ok and decor<=22 and crystals<=3
+		snow_caps += count_named(decor_chunk,"Растение_snow_plant")+count_named(decor_chunk,"Декор_stone_snow")+count_named(decor_chunk,"Декор_scree_snow")
+		budget_ok = budget_ok and decor<=28 and crystals<=3
 		decor_chunk.free()
 	check(budget_ok,"decor and crystals stay within the balanced budget per chunk")
 	check(on_faces,"every decor piece grows from a rock face")
-	check(snow_caps>0,"the snow zone grows snow cornices instead of grass (%d)" % snow_caps)
+	# Every sprite grows the way it is painted and where it belongs: what
+	# stands has stone under its foot, what hangs has stone above it, a
+	# climbing vine a wall behind it; and the place's climate picked it.
+	var placed_ok := true
+	var climate_ok := true
+	var modes := {}
+	for index in range(0,5):
+		var chunk := Node3D.new()
+		a.add_child(chunk)
+		massif.build_chunk(index,chunk)
+		for holder in chunk.get_children():
+			if not String(holder.name).begins_with("Декор_") or holder.get_child_count()==0: continue
+			var parts := String(holder.get_child(0).name).split("_")
+			var kind := "_".join(parts.slice(1,parts.size()-1))
+			if not FloraModels.CATALOGUE.has(kind): continue
+			var mode := FloraModels.mode_of(kind,int(parts[parts.size()-1]))
+			modes[mode] = int(modes.get(mode,0))+1
+			var at := Vector2((holder as Node3D).position.x,(holder as Node3D).position.y)
+			var size: Vector2 = ((holder.get_child(0) as MeshInstance3D).mesh as QuadMesh).size
+			match mode:
+				"hang": placed_ok = placed_ok and massif.stone_field(at+Vector2(0,.05))>=0
+				"climb": placed_ok = placed_ok and not massif.open_at(at+Vector2(0,size.y*.55))
+				_: placed_ok = placed_ok and massif.stone_field(at-Vector2(0,.15))>=0
+			var here := FloraModels.climate(massif.profile_at(at.y))
+			var foreign: Array = {"green":["cactus","dry_plant","vine_dry","snow_plant","vine_frost","icicle","tree_dead","tree_snow"],"dry":["bush","vine_green","snow_plant","vine_frost","icicle","tree_green","tree_snow"],"cold":["cactus","dry_plant","vine_dry","bush","vine_green","tree_green","tree_dead"]}[here]
+			climate_ok = climate_ok and kind not in foreign
+		chunk.free()
+	check(placed_ok and modes.has("stand") and modes.has("hang") and modes.has("climb"),"sprites stand on stone, hang from it or climb a wall, as painted: %s" % str(modes))
+	check(climate_ok,"every sprite belongs to the climate it grows in")
+	# Landmarks are painted sprites and flag models only: no piece built of
+	# faceted prisms is left.
+	var landmarks := 0
+	var crafted := true
+	for index in range(0,8):
+		var chunk := Node3D.new()
+		a.add_child(chunk)
+		massif.build_chunk(index,chunk)
+		for holder in chunk.find_children("Крупный элемент*","Node3D",false,false)+chunk.find_children("Ориентир акта*","Node3D",false,false):
+			landmarks += 1
+			for mesh: MeshInstance3D in holder.find_children("*","MeshInstance3D",true,false):
+				var flagged := false
+				var node: Node = mesh
+				while node!=holder and node!=null:
+					if String(node.name) in ["Флаг на древке","Гирлянда флагов"]: flagged = true
+					node = node.get_parent()
+				crafted = crafted and (mesh.mesh is QuadMesh or flagged)
+		chunk.free()
+	check(landmarks>0 and crafted,"landmarks are built of painted sprites and flag models only (%d)" % landmarks)
+	check(snow_caps>0,"the snow zone grows snow plants and snowy stones instead of grass (%d)" % snow_caps)
 	# Location slots 1 and 2 use the same masses and mount contract.
 	for location in [1,2]:
 		var legacy := make_world(58273,"balanced",location,4)
@@ -634,7 +759,7 @@ func mount_contract_checks() -> void:
 		legacy.add_child(skin)
 		visuals.build_chunk(1,skin)
 		check(skin.get_node_or_null("Скальный массив_1")!=null,"location %d has its rock masses" % location)
-		var plants := count_named(skin,"Кактус")+count_named(skin,"Трава")
+		var plants := count_named(skin,"Растение")
 		check(plants>0,"location %d grows its profile's plants" % location)
 		legacy.free()
 	# Chunk streaming: leaving and returning rebuilds the same chunks and

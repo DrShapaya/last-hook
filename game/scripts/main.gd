@@ -6,6 +6,7 @@ var sim := RopeSim.new()
 var world: MountainWorld
 var explorer: ExplorerView
 var camera: Camera3D
+var sound_cache: Dictionary = {}
 var scene_environment: Environment
 var sun_light: DirectionalLight3D
 var hud: GameHud
@@ -149,11 +150,13 @@ var swap_offer: Dictionary = {}
 var swap_declined: Array = []
 
 func _ready() -> void:
-	Engine.max_fps = 60
+	Engine.max_fps = 0
 	get_tree().auto_accept_quit = false
 	# Android Back walks the menus (section -> main, run -> pause) and only
 	# leaves the game from the main section.
 	get_tree().quit_on_go_back = false
+	# Climb art loads on worker threads from the start (see AssetWarmup).
+	if DisplayServer.get_name()!="headless": AssetWarmup.start()
 	model = GameModel.new()
 	_configure_movement()
 	_apply_graphics_quality(str(model.profile.get("graphics_quality","balanced")),false)
@@ -437,8 +440,8 @@ func _apply_shadow_preset(preset: String) -> void:
 			# Without shadows, unshadowed illumination covers all surfaces; keep exposure natural.
 			sun_light.light_energy = SUN_ENERGY*1.1
 			sun_light.directional_shadow_max_distance = 40
-			RenderingServer.directional_shadow_atlas_set_size(1024,true)
-			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_HARD)
+			# Shadows are off: the atlas and filter stay as they are, so a later
+			# switch back does not recompile every 3D shader.
 		_:
 			sun_light.shadow_enabled = true
 			sun_light.shadow_opacity = .44
@@ -457,21 +460,26 @@ func _apply_graphics_quality(quality: String, save: bool = true) -> void:
 		# again by the next menu change or when the scene is ready.
 		if model!=null: model.profile["graphics_quality"] = selected
 		return
-	# Economy changes the render workload, never the responsiveness target. An
-	# uncapped engine follows the display's refresh rate (including 90/120 Hz)
-	# while VSync prevents an unnecessary uncapped busy loop.
-	Engine.max_fps = 0 if selected=="battery" else 60
-	if selected=="battery": DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
+	# Presets change the render workload, never the frame pacing: every preset
+	# follows the display's refresh rate (60/90/120 Hz) under VSync. A 60 fps
+	# cap on a 90/120 Hz screen alternates frame lengths and makes motion
+	# flicker like a strobe.
+	Engine.max_fps = 0
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 	_apply_shadow_preset(selected)
+	# Glow is a chain of full-screen blur passes; its faint bloom is not worth
+	# the fill rate on the battery preset.
+	if scene_environment!=null: scene_environment.glow_enabled = selected!="battery"
 	if is_instance_valid(world): world.set_visual_quality(selected)
 	if is_instance_valid(explorer): explorer.set_visual_quality(selected)
 	if model!=null:
 		model.profile["graphics_quality"] = selected
 		if save and not preview: request_profile_save()
 
+# The settings switch updates itself in place; nothing else on the menu
+# depends on the preset, so the page is not rebuilt.
 func set_graphics_quality(quality: String) -> void:
 	_apply_graphics_quality(quality)
-	if is_instance_valid(hud): hud.show_menu()
 
 func _create_world(seed_number: int, location_number: int, height: float, saved_version: int = 0, menu_preview: bool = false) -> void:
 	if is_instance_valid(world):
@@ -522,7 +530,7 @@ func start_run(endless: bool) -> void:
 	model.bag = []
 	model.picked = []
 	model.begin_run_ledger(run_id)
-	run_items = model.run_items() if run_mode!="practice" else []
+	run_items = model.take_run_items() if run_mode!="practice" else []
 	item_effect = {}
 	beacon_targets.clear()
 	swap_offer = {}
@@ -638,6 +646,7 @@ func resume_run() -> void:
 	var saved_effect = snapshot.get("item_effect",{})
 	if saved_effect is Dictionary and not saved_effect.is_empty() and not ItemCatalog.consumable(str(saved_effect.get("id",""))).is_empty():
 		item_effect = {"id":str(saved_effect["id"]),"remaining":maxf(0,float(saved_effect.get("remaining",0))),"duration":float(saved_effect.get("duration",1))}
+		if bool(saved_effect.get("armed",false)): item_effect.merge({"armed":true,"index":int(saved_effect.get("index",-1))})
 	beacon_targets.clear()
 	swap_offer = {}
 	swap_declined = []
@@ -721,6 +730,8 @@ func _input(event: InputEvent) -> void:
 	if state!="play" or preview:
 		return
 	if primary_touch>=0 and (event is InputEventScreenTouch or event is InputEventScreenDrag) and event.index!=primary_touch:
+		# A second finger may still tap an item while the first one steers.
+		if event is InputEventScreenTouch and hud.item_button_at(event.position): return
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventScreenTouch and not event.pressed:
@@ -1197,7 +1208,7 @@ func _physics_process(delta: float) -> void:
 			model.learn_control("swing")
 		if absf(sim.length-previous_length)>.0001:
 			model.learn_control("rope")
-	if item_effect_id()=="glide" and not sim.attached: sim.vel.y = maxf(sim.vel.y,-float(ItemCatalog.consumable("glide")["fall_speed"]))
+	if item_running("glide") and not sim.attached: sim.vel.y = maxf(sim.vel.y,-float(ItemCatalog.consumable("glide")["fall_speed"]))
 	var motion := world.move_player(previous,sim.pos,sim.vel)
 	sim.pos = motion["position"]
 	sim.vel = motion["velocity"]
@@ -1497,6 +1508,7 @@ func _collect_finds() -> void:
 	_update_swap_offer()
 
 func _hide_find(find: Dictionary) -> void:
+	world.collect_find(find)
 	find["picked"] = true
 	if is_instance_valid(find.get("visual")): find["visual"].visible = false
 
@@ -1573,41 +1585,67 @@ func reachable_exits(limit: int = 2) -> Array[Vector2]:
 	for point in found.slice(0,limit): result.append(point["pos"])
 	return result
 
+# Glide and the booster can be tapped at any moment: on the rope or the ground
+# they wait (armed, nothing spent) and fire as soon as the hero is airborne.
+const ARMABLE := ["glide","booster"]
+
 func item_blocked_reason(id: String) -> String:
 	match id:
 		"tape": return "Лента срабатывает сама при срыве"
-		"glide":
-			if sim.grounded or sim.attached: return "Плавное падение — только в полёте"
-		"booster":
-			if sim.grounded or sim.attached: return "Бустер — только в полёте"
-			if _booster_direction()==Vector2.ZERO: return "Впереди нет видимой опоры"
 		"beacon":
 			if reachable_exits().is_empty(): return "Рядом нет доступных выходов"
 	return ""
 
-# The booster only speeds a flight already heading for a visible grip.
-func _booster_direction() -> Vector2:
-	if sim.vel.length()<.5: return Vector2.ZERO
-	var heading := sim.vel.normalized()
-	for exit in reachable_exits(6):
-		if heading.dot((exit-sim.pos).normalized())>.5: return heading
-	return Vector2.ZERO
+func airborne() -> bool:
+	return not sim.attached and not sim.grounded
+
+# The booster pushes along the current flight; it needs some motion to follow.
+func _item_can_fire(id: String) -> bool:
+	if id in ARMABLE and not airborne(): return false
+	if id=="booster" and sim.vel.length()<.5: return false
+	return true
+
+func item_armed() -> bool:
+	return bool(item_effect.get("armed",false))
+
+func item_running(id: String) -> bool:
+	return item_effect_id()==id and not item_armed()
 
 func activate_item(index: int) -> void:
 	if state!="play" or index<0 or index>=run_items.size(): return
 	var entry: Dictionary = run_items[index]
-	var definition := ItemCatalog.consumable(str(entry["id"]))
+	var id := str(entry["id"])
+	var definition := ItemCatalog.consumable(id)
 	if bool(entry["used"]):
 		toast(str(definition["name"])+" уже использован",1.6,"item")
 		return
-	if not item_effect.is_empty():
-		toast("Дождись окончания: "+str(ItemCatalog.consumable(item_effect_id())["name"]),1.6,"item")
+	if item_armed() and int(item_effect.get("index",-1))==index:
+		# A second tap takes back a waiting item.
+		item_effect = {}
+		toast(str(definition["name"])+": отменено",1.2,"item")
 		return
-	var reason := item_blocked_reason(str(entry["id"]))
+	if not item_effect.is_empty():
+		toast(("Уже ждёт полёта: " if item_armed() else "Дождись окончания: ")+str(ItemCatalog.consumable(item_effect_id())["name"]),1.6,"item")
+		return
+	var reason := item_blocked_reason(id)
 	if not reason.is_empty():
 		toast(reason,1.6,"item")
 		return
-	if not model.spend_item(run_items,index): return
+	var duration := maxf(.01,float(definition["duration"]))
+	if id in ARMABLE and not _item_can_fire(id):
+		item_effect = {"id":id,"remaining":duration,"duration":duration,"armed":true,"index":index}
+		_sound(560,.08)
+		toast(str(definition["name"])+": сработает в полёте",1.4,"item")
+		save_snapshot()
+		return
+	_fire_item(index)
+
+func _fire_item(index: int) -> void:
+	var entry: Dictionary = run_items[index]
+	var definition := ItemCatalog.consumable(str(entry["id"]))
+	if not model.spend_item(run_items,index):
+		item_effect = {}
+		return
 	item_effect = {"id":str(entry["id"]),"remaining":float(definition["duration"]),"duration":maxf(.01,float(definition["duration"]))}
 	if entry["id"]=="beacon": beacon_targets = reachable_exits()
 	print("ITEM_BEGIN id=%s position=%s" % [entry["id"],sim.pos])
@@ -1625,16 +1663,22 @@ func item_effect_id() -> String:
 	return str(item_effect.get("id",""))
 
 # Begin/active/end: the effect counts down in real time and ends early once
-# it no longer applies (a catch or a landing ends glide and booster).
+# it no longer applies (a catch or a landing ends glide and booster). An
+# armed item only waits for flight.
 func _update_item_effect(delta: float) -> void:
+	_auto_glide()
 	if item_effect.is_empty(): return
-	if item_effect_id() in ["glide","booster"] and (sim.attached or sim.grounded):
+	if item_armed():
+		if _item_can_fire(item_effect_id()): _fire_item(int(item_effect.get("index",-1)))
+		return
+	if item_effect_id() in ARMABLE and (sim.attached or sim.grounded):
 		_end_item_effect()
 		return
 	item_effect["remaining"] = float(item_effect["remaining"])-delta
 	if float(item_effect["remaining"])<=0: _end_item_effect()
 
 func _apply_item_effect(step: float) -> void:
+	if item_armed(): return
 	match item_effect_id():
 		"glide":
 			# Slower descent only: rope, bottom edge and fail rules are untouched.
@@ -1643,6 +1687,17 @@ func _apply_item_effect(step: float) -> void:
 			var definition := ItemCatalog.consumable("booster")
 			if sim.vel.length()>.1 and sim.vel.length()<float(definition["max_speed"]):
 				sim.vel = (sim.vel+sim.vel.normalized()*float(definition["acceleration"])*step).limit_length(float(definition["max_speed"]))
+
+# A carried parachute that was not tapped opens by itself on a fall that is
+# about to cross the lower edge, so a bought item always does its job.
+func _auto_glide() -> void:
+	if not item_effect.is_empty() or not airborne() or sim.vel.y>-7.0: return
+	if sim.pos.y-screen_bottom_y()>5.0: return
+	for index in range(run_items.size()):
+		if run_items[index]["id"]=="glide" and not bool(run_items[index]["used"]):
+			_fire_item(index)
+			toast("Парашют раскрылся сам",1.4,"item")
+			return
 
 # Safety strap: the first fatal fall returns to the last safe point and the
 # last find falls out of the bag. It needs the same valid way back as a
@@ -1870,7 +1925,8 @@ func show_menu() -> void:
 	if model.profile["active"].is_empty():
 		run_id = ""
 		run_mode = "summit"
-		_create_world(58273,selected_location,36)
+		# The menu never shows this world; it only needs the route data.
+		_create_world(58273,selected_location,36,0,true)
 		sim = RopeSim.new()
 		sim.pos = Vector2(-.7,8.9)
 		sim.anchor = world.anchor_by_id(world.main_route[2])["pos"]
@@ -1911,16 +1967,16 @@ func cycle_location(direction: int) -> bool:
 	var next := lobby_location+direction
 	if not model.profile["active"].is_empty() or next<0 or next>=model.balance["locations"].size():
 		return false
-	hud.menu_slide = direction
 	lobby_location = next
 	if model.profile["locations"].has(lobby_location):
 		selected_location = lobby_location
 		model.profile["selected_location"] = selected_location
 		if not preview:
 			model.save()
-	# Rebuild the expedition body with the new route state. Updating only the
-	# scenic card leaves the old start button enabled for a newly locked route.
-	hud.show_menu()
+	# The lobby slides its card strip and swaps the route-dependent start
+	# action in place; anything else rebuilds the expedition body.
+	if not (hud.layout_mode=="menu" and is_instance_valid(hud.lobby_view) and hud.lobby_view.show_location()):
+		hud.show_menu()
 	if is_instance_valid(world): world.visible = false
 	if is_instance_valid(explorer): explorer.visible = false
 	return true
@@ -2044,6 +2100,7 @@ func _move_camera(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	if not AssetWarmup.done(): AssetWarmup.poll()
 	if profile_save_pending:
 		profile_save_timer -= delta
 		if profile_save_timer<=0.0:
@@ -2123,6 +2180,11 @@ func toast(text: String, duration: float = 2.5, context: String = "") -> void:
 func _sound(frequency: float, duration: float) -> void:
 	if not model.profile.get("sound",true) or preview or DisplayServer.get_name()=="headless":
 		return
+	var key := "tone_%s_%s" % [frequency,duration]
+	if sound_cache.has(key):
+		audio.stream = sound_cache[key]
+		audio.play()
+		return
 	var stream := AudioStreamWAV.new()
 	stream.format = AudioStreamWAV.FORMAT_16_BITS
 	stream.mix_rate = 22050
@@ -2134,12 +2196,18 @@ func _sound(frequency: float, duration: float) -> void:
 		var sample := int(sin(TAU*frequency*i/stream.mix_rate)*envelope*15000)
 		data.encode_s16(i*2,sample)
 	stream.data = data
+	sound_cache[key] = stream
 	audio.stream = stream
 	audio.play()
 
 func _focus_sound(starting: bool) -> void:
 	# A soft falling "whoomp" when time slows and a short rise when it returns.
 	if not model.profile.get("sound",true) or preview or DisplayServer.get_name()=="headless" or not is_instance_valid(focus_audio): return
+	var key := "focus_%s" % starting
+	if sound_cache.has(key):
+		focus_audio.stream = sound_cache[key]
+		focus_audio.play()
+		return
 	var stream := AudioStreamWAV.new()
 	stream.format = AudioStreamWAV.FORMAT_16_BITS
 	stream.mix_rate = 22050
@@ -2156,11 +2224,19 @@ func _focus_sound(starting: bool) -> void:
 		var sample := (sin(phase)*.7+sin(phase*.5)*.3)*envelope
 		data.encode_s16(index*2,int(clampf(sample,-1,1)*14000))
 	stream.data = data
+	sound_cache[key] = stream
 	focus_audio.stream = stream
 	focus_audio.play()
 
 func _hook_sound(kind: String) -> void:
 	if not model.profile.get("sound",true) or preview or DisplayServer.get_name()=="headless": return
+	# The samples are fixed per kind (seeded noise): synthesise each once.
+	# Building ~4000 samples in script on every throw stalled the frame.
+	var key := "hook_"+kind
+	if sound_cache.has(key):
+		audio.stream = sound_cache[key]
+		audio.play()
+		return
 	var stream := AudioStreamWAV.new()
 	stream.format = AudioStreamWAV.FORMAT_16_BITS
 	stream.mix_rate = 22050
@@ -2182,5 +2258,6 @@ func _hook_sound(kind: String) -> void:
 			_: sample = sin(TAU*(650*t-1100*t*t))*.4*envelope
 		data.encode_s16(index*2,int(clampf(sample,-1,1)*16000))
 	stream.data = data
+	sound_cache[key] = stream
 	audio.stream = stream
 	audio.play()

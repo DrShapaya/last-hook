@@ -57,6 +57,11 @@ var edge_normals := PackedVector2Array()
 var edge_offsets := PackedFloat32Array()
 # Every visible triangle: {"a","b","c": Vector3, "class": String, "edge": int}.
 var faces: Array = []
+# Indices of the non-wall faces by grid cell, built on the first surface
+# query. Placing decor, mounts and hazard markers asks thousands of points,
+# and each used to walk every face of the mass.
+const FACE_CELL := .5
+var _face_grid: Dictionary = {}
 
 # Builds the faces from the contour. widths: inset of the bevel ring for a
 # top, side and bottom edge; lifts: how far that ring stands in front of the
@@ -145,6 +150,7 @@ func build(widths: Vector3, lifts: Vector3, peaks: int, cap_rise: float, random:
 	cap_triangles = Geometry2D.triangulate_delaunay(flat)
 	if cap_triangles.is_empty(): return false
 	faces.clear()
+	_face_grid.clear()
 	for t in range(0,cap_triangles.size(),3):
 		faces.append({"a":cap_points[cap_triangles[t]],"b":cap_points[cap_triangles[t+1]],"c":cap_points[cap_triangles[t+2]],"class":FACE,"edge":-1})
 	for i in range(count):
@@ -232,8 +238,11 @@ func inside(point: Vector2) -> float:
 # Front surface of this mass at a point, or {} outside its silhouette.
 func surface_at(point: Vector2) -> Dictionary:
 	if not bounds.grow(.01).has_point(point) or inside(point)<-.0001: return {}
-	for face in faces:
-		if face["class"]==WALL: continue
+	if _face_grid.is_empty(): _build_face_grid()
+	# Candidates in ascending face order: the first face holding the point
+	# wins, exactly as a walk over all faces.
+	for index in _face_grid.get(Vector2i((point/FACE_CELL).floor()),PackedInt32Array()):
+		var face: Dictionary = faces[index]
 		var a: Vector3 = face["a"]
 		var b: Vector3 = face["b"]
 		var c: Vector3 = face["c"]
@@ -243,6 +252,25 @@ func surface_at(point: Vector2) -> Dictionary:
 		if normal.z<0: normal = -normal
 		return {"z":a.z*weights.x+b.z*weights.y+c.z*weights.z,"normal":normal,"class":face["class"],"edge":face["edge"]}
 	return {}
+
+func _build_face_grid() -> void:
+	for index in range(faces.size()):
+		var face: Dictionary = faces[index]
+		if face["class"]==WALL: continue
+		var a: Vector3 = face["a"]
+		var b: Vector3 = face["b"]
+		var c: Vector3 = face["c"]
+		# A hair wider than the triangle: the point test accepts a tiny margin.
+		var low := (Vector2(minf(a.x,minf(b.x,c.x)),minf(a.y,minf(b.y,c.y)))-Vector2.ONE*.002)/FACE_CELL
+		var high := (Vector2(maxf(a.x,maxf(b.x,c.x)),maxf(a.y,maxf(b.y,c.y)))+Vector2.ONE*.002)/FACE_CELL
+		for x in range(int(floor(low.x)),int(floor(high.x))+1):
+			for y in range(int(floor(low.y)),int(floor(high.y))+1):
+				var cell := Vector2i(x,y)
+				if not _face_grid.has(cell): _face_grid[cell] = PackedInt32Array()
+				var list: PackedInt32Array = _face_grid[cell]
+				list.append(index)
+				_face_grid[cell] = list
+	if _face_grid.is_empty(): _face_grid[Vector2i(1<<30,1<<30)] = PackedInt32Array()
 
 static func _barycentric(p: Vector2, a: Vector2, b: Vector2, c: Vector2) -> Vector3:
 	var v0 := b-a

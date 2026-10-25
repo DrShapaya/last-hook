@@ -102,6 +102,6 @@
   "locations": [
     {"id": "green_peak", "name": "Стандартная гора", "height_units": 120, "unlock": {}},
     {"id": "stone_spires", "name": "Пустынный каньон", "height_units": 140, "unlock": {"cleared": 0, "gold": 2500}},
-    {"id": "sky_city", "name": "Снежная вершина", "height_units": 160, "unlock": {"cleared": 1, "tokens": 5, "diamonds": 15}}
+    {"id": "sky_city", "name": "Снежная вершина", "height_units": 160, "unlock": {"cleared": 1, "diamonds": 15}}
   ]
 }

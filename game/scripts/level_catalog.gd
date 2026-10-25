@@ -51,7 +51,7 @@ const LEVELS := [
 	{"id":"stone_spires","location_slot":1,"display_name":"Пустынный каньон","height_units":140,
 		"unlock_rule":{"cleared":0,"gold":2500},"acts":["dry_canyon","buried_caravan","storm_observatory"]},
 	{"id":"sky_city","location_slot":2,"display_name":"Снежная вершина","height_units":160,
-		"unlock_rule":{"cleared":1,"tokens":5,"diamonds":15},"acts":["white_saddle","blue_crevasse","shattered_crown"]},
+		"unlock_rule":{"cleared":1,"diamonds":15},"acts":["white_saddle","blue_crevasse","shattered_crown"]},
 ]
 
 # y_start / y_end are shares of the level height; ExpeditionLayout turns them

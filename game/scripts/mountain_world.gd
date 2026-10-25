@@ -1,6 +1,8 @@
 class_name MountainWorld
 extends Node3D
 
+const FloraModels := preload("res://scripts/flora_models.gd")
+
 const GENERATION_VERSION := 15
 # A timed root holds this long before it breaks (see GripSpec).
 const FRAGILE_SECONDS := GripSpec.ROOT_SECONDS
@@ -39,6 +41,25 @@ const STREAM_MOVE_THRESHOLD := .28
 var stream_center := Vector2.INF
 var stream_pending := true
 var stream_dirty := true
+# A streamed section is built over several frames (rock, decor, grips, finds
+# take hundreds of milliseconds together): builders pause once the frame's
+# slice is spent. Only the section of the running job ever pauses; direct
+# builds (start of a run, tests, tools) stay synchronous.
+const BUILD_SLICE_USEC := 4000
+# Within this distance of the view centre a section is due on screen soon,
+# so its job finishes without pausing.
+const BUILD_URGENT_DISTANCE := 18.0
+var build_job_key := -1
+var build_job_band := NO_BAND
+var build_job_parent_id := 0
+var build_job_cancelled := false
+var band_job_token := RefCounted.new()
+const NO_BAND := -1000000
+var build_deadline := 0
+var hazards_pending := false
+# Resumes a paused section job; emitted once per streaming update. A world
+# freed mid-job simply never resumes it.
+signal build_tick
 
 # Every location slot starts new attempts on the expedition generator (v15:
 # v14 geometry with role-based finds, coins and contracts). Saved attempts keep
@@ -90,6 +111,7 @@ func set_visual_quality(quality: String) -> void:
 	var selected := quality if quality in ["high","balanced","battery"] else "balanced"
 	var changed := selected!=visual_quality
 	visual_quality = selected
+	if is_instance_valid(sky_backdrop): sky_backdrop.set_quality(visual_quality)
 	if visuals!=null and visuals.has_method("set_quality"):
 		visuals.set_quality(visual_quality)
 	# Decor density, loot glints and shadow casters are baked per chunk.
@@ -433,17 +455,40 @@ static func rectangle_hit(from: Vector2, to: Vector2, center: Vector2, half: Vec
 
 func hit_object(from: Vector2, to: Vector2, object: Dictionary, grip: float) -> float:
 	var tolerance := .04+maxf(0,grip-.32)
+	var center: Vector2 = object["pos"]
+	var dimensions: Vector2 = object["dimensions"]
 	if object.has("polygon"):
-		var polygon := PackedVector2Array()
-		var scale_value: Vector2 = Vector2.ONE+Vector2.ONE*tolerance*2/object["dimensions"]
-		for p in object["polygon"]: polygon.append(p*scale_value+object["pos"])
-		return RopeSim.hit_polygon(from,to,polygon)
-	return rectangle_hit(from,to,object["pos"],object["dimensions"]*.5+Vector2.ONE*tolerance)
+		var scale_value: Vector2 = Vector2.ONE+Vector2.ONE*tolerance*2/dimensions
+		# Hook sweeps test every nearby grip each substep and forecast step:
+		# reject the ones the segment never comes near before building the
+		# expanded contour, which is then reused while the grip stays put.
+		var cache: Dictionary = object.get("_hit",{})
+		if cache.is_empty() or cache["pos"]!=center or cache["scale"]!=scale_value or cache["source"]!=object["polygon"]:
+			var polygon := PackedVector2Array()
+			var radius := 0.0
+			for p in object["polygon"]:
+				polygon.append(p*scale_value+center)
+				radius = maxf(radius,(p*scale_value).length())
+			cache = {"pos":center,"scale":scale_value,"source":object["polygon"],"polygon":polygon,"radius":radius+.001}
+			object["_hit"] = cache
+		var reach: float = cache["radius"]
+		if Geometry2D.get_closest_point_to_segment(center,from,to).distance_squared_to(center)>reach*reach: return -1.0
+		return RopeSim.hit_polygon(from,to,cache["polygon"])
+	var half := dimensions*.5+Vector2.ONE*tolerance
+	if Geometry2D.get_closest_point_to_segment(center,from,to).distance_squared_to(center)>half.length_squared()+.001: return -1.0
+	return rectangle_hit(from,to,center,half)
 
 func cast_hook(from: Vector2, to: Vector2, grip: float, ignore_anchor: int = -1) -> Dictionary:
 	var best := 2.0
 	var result: Dictionary = {}
-	for object in nearby_anchors(minf(from.y,to.y)-2,maxf(from.y,to.y)+2):
+	var low := minf(from.y,to.y)
+	var high := maxf(from.y,to.y)
+	for object in nearby_anchors(low-2,high+2):
+		# The bins are a whole section tall: skip grips far outside the window
+		# by height before the exact test (forecasts run this ~240 times).
+		var y: float = object["pos"].y
+		var margin: float = 2.0+object["dimensions"].y*.5
+		if y<low-margin or y>high+margin: continue
 		if object["broken"] or int(object["id"])==ignore_anchor:
 			continue
 		var fraction := hit_object(from,to,object,grip)
@@ -522,25 +567,35 @@ func _build_find(find: Dictionary, parent: Node3D) -> void:
 	var mount := visuals.mount_find(find)
 	var wall_z := mount.wall_z()
 	holder.position = mount.holder_position()
-	holder.scale = Vector3.ONE*1.22
+	holder.scale = Vector3.ONE*FIND_SCALE
 	find["visual"] = holder
 	find["mount"] = mount
 	# Contact offsets are in holder space; the holder is uniformly scaled.
-	LootVisuals.build(self,find,holder,visual_quality,(wall_z-holder.position.z)/holder.scale.x)
-	var price := Label3D.new()
-	price.text = str(find["item"]["value"])
-	price.font_size = 30
-	price.pixel_size = .011
-	price.outline_size = 10
-	price.modulate = Color("fff1c4")
-	price.outline_modulate = Color("1d3330dd")
-	price.shaded = false
-	price.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	holder.add_child(price)
-	price.position = Vector3(0,.62,.3)
+	var treasure := LootVisuals.build(self,find,holder,visual_quality,(wall_z-holder.position.z)/holder.scale.x)
+	var price := LootVisuals.price_tag(self,treasure,find["item"],visual_quality!="battery")
 	price.visible = show_loot_prices
 	find["price_visual"] = price
 	holder.visible = not find.get("picked",false)
+
+# Treasure models are authored about half a metre tall; this brings them to
+# their size on the face next to the hero and the grips.
+const FIND_SCALE := 1.1
+
+# The pickup in the world: a copy of the find's model hops, spins and shrinks
+# away while its holder hides at once (a restored snapshot can show the
+# holder again, untouched).
+func collect_find(find: Dictionary) -> void:
+	var holder = find.get("visual")
+	if not is_instance_valid(holder) or not (holder as Node3D).visible: return
+	var treasure := (holder as Node3D).get_node_or_null("Сокровище") as Node3D
+	if treasure==null: return
+	var ghost := treasure.duplicate() as Node3D
+	ghost.name = "Подбор сокровища"
+	(holder as Node3D).get_parent().add_child(ghost)
+	ghost.transform = (holder as Node3D).transform*treasure.transform
+	var player := ghost.get_node("Анимация") as AnimationPlayer
+	player.play("collect")
+	player.animation_finished.connect(func(_name: StringName) -> void: ghost.queue_free())
 
 const PRICE_NEAR := 3.2
 const PRICE_AIM := 1.6
@@ -565,6 +620,7 @@ func _build_sky() -> void:
 	sky_backdrop = ProceduralSkyBackdrop.new()
 	add_child(sky_backdrop)
 	sky_backdrop.setup(seed_value, false, location)
+	sky_backdrop.set_quality(visual_quality)
 	sky_backdrop.set_view(camera_center)
 
 func _release_chunk(key: int) -> void:
@@ -577,6 +633,7 @@ func _release_chunk(key: int) -> void:
 	for object in ledges:
 		if int(floor(float(object["top"])/24))==key: object["visual"] = null
 	var chunk: Node3D = chunks[key]
+	if key==build_job_key: build_job_cancelled = true
 	remove_child(chunk)
 	chunk.queue_free()
 	chunks.erase(key)
@@ -590,6 +647,7 @@ func update_visibility(center_y: float, center_x: float = 0, build_budget: int =
 	camera_center = Vector2(center_x,center_y)
 	if is_instance_valid(sky_backdrop): sky_backdrop.set_view(camera_center)
 	if not visuals_enabled: return
+	if build_job_parent_id!=0: build_tick.emit()
 	var moved := stream_center==Vector2.INF or stream_center.distance_to(camera_center)>=STREAM_MOVE_THRESHOLD
 	if not moved and not stream_pending and not stream_dirty:
 		# Keep parallax transforms smooth even while mesh streaming is idle.
@@ -616,6 +674,8 @@ func update_visibility(center_y: float, center_x: float = 0, build_budget: int =
 		if not chunks.has(key): missing_keys.append(key)
 	# Building the closest section first keeps the current view populated while
 	# spreading the expensive mesh/decor work over later frames.
+	var band_to_warm := _band_to_warm(center_y,ready_chunk) if build_budget>=0 else NO_BAND
+	if band_to_warm!=NO_BAND and build_job_parent_id==0: _start_band_job(band_to_warm)
 	var effective_budget := MAX_CHUNK_BUILDS_PER_UPDATE if build_budget<0 else maxi(0,build_budget)
 	if build_budget<0: effective_budget = missing_keys.size()
 	for pass_index in range(effective_budget):
@@ -628,11 +688,20 @@ func update_visibility(center_y: float, center_x: float = 0, build_budget: int =
 				closest_index = index
 				closest_distance = distance
 		var key: int = missing_keys[closest_index]
+		if build_budget>=0:
+			# Streaming: one job at a time, spread over frames. The rock bands a
+			# section and the nearby hazards read come first, so neither
+			# generates them in one go.
+			if build_job_parent_id!=0 or band_to_warm!=NO_BAND: break
+			missing_keys.remove_at(closest_index)
+			_start_chunk_job(key)
+			continue
 		missing_keys.remove_at(closest_index)
 		_build_chunk(key)
-	stream_pending = not missing_keys.is_empty() or far_pending
+	if hazard_visuals!=null and (moved or stream_was_dirty or hazards_pending) and band_to_warm==NO_BAND:
+		hazards_pending = hazard_visuals.build_near(center_y,1 if build_budget>=0 else -1)
+	stream_pending = not missing_keys.is_empty() or far_pending or build_job_parent_id!=0 or hazards_pending or band_to_warm!=NO_BAND
 	_update_dynamic_visibility(center_y)
-	if hazard_visuals!=null and (moved or stream_was_dirty): hazard_visuals.build_near(center_y)
 
 func _build_chunk(key: int) -> void:
 	var chunk := Node3D.new()
@@ -642,19 +711,100 @@ func _build_chunk(key: int) -> void:
 	visuals.build_chunk(key,chunk)
 	_build_chunk_objects(key,chunk)
 
+func _start_chunk_job(key: int) -> void:
+	var chunk := Node3D.new()
+	chunk.name = "Участок_%d" % key
+	add_child(chunk)
+	chunks[key] = chunk
+	build_job_key = key
+	build_job_parent_id = chunk.get_instance_id()
+	build_job_cancelled = false
+	build_deadline = Time.get_ticks_usec()+_build_slice()
+	_run_chunk_job(key,chunk)
+
+# The closest rock band that sections or hazards in reach will read and that
+# is not generated yet; NO_BAND when all are ready.
+func _band_to_warm(center_y: float, ready_chunk: int) -> int:
+	if not visuals is MassifVisuals: return NO_BAND
+	var massif := visuals as MassifVisuals
+	var low := maxi(-1,int(floor((center_y-40)/24))-1)
+	var high := mini(int(floor((center_y+40)/24))+1,ready_chunk+1)
+	var best := NO_BAND
+	for band in range(low,high+1):
+		if massif.band_ready(band): continue
+		if best==NO_BAND or absf(band*24+12-center_y)<absf(best*24+12-center_y): best = band
+	return best
+
+func _start_band_job(band: int) -> void:
+	build_job_band = band
+	build_job_parent_id = band_job_token.get_instance_id()
+	build_job_cancelled = false
+	build_deadline = Time.get_ticks_usec()+_build_slice()
+	_run_band_job(band)
+
+func _run_band_job(band: int) -> void:
+	await (visuals as MassifVisuals).warm_band(band,band_job_token)
+	build_job_band = NO_BAND
+	build_job_parent_id = 0
+	build_deadline = 0
+	stream_dirty = true
+
+func _run_chunk_job(key: int, chunk: Node3D) -> void:
+	await visuals.build_chunk(key,chunk)
+	if not build_job_cancelled: await _build_chunk_objects(key,chunk)
+	build_job_key = -1
+	build_job_parent_id = 0
+	build_deadline = 0
+	# Look again next frame: the next section may be waiting.
+	stream_dirty = true
+
+func _build_slice() -> int:
+	# A band feeds the sections next to it, so it is due one band earlier.
+	var urgent := BUILD_URGENT_DISTANCE
+	var low := build_job_key*24.0
+	if build_job_band!=NO_BAND:
+		low = build_job_band*24.0
+		urgent += 24.0
+	elif build_job_key<0: return BUILD_SLICE_USEC
+	var gap := absf(camera_center.y-clampf(camera_center.y,low,low+24.0))
+	return 1000000000 if gap<urgent else BUILD_SLICE_USEC
+
+# Called by builders between pieces. Synchronous builds return at once; the
+# streamed section yields to the next frame when its slice is spent and stops
+# (false) once the section was unloaded meanwhile.
+func build_pause(owner) -> bool:
+	# Untyped: a cancelled section's node may already be freed here.
+	if typeof(owner)==TYPE_NIL: return true
+	if not is_instance_valid(owner): return false
+	if owner.get_instance_id()!=build_job_parent_id: return true
+	if build_job_cancelled: return false
+	if Time.get_ticks_usec()<build_deadline: return true
+	await build_tick
+	if build_job_cancelled: return false
+	build_deadline = Time.get_ticks_usec()+_build_slice()
+	return true
+
 func _build_chunk_objects(key: int, chunk: Node3D) -> void:
 	for object in nearby_anchors(key*24,(key+1)*24-.001):
-		if int(floor(object["pos"].y/24))==key: build_anchor(object,chunk)
+		if int(floor(object["pos"].y/24))!=key: continue
+		if not await build_pause(chunk): return
+		build_anchor(object,chunk)
 	for object in obstacles:
-		if int(floor(object["pos"].y/24))==key: visuals.build_obstacle(object,chunk)
+		if int(floor(object["pos"].y/24))!=key: continue
+		if not await build_pause(chunk): return
+		visuals.build_obstacle(object,chunk)
 	for object in ledges:
-		if int(floor(object["top"]/24))==key: visuals.build_ledge(object,chunk)
+		if int(floor(object["top"]/24))!=key: continue
+		if not await build_pause(chunk): return
+		visuals.build_ledge(object,chunk)
 	for find in finds:
-		if int(floor(find["pos"].y/24))==key: _build_find(find,chunk)
+		if int(floor(find["pos"].y/24))!=key: continue
+		if not await build_pause(chunk): return
+		_build_find(find,chunk)
 	if layout.summit_added and int(floor(layout.summit/24))==key:
 		var p: Vector2 = anchors[main_route[-1]]["pos"]
-		box("Флагшток",Vector3(p.x+.8,layout.summit+1,2),Vector3(.08,2,.1),mat("flagpole",Color("d8d8c3")),chunk)
-		box("Флаг",Vector3(p.x+1.2,layout.summit+1.7,2),Vector3(.8,.5,.1),mat("flag",Color("e6b64b")),chunk)
+		# The summit flag: a tall mast with the expedition's hook on its cloth.
+		FloraModels.flag(chunk,"mast_high","yellow",Vector3(p.x+.8,layout.summit,2),3.0,1.0,visual_quality!="battery","hook")
 
 func _update_dynamic_visibility(center_y: float) -> void:
 	for object in nearby_anchors(center_y-40,center_y+40):

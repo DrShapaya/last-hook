@@ -112,14 +112,22 @@ func run_tests() -> void:
 		var lobby := game.hud.content.get_child(0) as LobbyView
 		var card_before := lobby.scenic_frame.position
 		var nav_before := lobby.navigation_bar.position
-		var body_fixed := lobby.body_nodes.filter(func(node): return is_instance_valid(node) and node!=lobby.scenic_frame).map(func(node): return node.position)
-		lobby.begin_swipe_preview()
-		lobby.update_swipe_preview(-30)
-		check(lobby.scenic_frame.position.x==card_before.x-30 and lobby.navigation_bar.position==nav_before,
-			"level swipe previews only the scenic card at %s" % dimensions)
-		check(lobby.body_nodes.filter(func(node): return is_instance_valid(node) and node!=lobby.scenic_frame).map(func(node): return node.position)==body_fixed,
+		var body_fixed := lobby.body_nodes.filter(func(node): return is_instance_valid(node) and node!=lobby.card_clip).map(func(node): return node.position)
+		lobby.drag_cards(-30)
+		check(lobby.scenic_frame.position.x==card_before.x-30 and lobby.navigation_bar.position==nav_before and lobby.page.position.x==0,
+			"level swipe moves only the route card strip at %s" % dimensions)
+		check(lobby.route_cards.has(game.lobby_location+1),"level swipe shows a piece of the next route at %s" % dimensions)
+		check(lobby.body_nodes.filter(func(node): return is_instance_valid(node) and node!=lobby.card_clip).map(func(node): return node.position)==body_fixed,
 			"level swipe keeps title, route and actions fixed at %s" % dimensions)
-		lobby.reset_swipe_preview()
+		lobby.settle_slides()
+		check(lobby.route_cards.size()==1 and lobby.scenic_frame.position==card_before,"a released level drag settles back on the shown route at %s" % dimensions)
+		var preview: Rect2 = lobby.scenic_frame.get_child(0).get_rect()
+		check(absf(preview.size.x/preview.size.y-4.0/3.0)<.01,"route art is framed 4:3 at %s" % dimensions)
+		lobby.drag_section(-100)
+		check(lobby.page.position.x==-100 and lobby.preview_pages.has(1) and lobby.preview_pages[1].position.x==-100+lobby.page_step() and lobby.navigation_bar.position==nav_before,
+			"section swipe slides the whole section with the next one beside it at %s" % dimensions)
+		lobby.settle_slides()
+		check(lobby.page.position.x==0 and lobby.preview_pages.is_empty(),"a released section drag settles back at %s" % dimensions)
 		game.start_run(false)
 		game.model.set_level(GameModel.BAG,5)
 		game.model.bag.clear()

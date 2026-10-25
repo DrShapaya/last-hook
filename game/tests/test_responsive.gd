@@ -211,9 +211,12 @@ func mesh_ends(mesh_node: MeshInstance3D) -> Array[Vector3]:
 	for point in uv: end_v = maxf(end_v,point.y)
 	var sums: Array[Vector3] = [Vector3.ZERO,Vector3.ZERO]
 	var counts := [0,0]
+	# The tube is indexed with its UV seam duplicated: count each ring point once.
+	var seen := {}
 	for index in range(vertices.size()):
 		for end in range(2):
-			if absf(uv[index].y-(0.0 if end==0 else end_v))<.0001:
+			if absf(uv[index].y-(0.0 if end==0 else end_v))<.0001 and not seen.has(vertices[index]):
+				seen[vertices[index]] = true
 				sums[end] += mesh_node.to_global(vertices[index])
 				counts[end] += 1
 	return [sums[0]/maxi(1,counts[0]),sums[1]/maxi(1,counts[1])]

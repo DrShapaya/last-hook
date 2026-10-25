@@ -14,14 +14,35 @@ class UpgradeMeter extends Control:
 			draw_colored_polygon(PackedVector2Array([Vector2(left+3,0),Vector2(left+width,0),Vector2(left+width-3,size.y),Vector2(left,size.y)]),color)
 
 # Painterly mountain panorama with atmospheric valley mist, layered ridges,
-# soft drifting clouds and a warm sun aura. Veiled over paused runs.
+# soft drifting clouds and a warm sun aura. Veiled over paused runs. In the
+# menu and on the result screen a calmer layer takes over, coloured for the
+# shown route.
 class Backdrop extends Control:
+	# One palette per route: fresh alpine blue, warm canyon apricot, icy
+	# summit lilac. Sky top/low, far/near ridge, sun glow; then motes (rgb +
+	# strength) and how much they fall: pollen, dust, snow.
+	const PALETTES := [
+		[Color("4f9fe8"),Color("d4ebf8"),Color("9fc6e6"),Color("4d7598"),Color("fff3d0")],
+		[Color("e39466"),Color("fbe3c6"),Color("e2ad86"),Color("9a5a43"),Color("fff0c4")],
+		[Color("7290d8"),Color("e6edf9"),Color("bccbe8"),Color("5e6f9c"),Color("ffffff")],
+	]
+	const MOTES := [Color(1,.97,.8,.14),Color(1,.9,.7,.18),Color(1,1,1,.4)]
+	const FALLS := [.25,.05,1.0]
 	var veil := false:
 		set(value):
 			veil = value
 			_update_veil()
+	var art := false:
+		set(value):
+			art = value
+			_update_layers()
 	var rect: ColorRect
 	var mat: ShaderMaterial
+	var art_rect: ColorRect
+	var art_mat: ShaderMaterial
+	var shown_from := -1
+	var shown_to := -1
+	var fade: Tween
 
 	func _init() -> void:
 		mouse_filter = MOUSE_FILTER_IGNORE
@@ -32,56 +53,142 @@ class Backdrop extends Control:
 		rect.material = mat
 		rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		add_child(rect)
+		art_mat = ShaderMaterial.new()
+		art_mat.shader = preload("res://shaders/menu_route_backdrop.gdshader")
+		art_rect = ColorRect.new()
+		art_rect.mouse_filter = MOUSE_FILTER_IGNORE
+		art_rect.material = art_mat
+		art_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		art_rect.visible = false
+		add_child(art_rect)
+		show_route(0)
 
 	func _notification(what: int) -> void:
 		if what == NOTIFICATION_RESIZED:
 			_update_aspect()
 
 	func _process(_delta: float) -> void:
-		if is_instance_valid(mat) and visible and not veil:
-			mat.set_shader_parameter("time", float(Time.get_ticks_msec()) / 1000.0)
+		if not visible: return
+		var now := float(Time.get_ticks_msec()) / 1000.0
+		if is_instance_valid(art_rect) and art_rect.visible:
+			art_mat.set_shader_parameter("time", now)
+		elif is_instance_valid(mat) and not veil:
+			mat.set_shader_parameter("time", now)
 
 	func _update_aspect() -> void:
 		if is_instance_valid(mat) and size.y > 0:
 			mat.set_shader_parameter("aspect", size.x / maxf(1.0, size.y))
+			art_mat.set_shader_parameter("aspect", size.x / maxf(1.0, size.y))
 
 	func _update_veil() -> void:
 		if is_instance_valid(mat):
 			mat.set_shader_parameter("veil", veil)
+		_update_layers()
+
+	# Only one full-screen layer draws at a time: the route sky in the menu,
+	# the panorama (or its veil) elsewhere.
+	func _update_layers() -> void:
+		if not is_instance_valid(art_rect): return
+		art_rect.visible = art and not veil
+		rect.visible = not art_rect.visible
+
+	func _side(side: String, location: int) -> void:
+		var index := clampi(location,0,PALETTES.size()-1)
+		var palette: Array = PALETTES[index]
+		for slot in range(5):
+			art_mat.set_shader_parameter(["sky_top_","sky_low_","far_","near_","glow_"][slot]+side,palette[slot])
+		var mote: Color = MOTES[index]
+		art_mat.set_shader_parameter("mote_"+side,Vector4(mote.r,mote.g,mote.b,mote.a))
+		art_mat.set_shader_parameter("fall_"+side,FALLS[index])
+
+	# Shows the blend between two routes: 0 is all `from`, 1 all `to`.
+	func show_routes(from: int, to: int, amount: float) -> void:
+		if from!=shown_from:
+			_side("a",from)
+			shown_from = from
+		if to!=shown_to:
+			_side("b",to)
+			shown_to = to
+		art_mat.set_shader_parameter("blend",clampf(amount,0,1))
+
+	func show_route(location: int) -> void:
+		if fade!=null and fade.is_valid(): fade.kill()
+		show_routes(location,location,0.0)
+
+	# A gentle cross-fade for switches that have no swipe to follow.
+	func fade_to(location: int) -> void:
+		if shown_from==location and shown_to==location: return
+		if fade!=null and fade.is_valid(): fade.kill()
+		var start := shown_from if float(art_mat.get_shader_parameter("blend"))<.5 else shown_to
+		show_routes(start,location,0.0)
+		fade = create_tween()
+		fade.tween_method(func(value: float): show_routes(start,location,value),0.0,1.0,.5).set_trans(Tween.TRANS_SINE)
+		fade.tween_callback(show_route.bind(location))
 
 	func _draw() -> void:
 		pass
 
-# Horizontal swipes: over the route card they pick the neighbouring route,
-# anywhere else they switch sections. Distances are in design pixels, so the
-# feel is the same on every screen size.
-const SWIPE_DISTANCE := 64.0
+# Horizontal swipes follow the finger like a pager. Over the route card only
+# the card strip moves and the neighbouring route slides in beside it; anywhere
+# else the whole section slides and the neighbouring section is built next to
+# it. Distances are in design pixels, so the feel is the same on every screen.
+const SWIPE_COMMIT := .2
 const SWIPE_FLICK_DISTANCE := 36.0
 const SWIPE_FLICK_SPEED := 500.0
-const SWIPE_MAX_SECONDS := .7
 const SWIPE_RATIO := 1.6
 # Past this sideways drift a press is a swipe attempt and can no longer
 # activate the button it started on.
-const SWIPE_SLOP := 16.0
-const SWIPE_PREVIEW_LIMIT := 42.0
+const SWIPE_SLOP := 24.0
+const SWIPE_RUBBER := .3
+const SWIPE_RUBBER_LIMIT := 64.0
 const SWIPE_COOLDOWN_MSEC := 80
+const PAGE_GAP := 24.0
+# Set while building the expedition body. A neighbouring section built as a
+# drag preview must not overwrite the live references.
+const PAGE_REFS := ["start_button","scenic_frame","card_rect","card_clip","card_left","card_step","card_scroll","route_cards","card_arrows","location_nodes","location_anchor","acts_anchor","route_line","route_panel","card_park"]
 
 var swipe_pointer := -2
 var swipe_from := Vector2.ZERO
 var swipe_msec := 0
 var swipe_dragging := false
-var swipe_preview_offset := 0.0
-var swipe_body_origins: Array[Vector2] = []
-var card_rect := Rect2()
+var swipe_kind := ""
 var body_nodes: Array[Control] = []
 var header_nodes: Array[Control] = []
-var transition_nodes: Array[Control] = []
+# The current section body, neighbours built for a drag and sections that are
+# sliding out after a switch.
+var page: Control
+var preview_pages := {}
+var outgoing_pages: Array = []
+var page_cache := {}
+var prebuild_queue: Array = []
+var prebuild_at := 0
+var page_tween: Tween
+# Route cards sit in a clipped strip; card_scroll is the strip position in
+# pixels, so a drag, a button and a keyboard step all move the same value.
+var card_rect := Rect2()
+var card_clip: Control
+var card_left := 0.0
+var card_step := 0.0
+var card_scroll := 0.0
+var card_tween: Tween
+var route_cards := {}
+var card_arrows: Array = []
 var scenic_frame: Panel
+# Only the start action and its requirement depend on the shown route. They
+# are replaced in place, so the route line and modes never blink.
+var location_nodes: Array = []
+var location_anchor := Rect2()
+var acts_anchor := Rect2()
+var route_line: RouteLine
+var route_panel: Panel
+var card_park: Control
 var start_button: Button
 var tab_buttons: Array[Button] = []
 var navigation_bar: Control
-var banner_inset := 0.0
-var banner_tween: Tween
+var nav_pill: Panel
+var nav_marker: ColorRect
+var nav_symbols: Array = []
+var soon_badge: Panel
 
 func setup(owner_hud: GameHud) -> void:
 	prepare(owner_hud)
@@ -89,68 +196,205 @@ func setup(owner_hud: GameHud) -> void:
 	landscape = bounds.landscape
 	size = bounds.size
 	position = bounds.position
+	scale = Vector2.ONE*float(bounds.scale)
 	_build_screen()
 
 func _calculate_layout_bounds() -> Dictionary:
 	var target_landscape: bool = hud.wide
-	var raw_banner: float = float(game.ads.menu_banner_height()) / maxf(0.1, hud.root.scale.y)
-	var safe_top: float = hud.safe_inset_top()
-	var top_boundary: float = maxf(safe_top, raw_banner)
-	var safe_bottom: float = hud.safe_inset_bottom()
-	var bottom_boundary: float = hud.root.size.y - safe_bottom
+	# The native banner is the top edge of the menu: the header starts right
+	# under it, as if the screen ended there.
+	var banner: float = hud.screen_to_design(game.ads.menu_banner_height())
+	var top_boundary: float = maxf(hud.safe_inset_top(), banner)
+	var bottom_boundary: float = hud.root.size.y - hud.safe_inset_bottom()
 	var target_size: Vector2
 	var target_position: Vector2
+	var target_scale := 1.0
 	if target_landscape:
 		target_size = Vector2(1080, 660)
-		target_position = Vector2((hud.root.size.x - target_size.x) * 0.5, (hud.root.size.y - target_size.y) * 0.5)
+		# The landscape canvas is fixed; when the banner leaves less than its
+		# height, the whole menu scales down to fit under it.
+		target_scale = minf(1.0, (bottom_boundary - top_boundary) / target_size.y)
+		var shown := target_size * target_scale
+		var centered: float = (hud.root.size.y - shown.y) * 0.5
+		target_position = Vector2((hud.root.size.x - shown.x) * 0.5, clampf(centered, top_boundary, maxf(top_boundary, bottom_boundary - shown.y)))
 	else:
-		var available_h := maxf(960.0 - top_boundary, bottom_boundary - top_boundary)
-		target_size = Vector2(540, available_h)
+		target_size = Vector2(540, maxf(700.0, bottom_boundary - top_boundary))
 		target_position = Vector2((hud.root.size.x - target_size.x) * 0.5, top_boundary)
-	return {"landscape": target_landscape, "size": target_size, "position": target_position}
+	return {"landscape": target_landscape, "size": target_size, "position": target_position, "scale": target_scale}
+
+func _kill(tween: Tween) -> void:
+	if tween!=null and tween.is_valid(): tween.kill()
+
+func _free(node: Node) -> void:
+	if not is_instance_valid(node): return
+	if node.get_parent()!=null: node.get_parent().remove_child(node)
+	node.queue_free()
+
+func _clear_page_refs() -> void:
+	route_line = null
+	route_panel = null
+	start_button = null
+	scenic_frame = null
+	card_rect = Rect2()
+	card_clip = null
+	card_park = null
+	route_cards = {}
+	card_arrows = []
+	location_nodes = []
 
 func _reset_build_state() -> void:
 	swipe_pointer = -2
 	swipe_dragging = false
-	swipe_preview_offset = 0.0
-	swipe_body_origins.clear()
+	swipe_kind = ""
+	_kill(page_tween)
+	_kill(card_tween)
+	_drop_cache()
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()
 	body_nodes.clear()
 	header_nodes.clear()
-	transition_nodes.clear()
 	tab_buttons.clear()
-	start_button = null
-	card_rect = Rect2()
-	scenic_frame = null
+	preview_pages.clear()
+	outgoing_pages.clear()
+	page = null
 	navigation_bar = null
+	_clear_page_refs()
 
 func _build_screen() -> void:
 	_reset_build_state()
 	build_header()
-	header_nodes.clear()
-	for index in range(get_child_count()):
-		var header_node := get_child(index)
-		if header_node is Control: header_nodes.append(header_node)
-	var first_body := get_child_count()
-	match hud.menu_tab:
+	for child in get_children():
+		if child is Control: header_nodes.append(child)
+	hud.menu_slide = 0
+	hud.backdrop.show_route(game.lobby_location)
+	page = build_page(hud.menu_tab)
+	_collect_body()
+	build_navigation()
+	apply_focus()
+	_schedule_prebuild()
+
+# Builds one section body inside its own holder, so the whole section can
+# slide as a single page.
+func build_page(tab: String) -> Control:
+	var holder := Control.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.size = size
+	holder.set_meta("tab",tab)
+	add_child(holder)
+	var first := get_child_count()
+	match tab:
 		"equipment": build_equipment()
 		"settings": build_settings()
 		_: build_expedition()
-	for index in range(first_body,get_child_count()):
-		var node := get_child(index)
+	for node in get_children().slice(first):
+		remove_child(node)
+		holder.add_child(node)
+	return holder
+
+func _capture_refs() -> Dictionary:
+	var refs := {}
+	for name in PAGE_REFS: refs[name] = get(name)
+	return refs
+
+func _restore_refs(refs: Dictionary) -> void:
+	for name in PAGE_REFS:
+		if refs.has(name): set(name,refs[name])
+
+# Builds a section that is not shown yet. Its own references travel with it
+# (meta "refs"), so it can later become the live page without a rebuild.
+func build_preview_page(tab: String) -> Control:
+	var saved := _capture_refs()
+	_clear_page_refs()
+	var holder := build_page(tab)
+	holder.set_meta("refs",_capture_refs())
+	_restore_refs(saved)
+	holder.process_mode = Node.PROCESS_MODE_DISABLED
+	return holder
+
+# --- Page cache ------------------------------------------------------------------
+# Built sections stay alive off the tree, and the neighbours of the shown one
+# are built while the menu is idle. A switch or a swipe then slides a ready
+# page in instead of building it mid-gesture. Any change of the menu's state
+# (a purchase, a choice that reshapes a page) drops the cache.
+
+func _park(node: Control) -> void:
+	if not is_instance_valid(node): return
+	var tab := str(node.get_meta("tab",""))
+	if tab.is_empty() or (page_cache.has(tab) and page_cache[tab]!=node):
+		_free(node)
+		return
+	if node.get_parent()!=null: node.get_parent().remove_child(node)
+	node.position.x = 0.0
+	node.modulate.a = 1.0
+	page_cache[tab] = node
+
+func _drop_cache() -> void:
+	for tab in page_cache.keys(): _free(page_cache[tab])
+	page_cache.clear()
+	prebuild_queue.clear()
+
+# A ready page for a section, attached below the section bar and inert.
+func _take(tab: String) -> Control:
+	var node: Control
+	if page_cache.has(tab) and is_instance_valid(page_cache[tab]):
+		node = page_cache[tab]
+		page_cache.erase(tab)
+		add_child(node)
+	else:
+		node = build_preview_page(tab)
+	node.process_mode = Node.PROCESS_MODE_DISABLED
+	if is_instance_valid(navigation_bar): move_child(node,navigation_bar.get_index())
+	return node
+
+func _adopt(node: Control) -> void:
+	page = node
+	_restore_refs(node.get_meta("refs",{}))
+	node.process_mode = Node.PROCESS_MODE_INHERIT
+	node.modulate.a = 1.0
+
+func _schedule_prebuild() -> void:
+	prebuild_queue.clear()
+	prebuild_queue.append("cards")
+	var index: int = GameHud.MENU_TABS.find(hud.menu_tab)
+	for side in [1,-1]:
+		if index+side>=0 and index+side<GameHud.MENU_TABS.size(): prebuild_queue.append(GameHud.MENU_TABS[index+side])
+	prebuild_at = Time.get_ticks_msec()+350
+
+# One neighbour per idle moment: never during a touch or a slide.
+func _process(_delta: float) -> void:
+	if prebuild_queue.is_empty() or swipe_pointer!=-2 or Time.get_ticks_msec()<prebuild_at: return
+	if (page_tween!=null and page_tween.is_running()) or (card_tween!=null and card_tween.is_running()): return
+	var tab: String = prebuild_queue.pop_front()
+	prebuild_at = Time.get_ticks_msec()+120
+	if tab=="cards":
+		if park_neighbour_card(): prebuild_queue.push_front("cards")
+		return
+	if tab==hud.menu_tab or page_cache.has(tab): return
+	_park(build_preview_page(tab))
+
+func _collect_body() -> void:
+	body_nodes.clear()
+	if not is_instance_valid(page): return
+	for node in page.get_children():
 		if node is Control: body_nodes.append(node)
-	apply_body_banner_inset()
-	build_navigation()
-	animate_entry()
+
+func page_step() -> float:
+	return maxf(size.x,hud.root.size.x)+PAGE_GAP
+
+static func slide_duration(distance: float, span: float) -> float:
+	return clampf(.16+.2*absf(distance)/maxf(1.0,span),.16,.34)
+
+static func rubber(offset: float) -> float:
+	return signf(offset)*minf(absf(offset)*SWIPE_RUBBER,SWIPE_RUBBER_LIMIT)
 
 func update_layout() -> void:
 	var bounds := _calculate_layout_bounds()
-	var changed: bool = (landscape != bounds.landscape) or (not size.is_equal_approx(bounds.size)) or (not position.is_equal_approx(bounds.position))
+	var changed: bool = (landscape != bounds.landscape) or (not size.is_equal_approx(bounds.size)) or (not position.is_equal_approx(bounds.position)) or not is_equal_approx(scale.x,float(bounds.scale))
 	landscape = bounds.landscape
 	size = bounds.size
 	position = bounds.position
+	scale = Vector2.ONE*float(bounds.scale)
 	if changed:
 		_build_screen()
 	else:
@@ -159,56 +403,53 @@ func update_layout() -> void:
 func update_banner_inset(_pixels: float = 0.0) -> void:
 	update_layout()
 
-func apply_body_banner_inset() -> void:
-	pass
-
 func refresh_screen() -> void:
-	# Keep the header, wallet and backdrop alive. Only the active body and the
+	# Keep the header, wallet and backdrop alive. Only the section body and the
 	# navigation selection are replaced, so values at the top never blink.
-	for node in transition_nodes:
-		if is_instance_valid(node):
-			remove_child(node)
-			node.queue_free()
-	transition_nodes.clear()
-	for node in body_nodes:
-		if is_instance_valid(node):
-			remove_child(node)
-			node.queue_free()
-	body_nodes.clear()
-	start_button = null
-	card_rect = Rect2()
-	if is_instance_valid(navigation_bar):
-		navigation_bar.visible = false
-		remove_child(navigation_bar)
-		navigation_bar.queue_free()
-	navigation_bar = null
-	tab_buttons.clear()
-	var first_body := get_child_count()
-	match hud.menu_tab:
-		"equipment": build_equipment()
-		"settings": build_settings()
-		_: build_expedition()
-	for index in range(first_body,get_child_count()):
-		var node := get_child(index)
-		if node is Control:
-			body_nodes.append(node)
-	apply_body_banner_inset()
 	var direction: int = hud.menu_slide
 	hud.menu_slide = 0
-	build_navigation()
+	_kill(card_tween)
+	_kill(page_tween)
+	# A switch continues from wherever the current page is: under the finger
+	# after a drag, or mid-way through the previous slide.
+	var carried: float = page.position.x if is_instance_valid(page) else 0.0
+	var old := page
+	if is_instance_valid(old): old.set_meta("refs",_capture_refs())
+	for node in outgoing_pages: _park(node)
+	outgoing_pages.clear()
+	var incoming: Control = preview_pages.get(direction) if direction!=0 else null
+	for side in preview_pages.keys():
+		if preview_pages[side]!=incoming: _park(preview_pages[side])
+	preview_pages.clear()
+	_clear_page_refs()
 	if direction!=0:
-		hud.menu_slide = direction
-	animate_entry()
+		if incoming!=null and str(incoming.get_meta("tab",""))!=hud.menu_tab:
+			_park(incoming)
+			incoming = null
+		if incoming==null: incoming = _take(hud.menu_tab)
+		_adopt(incoming)
+	else:
+		# The menu's state changed: every kept page may be out of date.
+		_drop_cache()
+		page = build_page(hud.menu_tab)
+		if is_instance_valid(navigation_bar): move_child(page,navigation_bar.get_index())
+	_collect_body()
+	if is_instance_valid(navigation_bar): paint_navigation()
+	else: build_navigation()
+	hud.backdrop.fade_to(game.lobby_location)
+	if is_instance_valid(old):
+		if direction!=0:
+			old.process_mode = Node.PROCESS_MODE_DISABLED
+			outgoing_pages.append(old)
+			old.position.x = carried
+			page.position.x = carried+direction*page_step()
+			slide_pages()
+		else:
+			_free(old)
+	apply_focus()
+	_schedule_prebuild()
 
-func animate_entry() -> void:
-	var direction: int = hud.menu_slide
-	hud.menu_slide = 0
-	if direction!=0:
-		# Keep authored coordinates stable. Positional slides made nested
-		# Controls jump toward the centre on some aspect ratios.
-		for node in body_nodes:
-			node.modulate.a = 0.0
-			create_tween().tween_property(node,"modulate:a",1.0,.18).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+func apply_focus() -> void:
 	var focus: String = hud.menu_focus
 	hud.menu_focus = ""
 	var target: Button = start_button if focus=="start" and is_instance_valid(start_button) and not start_button.disabled else null
@@ -220,36 +461,237 @@ func animate_entry() -> void:
 		target.grab_focus()
 		target.call_deferred("grab_focus")
 
-func bounce(direction: int) -> void:
+# --- Section pager ---------------------------------------------------------------
+
+func drag_section(offset: float) -> void:
+	if not is_instance_valid(page): return
+	var side := 1 if offset<0 else -1
+	var index: int = GameHud.MENU_TABS.find(hud.menu_tab)+side
+	if index<0 or index>=GameHud.MENU_TABS.size():
+		offset = rubber(offset)
+	elif not preview_pages.has(side):
+		# Below the section bar, which never slides.
+		preview_pages[side] = _take(GameHud.MENU_TABS[index])
+	page.position.x = offset
+	for key in preview_pages.keys():
+		preview_pages[key].position.x = offset+int(key)*page_step()
+
+# Moves every page so the current one lands at rest, then drops the others.
+func slide_pages() -> void:
+	_kill(page_tween)
+	if not is_instance_valid(page): return
+	var shift := -page.position.x
+	if is_zero_approx(shift):
+		_finish_pages()
+		return
+	var duration := slide_duration(shift,page_step())
+	page_tween = create_tween().set_parallel(true)
+	var moving: Array = [page]+outgoing_pages+preview_pages.values()
+	for node in moving:
+		if is_instance_valid(node):
+			page_tween.tween_property(node,"position:x",node.position.x+shift,duration).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	# The section leaving fades a little: the new one clearly takes over.
+	for node in outgoing_pages:
+		if is_instance_valid(node): page_tween.tween_property(node,"modulate:a",.35,duration)
+	page_tween.chain().tween_callback(_finish_pages)
+
+func _finish_pages() -> void:
+	for node in outgoing_pages: _park(node)
+	outgoing_pages.clear()
+	for side in preview_pages.keys(): _park(preview_pages[side])
+	preview_pages.clear()
+	if is_instance_valid(page): page.position.x = 0.0
+
+func settle_pages() -> void:
+	_kill(page_tween)
+	_finish_pages()
+
+# --- Route card strip ------------------------------------------------------------
+
+func routes_swipeable() -> bool:
+	return hud.menu_tab=="expedition" and model.profile["active"].is_empty() and is_instance_valid(card_clip)
+
+func build_card_carousel(at: Vector2, dimensions: Vector2) -> void:
+	card_rect = Rect2(at,dimensions)
+	var clip := Control.new()
+	clip.clip_contents = true
+	clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if landscape:
+		clip.position = at
+		clip.size = dimensions
+	else:
+		# In portrait the strip spans the whole screen width, so the next route
+		# enters from beyond the screen edge like a page.
+		clip.position = Vector2(-position.x,at.y)
+		clip.size = Vector2(hud.root.size.x,dimensions.y)
+	add_child(clip)
+	card_clip = clip
+	card_left = at.x-clip.position.x
+	card_step = dimensions.x+maxf(PAGE_GAP,clip.size.x-dimensions.x)
+	card_scroll = game.lobby_location*card_step
+	route_cards = {}
+	# Neighbouring routes are built ahead of time into this hidden holder.
+	card_park = Control.new()
+	card_park.visible = false
+	card_park.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clip.add_child(card_park)
+	scenic_frame = ensure_card(game.lobby_location)
+	# Arrows belong to the window, not to a card: they stay put while routes
+	# slide underneath.
+	card_arrows = []
+	for direction in [-1,1]:
+		var arrow := action(clip,"",Vector2(card_left+14 if direction<0 else card_left+dimensions.x-62,(dimensions.y-5)*.40),Vector2(48,52),game.cycle_location.bind(direction))
+		arrow.tooltip_text = "Предыдущий маршрут" if direction<0 else "Следующий маршрут"
+		symbol(arrow,10 if direction<0 else 11,Vector2(12,12),Vector2(24,24),INK)
+		card_arrows.append(arrow)
+	update_card_arrows()
+
+func update_card_arrows() -> void:
+	var total: int = model.balance["locations"].size()
+	var active: bool = not model.profile["active"].is_empty()
+	for index in range(card_arrows.size()):
+		var arrow: Button = card_arrows[index]
+		if not is_instance_valid(arrow): continue
+		var next: int = game.lobby_location+(-1 if index==0 else 1)
+		var at_end := next<0 or next>=total
+		arrow.disabled = active or at_end
+		arrow.visible = not active
+		arrow.modulate.a = .45 if at_end else 1.0
+
+func ensure_card(location: int) -> Panel:
+	if route_cards.has(location) and is_instance_valid(route_cards[location]): return route_cards[location]
+	var card: Panel = card_park.get_node_or_null("Route%d" % location) if is_instance_valid(card_park) else null
+	if card!=null:
+		card_park.remove_child(card)
+		card_clip.add_child(card)
+	else:
+		card = route_card(card_clip,location,card_rect.size)
+		card.name = "Route%d" % location
+	# Under the fixed arrows.
+	card_clip.move_child(card,0)
+	route_cards[location] = card
+	place_cards()
+	return card
+
+# Builds one missing neighbour card into the hidden holder. Returns false
+# once both neighbours are ready.
+func park_neighbour_card() -> bool:
+	if not routes_swipeable() or not is_instance_valid(card_park): return false
+	var total: int = model.balance["locations"].size()
+	for location in [game.lobby_location+1,game.lobby_location-1]:
+		if location<0 or location>=total or route_cards.has(location) or card_park.has_node("Route%d" % location): continue
+		var card := route_card(card_park,location,card_rect.size)
+		card.name = "Route%d" % location
+		return true
+	return false
+
+# Cards leaving the centre sink back a little and dim, so the strip reads
+# as a carousel with depth rather than flat panels.
+func place_cards() -> void:
+	for location in route_cards.keys():
+		var card: Control = route_cards[location]
+		if not is_instance_valid(card): continue
+		card.position = Vector2(card_left+int(location)*card_step-card_scroll,0)
+		var away := clampf(absf(card.position.x-card_left)/maxf(1.0,card_step),0,1)
+		card.pivot_offset = card.size*.5
+		card.scale = Vector2.ONE*(1.0-.08*away)
+		card.modulate = Color.WHITE.lerp(Color(.78,.82,.88),away)
+
+func set_card_scroll(value: float) -> void:
+	card_scroll = value
+	if card_step<=0 or not is_instance_valid(card_clip): return
+	var total: int = model.balance["locations"].size()
+	for location in [floori(value/card_step),ceili(value/card_step)]:
+		if location>=0 and location<total: ensure_card(location)
+	place_cards()
+	# The backdrop blends between the two routes as far as the strip has moved.
+	var at := clampf(value/card_step,0,total-1)
+	hud.backdrop.show_routes(floori(at),mini(floori(at)+1,total-1),at-floori(at))
+
+func drag_cards(offset: float) -> void:
+	if not is_instance_valid(card_clip): return
+	var next: int = game.lobby_location+(1 if offset<0 else -1)
+	if next<0 or next>=model.balance["locations"].size(): offset = rubber(offset)
+	set_card_scroll(game.lobby_location*card_step-offset)
+
+func slide_cards() -> void:
+	_kill(card_tween)
+	var target: float = game.lobby_location*card_step
+	if is_equal_approx(card_scroll,target):
+		_prune_cards()
+		return
+	card_tween = create_tween()
+	card_tween.tween_method(set_card_scroll,card_scroll,target,slide_duration(target-card_scroll,card_step)).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	card_tween.tween_callback(_prune_cards)
+
+func _prune_cards() -> void:
+	if not is_instance_valid(card_clip): return
+	card_scroll = game.lobby_location*card_step
+	hud.backdrop.show_route(game.lobby_location)
+	for location in route_cards.keys():
+		if int(location)!=game.lobby_location:
+			var card: Control = route_cards[location]
+			route_cards.erase(location)
+			if is_instance_valid(card) and is_instance_valid(card_park):
+				card_clip.remove_child(card)
+				card.position = Vector2.ZERO
+				card.scale = Vector2.ONE
+				card.modulate = Color.WHITE
+				card_park.add_child(card)
+			else: _free(card)
+	place_cards()
+
+func settle_cards() -> void:
+	_kill(card_tween)
+	_prune_cards()
+
+# Called after game.lobby_location changed: slides to the route from wherever
+# the strip is and swaps only the route-dependent actions.
+func show_location() -> bool:
+	if hud.menu_tab!="expedition" or not is_instance_valid(card_clip) or not is_instance_valid(page): return false
+	settle_pages()
+	scenic_frame = ensure_card(game.lobby_location)
+	card_clip.move_child(scenic_frame,0)
+	update_card_arrows()
+	update_route_line()
+	build_location_actions(page)
+	slide_cards()
+	if hud.menu_focus=="start": apply_focus()
+	if not prebuild_queue.has("cards"): prebuild_queue.push_front("cards")
+	prebuild_at = Time.get_ticks_msec()+400
+	return true
+
+func settle_slides() -> void:
+	settle_cards()
+	settle_pages()
+
+func bounce(direction: int, on_card: bool = false) -> void:
 	# Feedback at the first/last section or route: a short elastic nudge.
-	for node in body_nodes:
-		if not is_instance_valid(node): continue
-		var rest := node.position
-		var tween := create_tween()
-		tween.tween_property(node,"position:x",rest.x-18*direction,.08).set_trans(Tween.TRANS_SINE)
-		tween.tween_property(node,"position:x",rest.x,.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	settle_slides()
+	if on_card and is_instance_valid(card_clip):
+		var rest := card_scroll
+		card_tween = create_tween()
+		card_tween.tween_method(set_card_scroll,rest,rest+18*direction,.08).set_trans(Tween.TRANS_SINE)
+		card_tween.tween_method(set_card_scroll,rest+18*direction,rest,.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		card_tween.tween_callback(_prune_cards)
+		return
+	if not is_instance_valid(page): return
+	page_tween = create_tween()
+	page_tween.tween_property(page,"position:x",-18.0*direction,.08).set_trans(Tween.TRANS_SINE)
+	page_tween.tween_property(page,"position:x",0.0,.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+# --- Gestures --------------------------------------------------------------------
 
 func local_point(screen: Vector2) -> Vector2:
 	return get_global_transform().affine_inverse()*screen
 
-func begin_swipe_preview() -> void:
-	swipe_body_origins.clear()
-	# A level swipe previews only the scenic card. Header, wallet, route line,
-	# actions and section navigation must stay fixed in place.
-	if hud.menu_tab=="expedition" and is_instance_valid(scenic_frame):
-		swipe_body_origins.append(scenic_frame.position)
-	swipe_preview_offset = 0.0
+func drag(offset: float) -> void:
+	if swipe_kind=="card": drag_cards(offset)
+	else: drag_section(offset)
 
-func update_swipe_preview(offset: float) -> void:
-	swipe_preview_offset = clampf(offset,-SWIPE_PREVIEW_LIMIT,SWIPE_PREVIEW_LIMIT)
-	if swipe_body_origins.size()>0 and is_instance_valid(scenic_frame):
-		scenic_frame.position.x = swipe_body_origins[0].x+swipe_preview_offset
-
-func reset_swipe_preview() -> void:
-	if swipe_body_origins.size()>0 and is_instance_valid(scenic_frame):
-		scenic_frame.position = swipe_body_origins[0]
-	swipe_preview_offset = 0.0
-	swipe_body_origins.clear()
+func spring_back() -> void:
+	if swipe_kind=="card": slide_cards()
+	else: slide_pages()
 
 func _input(event: InputEvent) -> void:
 	if not is_inside_tree() or hud.layout_mode!="menu" or game.state!="menu" or game.ads.fullscreen: return
@@ -263,7 +705,7 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		if event.canceled:
 			if event.index==swipe_pointer:
-				reset_swipe_preview()
+				if swipe_dragging: spring_back()
 				swipe_pointer = -2
 				swipe_dragging = false
 			return
@@ -287,46 +729,46 @@ func _input(event: InputEvent) -> void:
 	var at := local_point(position_value)
 	if pressed_value:
 		if swipe_pointer==-2:
+			settle_slides()
 			swipe_pointer = pointer
 			swipe_from = at
 			swipe_msec = Time.get_ticks_msec()
 			swipe_dragging = false
-			begin_swipe_preview()
+			swipe_kind = ""
 		return
 	if pointer!=swipe_pointer: return
 	var travel := at-swipe_from
 	if not released:
-		if absf(travel.x)>SWIPE_SLOP and absf(travel.x)>absf(travel.y)*SWIPE_RATIO:
-			if not swipe_dragging: get_viewport().set_input_as_handled()
+		if not swipe_dragging and absf(travel.x)>SWIPE_SLOP and absf(travel.x)>absf(travel.y)*SWIPE_RATIO:
+			get_viewport().set_input_as_handled()
 			swipe_dragging = true
-			update_swipe_preview(travel.x*.36)
+			swipe_kind = "card" if routes_swipeable() and card_rect.has_point(swipe_from) else "section"
+		if swipe_dragging: drag(travel.x)
 		return
 	swipe_pointer = -2
-	var was_dragging := swipe_dragging
-	reset_swipe_preview()
+	if not swipe_dragging: return
 	swipe_dragging = false
+	# The release belongs to the gesture, never to the button under it.
+	get_viewport().set_input_as_handled()
 	var seconds := maxf(.001,(Time.get_ticks_msec()-swipe_msec)*.001)
 	var speed := absf(travel.x)/seconds
+	var span := card_step if swipe_kind=="card" else page_step()
 	var horizontal := absf(travel.x)>absf(travel.y)*SWIPE_RATIO
-	var long_enough := absf(travel.x)>=SWIPE_DISTANCE or (absf(travel.x)>=SWIPE_FLICK_DISTANCE and speed>=SWIPE_FLICK_SPEED)
-	if was_dragging:
-		# The release belongs to the gesture, never to the button under it.
-		get_viewport().set_input_as_handled()
-	if not (horizontal and long_enough and seconds<=SWIPE_MAX_SECONDS): return
-	if Time.get_ticks_msec()-hud.last_swipe_msec<SWIPE_COOLDOWN_MSEC: return
-	hud.last_swipe_msec = Time.get_ticks_msec()
-	get_viewport().set_input_as_handled()
-	# Finger moving left reveals what is to the right.
-	swipe(-1 if travel.x>0 else 1,card_rect.has_point(swipe_from))
+	var far := absf(travel.x)>=span*SWIPE_COMMIT or (absf(travel.x)>=SWIPE_FLICK_DISTANCE and speed>=SWIPE_FLICK_SPEED)
+	var committed := false
+	if horizontal and far and Time.get_ticks_msec()-hud.last_swipe_msec>=SWIPE_COOLDOWN_MSEC:
+		hud.last_swipe_msec = Time.get_ticks_msec()
+		# Finger moving left reveals what is to the right.
+		committed = swipe(-1 if travel.x>0 else 1,swipe_kind=="card")
+	if not committed: spring_back()
 
-func swipe(direction: int, on_card: bool, focus: String = "tab") -> void:
-	if on_card and hud.menu_tab=="expedition" and model.profile["active"].is_empty():
+func swipe(direction: int, on_card: bool, focus: String = "tab") -> bool:
+	if on_card and routes_swipeable():
 		hud.menu_focus = "start"
-		if not game.cycle_location(direction):
-			hud.menu_focus = ""
-			bounce(direction)
-		return
-	if not hud.step_menu(direction,focus): bounce(direction)
+		if game.cycle_location(direction): return true
+		hud.menu_focus = ""
+		return false
+	return hud.step_menu(direction,focus)
 
 func _navigation_input(event: InputEvent) -> void:
 	if not event.is_pressed() or event.is_echo(): return
@@ -339,7 +781,7 @@ func _navigation_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("ui_left") or event.is_action_pressed("ui_right"):
 		direction = -1 if event.is_action_pressed("ui_left") else 1
 		# Arrows pick routes on the expedition screen and sections elsewhere.
-		routes = hud.menu_tab=="expedition" and model.profile["active"].is_empty()
+		routes = routes_swipeable()
 	elif event.is_action_pressed("ui_accept") and hud.menu_tab=="expedition" and is_instance_valid(start_button) and not start_button.disabled:
 		# Keyboard start never buys a locked route; that stays a deliberate tap.
 		if not model.profile["active"].is_empty() or model.profile["locations"].has(game.lobby_location):
@@ -348,24 +790,42 @@ func _navigation_input(event: InputEvent) -> void:
 		return
 	if direction==0: return
 	get_viewport().set_input_as_handled()
-	swipe(direction,routes)
+	if not swipe(direction,routes): bounce(direction,routes)
 
 func build_header() -> void:
-	var top := 0.0
-	# The icon's own sky would melt into the backdrop, so it sits on a slab.
-	slab(self,Vector2(25,21+top),Vector2(50,54),STONE,STONE_LIP,4)
+	# Tight to the top edge: right under the banner or the screen cut-out.
+	var top := 12.0
+	# The character section is not built yet. Its entry is a real raised
+	# button (portrait, name, arrow) that says so and answers a tap with a note.
+	var character := action(self,"",Vector2(20,top),Vector2(236,52),_character_soon,"secondary")
+	character.tooltip_text = "Персонаж: скоро"
 	var mark := TextureRect.new()
 	mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	mark.texture = preload("res://assets/icon.svg")
-	mark.position = Vector2(28,24+top)
-	mark.size = Vector2(44,44)
+	mark.position = Vector2(6,5)
+	mark.size = Vector2(38,38)
 	mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	mark.material = rounded_material(mark.size,10)
+	mark.material = rounded_material(mark.size,9)
 	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(mark)
-	text(self,"Last Hook",Vector2(84,26+top),Vector2(200,40),28,INK,"display")
-	wallet(Vector2(size.x-236,24+top))
+	character.add_child(mark)
+	text(character,"Персонаж",Vector2(52,4),Vector2(120,24),18,INK,"display")
+	soon_badge = slab(character,Vector2(53,27),Vector2(54,18),HOLD,HOLD_LIP,2)
+	text(soon_badge,"Скоро",Vector2(0,0),Vector2(54,16),11,INK,"strong").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	symbol(character,11,Vector2(200,12),Vector2(24,24),INK_SOFT)
+	wallet(Vector2(size.x-236,top+3))
 
+func _character_soon() -> void:
+	if is_instance_valid(soon_badge):
+		soon_badge.pivot_offset = soon_badge.size*.5
+		var tween := soon_badge.create_tween()
+		tween.tween_property(soon_badge,"rotation",.12,.06)
+		tween.tween_property(soon_badge,"rotation",-.1,.09)
+		tween.tween_property(soon_badge,"rotation",0.0,.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	game.toast("Раздел «Персонаж» скоро откроется",1.8,"menu")
+
+# The section bar is built once per screen and kept: a slate pill glides
+# under the chosen section and the hold-yellow marker follows it. Keeping the
+# buttons alive means a tap that starts during a switch still lands.
 func build_navigation() -> void:
 	var width := 484.0 if not landscape else 540.0
 	var at := Vector2((size.x-width)*.5,size.y-82)
@@ -373,33 +833,56 @@ func build_navigation() -> void:
 	navigation_bar = bar
 	var entries := [["expedition","Восхождение",7],["equipment","Снаряжение",2],["settings","Настройки",15]]
 	var each := (width-16)/3
+	var current := maxi(0,GameHud.MENU_TABS.find(hud.menu_tab))
+	nav_pill = slab(bar,Vector2(8+current*each,7),Vector2(each-(0 if current==2 else 4),50),SLATE,SLATE_LIP,4)
+	var clear: StyleBoxFlat = hud.slab_style(Color(STONE,0),Color.TRANSPARENT,0,9)
+	clear.content_margin_left = 40
+	clear.content_margin_right = 6
+	clear.content_margin_top = 4
+	clear.content_margin_bottom = 4
+	nav_symbols = []
 	for index in range(3):
 		var entry: Array = entries[index]
-		var selected: bool = hud.menu_tab==entry[0]
-		var tab := action(bar,str(entry[1]),Vector2(8+index*each,7),Vector2(each-(0 if index==2 else 4),50),func(): hud.select_menu(str(entry[0])),"selected" if selected else "ghost")
+		var tab := action(bar,str(entry[1]),Vector2(8+index*each,7),Vector2(each-(0 if index==2 else 4),50),slide_to_tab.bind(str(entry[0])),"ghost")
 		tab_buttons.append(tab)
 		tab.add_theme_font_size_override("font_size",14)
 		tab.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		tab.add_theme_constant_override("h_separation",0)
-		for state_name in ["normal","hover","pressed"]:
-			var styled := tab.get_theme_stylebox(state_name).duplicate() as StyleBoxFlat
-			styled.content_margin_left = 40
-			styled.content_margin_right = 6
-			tab.add_theme_stylebox_override(state_name,styled)
-		symbol(tab,int(entry[2]),Vector2(10,12),Vector2(24,24),STONE if selected else INK_SOFT)
+		for state_name in ["normal","hover","pressed","disabled"]: tab.add_theme_stylebox_override(state_name,clear)
+		nav_symbols.append(symbol(tab,int(entry[2]),Vector2(10,12),Vector2(24,24),INK_SOFT))
 	layout_navigation()
-	# A hold-yellow marker under the active section glides from the previous one.
-	var marker := ColorRect.new()
-	marker.color = HOLD
-	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	marker.size = Vector2(each-28,4)
-	var current := maxi(0,GameHud.MENU_TABS.find(hud.menu_tab))
+	nav_marker = ColorRect.new()
+	nav_marker.color = HOLD
+	nav_marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	nav_marker.size = Vector2(each-28,4)
 	var previous := maxi(0,GameHud.MENU_TABS.find(hud.menu_previous_tab))
-	marker.position = Vector2(8+previous*each+12,58)
-	bar.add_child(marker)
-	if previous!=current:
-		create_tween().tween_property(marker,"position:x",8+current*each+12,.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	nav_marker.position = Vector2(8+previous*each+12,58)
+	bar.add_child(nav_marker)
+	paint_navigation()
+
+func paint_navigation() -> void:
+	if not is_instance_valid(navigation_bar): return
+	var width := navigation_bar.size.x
+	var each := (width-16)/3
+	var current := maxi(0,GameHud.MENU_TABS.find(hud.menu_tab))
+	for index in range(tab_buttons.size()):
+		var selected := index==current
+		var ink := STONE if selected else INK_SOFT
+		for color_name in ["font_color","font_hover_color","font_pressed_color","font_hover_pressed_color","font_focus_color"]:
+			tab_buttons[index].add_theme_color_override(color_name,ink if selected or color_name=="font_color" else INK)
+		if index<nav_symbols.size() and is_instance_valid(nav_symbols[index]):
+			nav_symbols[index].tint = ink
+			nav_symbols[index].queue_redraw()
+	var tween := navigation_bar.create_tween().set_parallel(true)
+	tween.tween_property(nav_pill,"position:x",8+current*each,.26).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.tween_property(nav_pill,"size:x",each-(0 if current==2 else 4),.26).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.tween_property(nav_marker,"position:x",8+current*each+12,.26).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	hud.menu_previous_tab = hud.menu_tab
+
+# A tapped section slides in from its side, like a swipe.
+func slide_to_tab(tab: String) -> void:
+	hud.menu_slide = signi(GameHud.MENU_TABS.find(tab)-GameHud.MENU_TABS.find(hud.menu_tab))
+	hud.select_menu(tab)
 
 func layout_navigation() -> void:
 	if not is_instance_valid(navigation_bar): return
@@ -418,16 +901,14 @@ func layout_navigation() -> void:
 		tab.custom_minimum_size = Vector2(each-(0 if index==2 else 4),50)
 		tab.size = tab.custom_minimum_size
 
-func scenic_card(at: Vector2, dimensions: Vector2) -> Panel:
-	var definition: Dictionary = model.balance["locations"][game.lobby_location]
-	var owned: bool = model.profile["locations"].has(game.lobby_location)
-	var frame := slab(self,at,dimensions,STONE_SHADE,STONE_LIP,5)
-	scenic_frame = frame
-	card_rect = Rect2(at,dimensions)
+func route_card(parent: Node, location: int, dimensions: Vector2) -> Panel:
+	var definition: Dictionary = model.balance["locations"][location]
+	var owned: bool = model.profile["locations"].has(location)
+	var frame := slab(parent,Vector2.ZERO,dimensions,STONE_SHADE,STONE_LIP,5)
 	var inner := dimensions-Vector2(0,5)
 	var preview := LevelPreview.new()
 	preview.world = game.world
-	preview.route_location = game.lobby_location
+	preview.route_location = location
 	preview.size = inner
 	preview.material = rounded_material(inner,10)
 	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -458,98 +939,158 @@ func scenic_card(at: Vector2, dimensions: Vector2) -> Panel:
 		symbol(lock,14,Vector2(8,5),Vector2(24,24),STONE)
 		text(lock,"Закрыто",Vector2(36,6),Vector2(78,22),14,STONE,"strong")
 	else:
-		var route_tag := slab(frame,Vector2(16,16),Vector2(164,34),Color(SLATE,.88),SLATE_LIP,3)
-		var acts: Array = LevelCatalog.level(game.lobby_location).get("acts",[])
-		text(route_tag,"%d акта" % int(acts.size()),Vector2(8,6),Vector2(148,22),12,STONE,"strong")
+		var acts: Array = LevelCatalog.level(location).get("acts",[])
+		var route_tag := slab(frame,Vector2(16,16),Vector2(82,34),Color(SLATE,.88),SLATE_LIP,3)
+		text(route_tag,"%d акта" % int(acts.size()),Vector2(0,6),Vector2(82,22),14,STONE,"strong").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	text(frame,str(definition["name"]),Vector2(22,inner.y-94),Vector2(inner.x-44,48),36,STONE,"display")
 	var total: int = model.balance["locations"].size()
 	# Act names wrap to a second line before the route pager.
 	var pager_left := inner.x-22-(total-1)*18-6
-	paragraph(frame," · ".join(LevelCatalog.act_names(game.lobby_location)),Vector2(23,inner.y-46),Vector2(pager_left-10-23,40),15,Color("e3e8ea"))
+	paragraph(frame," · ".join(LevelCatalog.act_names(location)),Vector2(23,inner.y-46),Vector2(pager_left-10-23,40),15,Color("e3e8ea"))
 	for index in range(total):
 		var center := Vector2(inner.x-22-(total-1-index)*18,inner.y-34)
 		var points := PackedVector2Array([center+Vector2(0,-6),center+Vector2(6,0),center+Vector2(0,6),center+Vector2(-6,0)])
 		var marker := Polygon2D.new()
 		marker.polygon = points
-		marker.color = HOLD if index==game.lobby_location else Color(STONE,.45)
+		marker.color = HOLD if index==location else Color(STONE,.45)
 		frame.add_child(marker)
-	for direction in [-1,1]:
-		var arrow := action(frame,"",Vector2(14 if direction<0 else inner.x-62,inner.y*.40),Vector2(48,52),game.cycle_location.bind(direction))
-		var at_end: bool = game.lobby_location+direction<0 or game.lobby_location+direction>=total
-		arrow.disabled = not model.profile["active"].is_empty() or at_end
-		arrow.tooltip_text = "Предыдущий маршрут" if direction<0 else "Следующий маршрут"
-		arrow.visible = model.profile["active"].is_empty()
-		if at_end: arrow.modulate.a = .45
-		symbol(arrow,10 if direction<0 else 11,Vector2(12,12),Vector2(24,24),INK)
 	return frame
-
-func refresh_location_card(direction: int) -> bool:
-	if hud.menu_tab!="expedition" or not is_instance_valid(scenic_frame): return false
-	var old := scenic_frame
-	var old_at := old.position
-	var old_size := old.size
-	var index := body_nodes.find(old)
-	remove_child(old)
-	old.queue_free()
-	var replacement := scenic_card(old_at,old_size)
-	if index>=0: body_nodes[index] = replacement
-	replacement.position.x += clampf(float(direction),-1,1)*24.0
-	create_tween().tween_property(replacement,"position:x",old_at.x,.22).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	return true
 
 func build_expedition() -> void:
 	var active: bool = not model.profile["active"].is_empty()
-	var definition: Dictionary = model.balance["locations"][game.lobby_location]
-	var owned: bool = model.profile["locations"].has(game.lobby_location)
-	var card_y := 90.0 if landscape else 76.0
-	var nav_top := size.y - 82.0
-	var card_h := 466.0 if landscape else clampf(nav_top - 340.0 - card_y, 240.0, 480.0)
-	scenic_card(Vector2(28,card_y),Vector2(620,card_h) if landscape else Vector2(484,card_h))
+	# Actions sit in the thumb zone above the section bar: mode, start and
+	# one secondary action. Info (card, route, acts) flows from the top.
+	const ACTIONS := 44.0+10.0+64.0+10.0+52.0
+	const ROUTE := 32.0+ROUTE_PANEL
+	var card_y := 90.0 if landscape else 78.0
+	var card_w := 620.0 if landscape else 484.0
+	# Route art is framed 4:3; the lip adds 5 below the picture.
+	var card_h := roundf(card_w*.75)+5.0
+	var floor_y := size.y-82.0-16.0
+	if not landscape and card_y+card_h+ROUTE+ACTIONS>floor_y:
+		# Short screens keep the 4:3 frame and narrow the card instead.
+		card_h = maxf(200.0,floor_y-ACTIONS-ROUTE-card_y)
+		card_w = (card_h-5.0)/.75
+	var card_x := 28.0 if landscape else (size.x-card_w)*.5
+	build_card_carousel(Vector2(card_x,card_y),Vector2(card_w,card_h))
 	var x := 680.0 if landscape else 28.0
 	var width := 372.0 if landscape else 484.0
-	var y := 90.0
+	var panel_y := card_y+card_h+16.0
+	var bottom := floor_y
 	if landscape:
-		title(self,"Попытка ждёт" if active else "Пора наверх",Vector2(x,y),width,32)
-		paragraph(self,"Продолжишь с того же зацепа." if active else "Брось крюк, раскачайся и лови следующую опору.",Vector2(x,y+46),Vector2(width,44),15)
-		y = 196
-	else:
-		y = card_y + card_h + 14.0
-	route(self,Vector2(x,y),width)
+		title(self,"Попытка ждёт" if active else "Пора наверх",Vector2(x,card_y),width,32)
+		paragraph(self,"Продолжишь с того же зацепа." if active else "Брось крюк, раскачайся и лови следующую опору.",Vector2(x,card_y+46),Vector2(width,44),15)
+		panel_y = card_y+104.0
+		bottom = card_y+card_h-5.0
+	var mode_y := bottom-ACTIONS
+	# One stone panel under the card: the route bar, and on taller screens the
+	# acts of the shown route. What height is left becomes two equal gaps.
+	var panel_h := ROUTE_PANEL
+	acts_anchor = Rect2()
+	if not landscape:
+		var card_bottom := card_y+card_h
+		var spare := mode_y-card_bottom-32.0-ROUTE_PANEL
+		if spare>=ACTS_HEIGHT:
+			var acts_h := minf(spare,ACTS_HEIGHT_MAX)
+			acts_anchor = Rect2(16,ROUTE_PANEL,width-32,acts_h-10)
+			panel_h += acts_h
+			spare -= acts_h
+		panel_y = card_bottom+16.0+maxf(0.0,spare)*.5
+	route_panel = slab(self,Vector2(x,panel_y),Vector2(width,panel_h))
 	var wins := int(model.profile["wins"])
-	text(self,"Вершин покорено: %d" % wins if wins>0 else "Вершина ещё не покорена",Vector2(x,y+44),Vector2(width,20),13,INK_SOFT)
-	var mode_y := y+72
-	var mode_buttons := segmented(self,Vector2(x,mode_y),width,["Вершина","Бесконечно"],1 if game.lobby_endless else 0,func(index: int): game.lobby_endless = index==1; hud.show_menu(),44)
+	route_line = route(route_panel,Vector2(16,8),width-32,-1.0,false,"Вершин покорено: %d" % wins if wins>0 else "Вершина ещё не покорена")
+	update_route_line()
+	var mode_buttons := segmented(self,Vector2(x,mode_y),width,["Вершина","Бесконечно"],1 if game.lobby_endless else 0,func(index: int): game.lobby_endless = index==1,44)
 	for index in range(2):
 		mode_buttons[index].disabled = active or (index==1 and not model.profile["summit_cleared"])
 	mode_buttons[1].tooltip_text = "Откроется после первой вершины" if not model.profile["summit_cleared"] else "Без вершины: забирайся сколько сможешь"
-	# A locked expedition names everything it needs; the button opens it as
-	# soon as all of it is there.
+	location_anchor = Rect2(x,mode_y,width,0)
+	build_location_actions(self)
+	if active:
+		var finish := action(self,"Завершить забег",Vector2(x,mode_y+128),Vector2(width,52),game.finish_saved_run)
+		finish.tooltip_text = "Завершить сохранённую попытку и оформить награду за текущий прогресс."
+	else:
+		var practice := action(self,"Тренировка: 16 зацепов",Vector2(x,mode_y+128),Vector2(width,52),game.start_practice)
+		practice.tooltip_text = "Короткий маршрут с базовым снаряжением. Кошелёк не меняется."
+
+# Route panel: the bar with its caption; acts rows extend it downwards.
+const ROUTE_PANEL := 84.0
+const ACTS_HEIGHT := 140.0
+const ACTS_HEIGHT_MAX := 210.0
+
+# The route bar keeps its node across route switches; only its summit
+# changes, so it never blinks.
+func update_route_line() -> void:
+	if not is_instance_valid(route_line): return
+	route_line.summit = float(model.balance["locations"][game.lobby_location]["height_units"])*10
+	route_line.queue_redraw()
+
+# The three acts of the shown route in climbing order with their heights.
+# A conquered route ticks them all.
+func build_acts() -> Control:
+	var rows := Control.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rows.position = acts_anchor.position
+	rows.size = acts_anchor.size
+	route_panel.add_child(rows)
+	var spans: Array = LevelCatalog.act_spans(game.lobby_location)
+	var names: Array = LevelCatalog.act_names(game.lobby_location)
+	var cleared: bool = model.profile["cleared_locations"].has(game.lobby_location)
+	var row_h := acts_anchor.size.y/maxf(1,spans.size())
+	rule_line(rows,Vector2(0,0),acts_anchor.size.x)
+	for index in range(spans.size()):
+		var span: Dictionary = spans[index]
+		var row_y := index*row_h
+		var badge := slab(rows,Vector2(0,row_y+(row_h-30)*.5),Vector2(30,30),MOSS if cleared else SLATE,SLATE_LIP,3)
+		text(badge,"✓" if cleared else str(index+1),Vector2(0,3),Vector2(30,22),15,STONE,"display").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		text(rows,str(names[index]),Vector2(42,row_y+(row_h-22)*.5),Vector2(acts_anchor.size.x-160,22),16,INK,"strong")
+		var heights := text(rows,"%d–%d м" % [int(span["y_start"])*10,int(span["y_end"])*10],Vector2(acts_anchor.size.x-110,row_y+(row_h-20)*.5),Vector2(110,20),13,INK_SOFT)
+		heights.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		if index<spans.size()-1: rule_line(rows,Vector2(42,row_y+row_h-1),acts_anchor.size.x-42)
+	return rows
+
+func rule_line(parent: Node, at: Vector2, width: float) -> void:
+	var line := ColorRect.new()
+	line.color = Color(STONE_LIP,.5)
+	line.position = at
+	line.size = Vector2(width,1)
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(line)
+
+# The start action and the acts panel: the only parts of the body that
+# change with the shown route.
+func build_location_actions(parent: Node) -> void:
+	for node in location_nodes: _free(node)
+	location_nodes = []
+	var active: bool = not model.profile["active"].is_empty()
+	var owned: bool = model.profile["locations"].has(game.lobby_location)
+	var x := location_anchor.position.x
+	var mode_y := location_anchor.position.y
+	var width := location_anchor.size.x
+	if acts_anchor.size.y>0 and is_instance_valid(route_panel): location_nodes.append(build_acts())
+	# A locked route says on the button itself what it still needs; the
+	# button opens it as soon as all of it is there.
 	var ready: bool = model.location_ready(game.lobby_location)
 	var unlock: Dictionary = model.location_unlock(game.lobby_location)
 	var cost_parts: Array = []
 	if unlock.has("gold"): cost_parts.append("%d золота" % int(unlock["gold"]))
 	if unlock.has("diamonds"): cost_parts.append("%d алм." % int(unlock["diamonds"]))
-	var action_text := "Продолжить восхождение" if active else "Начать восхождение" if owned else "Открыть за "+" + ".join(cost_parts) if ready else "Закрыто"
-	var start := action(self,action_text,Vector2(x,mode_y+54),Vector2(width,60),game.lobby_action,"primary")
+	var action_text := "Продолжить восхождение" if active else "Начать восхождение" if owned else "Открыть за "+" + ".join(cost_parts) if ready else "Нужно: "+model.location_requirement(game.lobby_location)
+	var start := action(parent,action_text,Vector2(x,mode_y+54),Vector2(width,64),game.lobby_action,"primary")
 	start_button = start
-	start.add_theme_font_size_override("font_size",21 if action_text.length()<26 else 16)
+	start.add_theme_font_size_override("font_size",21 if action_text.length()<26 else 15)
 	start.disabled = not active and not owned and not ready
-	if not owned and not active:
-		paragraph(self,"Нужно: "+model.location_requirement(game.lobby_location),Vector2(x,mode_y+182),Vector2(width,40),13,DANGER if not ready else INK_SOFT).name = "Requirement"
-	var practice := action(self,"Тренировка: 16 зацепов",Vector2(x,mode_y+122),Vector2(width,48),game.start_practice)
-	practice.disabled = active
-	practice.tooltip_text = "Короткий маршрут с базовым снаряжением. Кошелёк не меняется."
-	if active:
-		var finish := action(self,"Завершить забег",Vector2(x,mode_y+182),Vector2(width,48),game.finish_saved_run)
-		finish.tooltip_text = "Завершить сохранённую попытку и оформить награду за текущий прогресс."
-	elif landscape and owned:
-		paragraph(self,"Тренировка идёт с базовым снаряжением и не трогает кошелёк.",Vector2(x,mode_y+182),Vector2(width,40),13)
+	start.add_theme_color_override("font_disabled_color",INK_SOFT)
+	start.tooltip_text = "Нужно: "+model.location_requirement(game.lobby_location) if not owned else ""
+	location_nodes.append(start)
+	if landscape and owned and not active and acts_anchor.size.y<=0:
+		location_nodes.append(paragraph(parent,"Тренировка идёт с базовым снаряжением и не трогает кошелёк.",Vector2(x,mode_y-60),Vector2(width,40),13))
 
 func build_equipment() -> void:
 	var active: bool = not model.profile["active"].is_empty()
 	title(self,"Снаряжение",Vector2(28,80),300,32)
 	var views := ["upgrades","supplies"]
-	var switch := segmented(self,Vector2(size.x-28-260,82),260,["Улучшения","Сборы"],views.find(hud.equipment_view),func(index: int): hud.equipment_view = views[index]; hud.show_menu(),40)
+	var switch := segmented(self,Vector2(size.x-28-260,82),260,["Улучшения","Сборы"],views.find(hud.equipment_view),func(index: int): hud.equipment_view = views[index]; hud.show_menu_soon(),40)
 	switch[1].tooltip_text = "Профили, активные предметы, запас и материалы"
 	if hud.equipment_view=="supplies":
 		build_supplies(active)
@@ -689,23 +1230,18 @@ func build_supplies(active: bool) -> void:
 		var magnet_buttons := segmented(profiles,Vector2(120,row_y),column_width-140,magnet_names,magnet_keys.find(model.choice("magnet")),func(index: int): _choose("magnet",str(magnet_keys[index])),40)
 		for index in range(magnet_buttons.size()): magnet_buttons[index].tooltip_text = str(magnet["options"][magnet_keys[index]].get("hint",""))
 		paragraph(profiles,str(magnet["options"][model.choice("magnet")].get("hint","")),Vector2(120,row_y+42),Vector2(column_width-140,30),12,INK_SOFT)
-	# Active items: two slots, stock up to two of each, bought with gold or
-	# made from materials. Diamonds never buy consumables.
+	# Active items: everything in stock goes into the next run, one charge of
+	# each, bought with gold or made from materials. Diamonds never buy them.
 	var items := slab(self,right,Vector2(column_width,262))
 	text(items,"Активные предметы",Vector2(20,12),Vector2(260,24),17,INK,"display")
-	var loadout: Array = model.profile["active_loadout"]
-	text(items,"Слоты: "+" · ".join(loadout.map(func(id): return "пусто" if str(id).is_empty() else str(ItemCatalog.consumable(str(id))["name"]))),Vector2(20,38),Vector2(column_width-40,20),12,INK_SOFT)
+	text(items,"Купленное уходит в следующий забег: по одному каждого",Vector2(20,38),Vector2(column_width-40,20),12,INK_SOFT)
 	var item_y := 62.0
 	for definition in ItemCatalog.consumables():
 		var id := str(definition["id"])
-		var in_slot := loadout.has(id)
-		text(items,str(definition["name"]),Vector2(20,item_y),Vector2(column_width-306,20),14,INK,"strong").tooltip_text = str(definition.get("hint",""))
+		text(items,str(definition["name"]),Vector2(20,item_y),Vector2(column_width-226,20),14,INK,"strong").tooltip_text = str(definition.get("hint",""))
 		var recipe: Array = []
 		for material_id in definition["recipe_materials"].keys(): recipe.append("%d %s" % [int(definition["recipe_materials"][material_id]),ItemCatalog.material_name(material_id).to_lower()])
-		text(items,"%d/%d · %s" % [model.stock(id),model.stock_max(),str(definition.get("hint",""))],Vector2(20,item_y+20),Vector2(column_width-306,18),12,INK_SOFT)
-		var slot_button := action(items,"В слоте" if in_slot else "В слот",Vector2(column_width-286,item_y),Vector2(78,40),_toggle_slot.bind(id),"selected" if in_slot else "ghost")
-		slot_button.add_theme_font_size_override("font_size",12)
-		slot_button.disabled = active
+		text(items,"%d/%d · %s" % [model.stock(id),model.stock_max(),str(definition.get("hint",""))],Vector2(20,item_y+20),Vector2(column_width-226,18),12,INK_SOFT)
 		var buy := action(items,"%d з." % int(definition["price_gold"]),Vector2(column_width-202,item_y),Vector2(86,40),_buy_item.bind(id),"secondary")
 		buy.add_theme_font_size_override("font_size",13)
 		buy.disabled = active or model.stock(id)>=model.stock_max() or int(model.profile["gold"])<int(definition["price_gold"])
@@ -722,18 +1258,18 @@ func build_supplies(active: bool) -> void:
 	for material_id in model.balance["materials"].keys(): wallet_parts.append("%s %d" % [ItemCatalog.material_name(material_id),model.materials(material_id)])
 	paragraph(progress,"Материалы: "+" · ".join(wallet_parts),Vector2(20,10),Vector2(column_width-40,40),12,INK)
 	var sets := int(model.profile["unlocked_sets"].size())
-	text(progress,"Комплекты %d/%d · ориентиры %d · контракты %d · жетоны мастерства %d" % [sets,model.balance["sets"].size(),model.profile["landmarks"].size(),model.profile["completed_contracts"].size(),int(model.profile["mastery_tokens"])],Vector2(20,58),Vector2(column_width-40,20),12,INK_SOFT)
+	text(progress,"Комплекты %d/%d · ориентиры %d · контракты %d" % [sets,model.balance["sets"].size(),model.profile["landmarks"].size(),model.profile["completed_contracts"].size()],Vector2(20,58),Vector2(column_width-40,20),12,INK_SOFT)
 
 func _choose(track: String, option: String) -> void:
 	var message := model.set_choice(track,option)
 	if track=="hook" and is_instance_valid(game.explorer):
 		game.explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
-	hud.show_menu()
+	hud.show_menu_soon()
 	game.toast(message)
 
 func _choose_prep(profile_id: String) -> void:
 	var message := model.set_prep_profile(profile_id)
-	hud.show_menu()
+	hud.show_menu_soon()
 	game.toast(message)
 
 func _toggle_slot(id: String) -> void:
@@ -785,10 +1321,32 @@ func settings_switch(parent: Node, title_text: String, subtitle: String, at: Vec
 	text(parent,title_text,at,Vector2(width-120,24),16,INK,"strong")
 	text(parent,subtitle,at+Vector2(0,24),Vector2(width-120,20),13,INK_SOFT)
 	var left := at.x+width-96
-	slab(parent,Vector2(left,at.y),Vector2(96,44),STONE_SHADE,Color.TRANSPARENT,0)
-	# A switch: the raised block sits right and turns slate when the option is on.
-	var toggle := action(parent,"Вкл" if enabled else "Выкл",Vector2(left+(36 if enabled else 4),at.y+4),Vector2(56,36),callback,"selected" if enabled else "secondary")
+	var track := slab(parent,Vector2(left,at.y),Vector2(96,44),Color(MOSS,.35) if enabled else STONE_SHADE,Color.TRANSPARENT,0)
+	# A switch: the raised block slides right and turns slate when the option
+	# is on. It flips in place; the page is not rebuilt.
+	var toggle := action(parent,"Вкл" if enabled else "Выкл",Vector2(left+(36 if enabled else 4),at.y+4),Vector2(56,36),Callable(),"selected" if enabled else "secondary")
+	toggle.set_meta("on",enabled)
+	toggle.pressed.connect(_flip_switch.bind(toggle,track,left,callback))
+	_tight_knob(toggle)
+
+# The knob is narrow: thin side padding keeps "Выкл" whole.
+func _tight_knob(toggle: Button) -> void:
 	toggle.add_theme_font_size_override("font_size",15)
+	for state_name in ["normal","hover","pressed","disabled"]:
+		var box := toggle.get_theme_stylebox(state_name).duplicate() as StyleBoxFlat
+		box.content_margin_left = 2
+		box.content_margin_right = 2
+		toggle.add_theme_stylebox_override(state_name,box)
+
+func _flip_switch(toggle: Button, track: Panel, left: float, callback: Callable) -> void:
+	var on: bool = not bool(toggle.get_meta("on",false))
+	toggle.set_meta("on",on)
+	toggle.create_tween().tween_property(toggle,"position:x",left+(36 if on else 4),.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	track.add_theme_stylebox_override("panel",hud.slab_style(Color(MOSS,.35) if on else STONE_SHADE,Color.TRANSPARENT,0))
+	toggle.text = "Вкл" if on else "Выкл"
+	hud.skin_button(toggle,"selected" if on else "secondary")
+	_tight_knob(toggle)
+	callback.call()
 
 func section(parent: Node, value: String) -> void:
 	text(parent,value,Vector2(20,14),Vector2(400,24),17,INK,"display")
@@ -817,7 +1375,7 @@ func build_settings() -> void:
 	var zoom_levels := model.camera_zoom_levels()
 	var zoom_names: Array = []
 	for zoom in zoom_levels: zoom_names.append("%d%%" % roundi(float(zoom)*100))
-	var zoom_buttons := segmented(graphics,Vector2(control_x,132 if compact else 144),control_width,zoom_names,zoom_levels.find(model.camera_zoom()),func(index: int): game.set_camera_zoom(float(zoom_levels[index])); hud.show_menu(),40)
+	var zoom_buttons := segmented(graphics,Vector2(control_x,132 if compact else 144),control_width,zoom_names,zoom_levels.find(model.camera_zoom()),func(index: int): game.set_camera_zoom(float(zoom_levels[index])),40)
 	for button in zoom_buttons: button.tooltip_text = "Крупнее герой и опоры. Граница падения не меняется."
 	var feedback_h := 186.0 if compact else 200.0
 	var feedback_y := (126 + graphics_h + 12) if compact else 350.0
@@ -844,3 +1402,9 @@ func build_settings() -> void:
 		paragraph(help,instructions[index][1],Vector2(64,row_y+20),Vector2(help_size.x-84,36),12)
 	var version := text(help,"Версия "+GameModel.BUILD_VERSION,Vector2(help_size.x-180,18),Vector2(160,20),12,INK_SOFT)
 	version.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+
+func _notification(what: int) -> void:
+	# Kept pages live off the tree; they go with the lobby.
+	if what==NOTIFICATION_PREDELETE:
+		for tab in page_cache.keys():
+			if is_instance_valid(page_cache[tab]): page_cache[tab].free()

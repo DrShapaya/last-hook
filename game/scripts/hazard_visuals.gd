@@ -1,6 +1,8 @@
 class_name HazardVisuals
 extends RefCounted
 
+const FloraModels := preload("res://scripts/flora_models.gd")
+
 # Telegraphs of the act hazards (ActHazards decides, this only shows):
 #   wind      flags on posts and leaves streaming along the pocket, always
 #   storm     ribbons and mirrors turn, dust streaks thicken, far haze
@@ -23,6 +25,7 @@ var built: Dictionary = {}
 var haze: MeshInstance3D
 var haze_material: ShaderMaterial
 var haze_strength := 0.0
+var last_update_frame := -1
 
 func _init(owner_world: MountainWorld, source: MountainLayout) -> void:
 	world = owner_world
@@ -35,6 +38,25 @@ static func hazard_y(hazard: Dictionary, ledges: Array) -> float:
 	if hazard.has("ledge"): return float(ledges[int(hazard["ledge"])]["top"])
 	return 0.0
 
+# The top of the stone nearest to `spot` (within a couple of metres): stone
+# right under it, open air above, clear of every grip; INF when there is none.
+func _stand_point(spot: Vector2) -> Vector2:
+	var visuals := world.visuals
+	var offsets: Array = []
+	for dy in [0.0,-.5,.5,-1.0,1.0,-1.5,1.5,-2.0]:
+		for dx in [0.0,.6,-.6,1.2,-1.2,1.8,-1.8,2.4,-2.4]: offsets.append(Vector2(dx,dy))
+	offsets.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.length_squared()<b.length_squared())
+	for offset: Vector2 in offsets:
+		var probe: Vector2 = spot+offset
+		if visuals.open_at(probe) or not visuals.open_at(probe+Vector2(0,.35)): continue
+		# Walk up to the edge of the stone.
+		var top := probe
+		while not visuals.open_at(top+Vector2(0,.03)) and top.y<probe.y+.4: top.y += .03
+		if visuals.open_at(top+Vector2(-.15,-.12)) or visuals.open_at(top+Vector2(.15,-.12)): continue
+		if visuals is MassifVisuals and (visuals as MassifVisuals)._decor_blocked(top,-.9): continue
+		return top-Vector2(0,.04)
+	return Vector2.INF
+
 func _surface_z(point: Vector2) -> float:
 	if world.visuals is MassifVisuals:
 		var hit := (world.visuals as MassifVisuals).surface_query(point)
@@ -42,19 +64,25 @@ func _surface_z(point: Vector2) -> float:
 	return world.visuals.wall_depth(point)
 
 # Hazards stream with the chunks: built near the view, freed far from it.
-func build_near(center_y: float) -> void:
+# `limit` caps how many are built in this call (streaming builds one per
+# frame); returns true while some in range are still waiting.
+func build_near(center_y: float, limit: int = -1) -> bool:
 	for id in built.keys():
 		if absf(hazard_y(layout.hazards[id],layout.ledges)-center_y)<=48: continue
 		(built[id]["node"] as Node3D).queue_free()
 		built.erase(id)
+	var count := 0
 	for hazard in layout.hazards:
 		var id: int = hazard["id"]
 		if built.has(id) or absf(hazard_y(hazard,layout.ledges)-center_y)>40: continue
+		if limit>=0 and count>=limit: return true
+		count += 1
 		var node := Node3D.new()
 		node.name = "Опасность_%d_%s" % [id,hazard["def"]]
 		world.add_child(node)
 		built[id] = {"node":node,"parts":{}}
 		_build(hazard,built[id])
+	return false
 
 func _material(shader_code: String, key: String) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
@@ -116,19 +144,29 @@ func _build_field(hazard: Dictionary, entry: Dictionary, random: RandomNumberGen
 	if bool(hazard.get("affects_main",false)):
 		var center := world.layout.main_point(int(hazard["row"]))
 		spots = [center+Vector2(-6.0,1.0),center+Vector2(6.0,-.5)]
+	var shadows := world.visual_quality!="battery"
 	for spot in spots:
+		# A marker stands on the stone near its spot, never in the air or on a
+		# grip; a spot with no top close by gets none.
+		var foot := _stand_point(spot)
+		if not foot.is_finite(): continue
 		var holder := Node3D.new()
 		holder.name = "Указатель_%s" % marker
-		holder.position = Vector3(spot.x,spot.y,_surface_z(spot)+.05)
+		holder.position = Vector3(foot.x,foot.y,_surface_z(foot+Vector2(0,-.15))+.08)
 		node.add_child(holder)
 		markers.append(holder)
+		if marker!="mirror":
+			# A flag on its pole flying downwind; the cloth is the part that
+			# flaps (update).
+			FloraModels.flag(holder,"flag" if marker=="flag" else "pennant","red" if marker=="flag" else "yellow",Vector3.ZERO,1.4,1.0 if direction.x>=0 else -1.0,shadows,"plain" if marker=="flag" else "stripes")
+			continue
 		var points := PackedVector3Array()
 		var colors := PackedColorArray()
-		LandmarkVisuals._prism(points,colors,Vector3(0,-.6,0),Vector3.UP,.05,.04,1.7,5,Color("6b4a30"))
+		LandmarkVisuals._prism(points,colors,Vector3(0,-.05,0),Vector3.UP,.05,.04,1.3,5,Color("6b4a30"))
 		world.visuals._flat_surface(holder,"Шест",points,colors,_vertex(),false)
 		var cloth := Node3D.new()
 		cloth.name = "Полотно"
-		cloth.position = Vector3(0,1.0,.04)
+		cloth.position = Vector3(0,1.15,.04)
 		holder.add_child(cloth)
 		match marker:
 			"mirror":
@@ -152,10 +190,6 @@ func _build_field(hazard: Dictionary, entry: Dictionary, random: RandomNumberGen
 				entry["parts"]["mirror_%d" % markers.size()] = glass
 				var ribbon := world.box("Лента",Vector3.ZERO,Vector3(.7,.08,.02),world.mat("hazard_ribbon",Color("d9583a")),cloth)
 				ribbon.position = Vector3(direction.x*.45,-.25,.02)
-			_:
-				var color := Color("e8624d") if marker=="flag" else Color("e3b95e") if marker=="ribbon" else Color("dfeef6")
-				var flag := world.box("Флаг",Vector3.ZERO,Vector3(.7,.36 if marker=="flag" else .1,.02),world.mat("hazard_%s" % marker,color),cloth)
-				flag.position = Vector3(direction.x*.38,.15,.02)
 	entry["markers"] = markers
 	entry["direction"] = direction
 
@@ -280,6 +314,13 @@ func collapse(hazard: Dictionary, animate: bool = true) -> void:
 # --- Animation --------------------------------------------------------------------------
 
 func update(time: float, hero: Vector2, haze_amount: float, camera: Vector2) -> void:
+	# Called from every physics step; the scene only needs one pose per drawn
+	# frame. The haze keeps easing per step, as before.
+	var frame := Engine.get_process_frames()
+	if frame==last_update_frame:
+		_update_haze(hero,haze_amount,camera)
+		return
+	last_update_frame = frame
 	for id in built.keys():
 		var hazard: Dictionary = layout.hazards[id]
 		var entry: Dictionary = built[id]
@@ -293,9 +334,14 @@ func update(time: float, hero: Vector2, haze_amount: float, camera: Vector2) -> 
 					strength = .06 if name=="calm" else lerpf(.12,.5,progress) if name=="telegraph" else .75
 				(entry["streak"] as ShaderMaterial).set_shader_parameter("strength",strength)
 				var flap := (.25 if name=="calm" and not is_inf(float(hazard["active_time"])) else 1.0)
-				for marker in entry.get("markers",[]):
-					var cloth: Node3D = (marker as Node3D).get_node_or_null("Полотно")
-					if cloth!=null:
+				if not entry.has("cloths"):
+					var cloths: Array[Node3D] = []
+					for marker in entry.get("markers",[]):
+						var found := (marker as Node3D).find_child("Полотно",true,false) as Node3D
+						if found!=null: cloths.append(found)
+					entry["cloths"] = cloths
+				for cloth: Node3D in entry["cloths"]:
+					if is_instance_valid(cloth):
 						cloth.rotation.y = sin(time*7.0+float(id))*.35*flap
 						cloth.scale.x = 1.0+.12*sin(time*11.0+float(id))*flap
 				for key in entry["parts"].keys():

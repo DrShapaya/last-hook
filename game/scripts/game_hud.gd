@@ -17,6 +17,10 @@ var danger_timer: PlayGauges.TimerBar
 var height_plate: Panel
 var bag_tray: Panel
 var bag_total_label: Label
+var bag_count_label: Label
+var bag_toggle: Button
+var bag_icon: UiSymbol
+var bag_chevron: UiSymbol
 var bag_full_chip: PanelContainer
 # Chat 4: the wallet (coins are banked at once), the run's contract, the two
 # active-item buttons, the beacon's marks and the full-bag swap prompt.
@@ -30,6 +34,7 @@ var swap_panel: Panel
 var boosts_panel: Panel
 var lobby_view: LobbyView
 var shown_height := 0.0
+var toast_placement: Array = []
 var shown_bag_total := 0.0
 var flying_value := 0
 var shown_bag_ids: Array = []
@@ -40,6 +45,7 @@ var last_zone := -1
 var slowmo_indicator: SlowmoIndicator
 var slowmo_vignette: SlowmoVignette
 var seen_focus_serial := 0
+var item_check_time := -1.0
 var bag_panel: VBoxContainer
 var pause_button: Button
 var aim_overlay: AimOverlay
@@ -84,8 +90,8 @@ const INK_PANEL := MenuSurface.SLATE
 const PLAY_PANEL := Color("24323deb")
 
 class SlowmoIndicator extends Control:
-	# Three readable states of the release slow motion: ready (quiet, shows the
-	# upgraded duration), active (gold frame, seconds left) and cooldown.
+	# A compact chip that only appears while release slow motion runs (gold,
+	# seconds left) or recharges (muted); when ready it stays out of the way.
 	var remaining := 0.0
 	var duration := .7
 	var cooldown := 0.0
@@ -99,31 +105,19 @@ class SlowmoIndicator extends Control:
 		var font := text_font if text_font!=null else ThemeDB.fallback_font
 		var digits := number_font if number_font!=null else font
 		var active := remaining>0
-		var cooling := not active and cooldown>0
-		# Compact slab in the top bar: it reads at a glance over sky and sunlit
-		# rock without covering the play area.
-		var panel := StyleBoxFlat.new()
-		panel.bg_color = Color("141d24f2") if active else Color("24323dc8")
-		panel.border_color = GOLD if active else Color(MUTED,.45) if cooling else Color(GOLD,.55)
-		panel.set_border_width_all(2 if active else 1)
-		panel.border_width_bottom = 4 if active else 3
-		panel.set_corner_radius_all(8)
-		panel.corner_detail = 1
-		draw_style_box(panel,Rect2(Vector2.ZERO,size))
-		var track := Rect2(12,size.y-15,size.x-24,6)
-		draw_rect(track,Color(WHITE,.18))
-		if active:
-			draw_string(font,Vector2(12,25),"ЗАМЕДЛЕНИЕ",HORIZONTAL_ALIGNMENT_LEFT,size.x-80,15,WHITE)
-			draw_string(digits,Vector2(12,26),("%.1f с" % remaining).replace(".",","),HORIZONTAL_ALIGNMENT_RIGHT,size.x-24,19,GOLD)
-			draw_rect(Rect2(track.position,Vector2(track.size.x*clampf(remaining/maxf(.01,duration),0,1),track.size.y)),GOLD)
-		elif cooling:
-			draw_string(font,Vector2(12,25),"Перезарядка",HORIZONTAL_ALIGNMENT_LEFT,size.x-80,14,MUTED)
-			draw_string(digits,Vector2(12,26),("%.1f с" % cooldown).replace(".",","),HORIZONTAL_ALIGNMENT_RIGHT,size.x-24,17,MUTED)
-			draw_rect(Rect2(track.position,Vector2(track.size.x*clampf(1-cooldown/maxf(.01,cooldown_total),0,1),track.size.y)),Color(CYAN,.75))
-		else:
-			draw_string(font,Vector2(12,25),"Замедление готово",HORIZONTAL_ALIGNMENT_LEFT,size.x-70,14,WHITE)
-			draw_string(digits,Vector2(12,26),LobbyView.seconds_text(ready_seconds),HORIZONTAL_ALIGNMENT_RIGHT,size.x-24,15,GOLD)
-			draw_rect(track,Color(GOLD,.55))
+		PlayGauges.slab(self,Rect2(Vector2.ZERO,size-Vector2(0,3)),Color("141d24f2") if active else Color("24323dd8"),MenuSurface.SLATE_LIP,3,8)
+		var accent := GOLD if active else MUTED
+		# Hourglass mark.
+		var mark := Vector2(18,size.y*.5-2)
+		draw_colored_polygon(PackedVector2Array([mark+Vector2(-6,-9),mark+Vector2(6,-9),mark+Vector2(0,0)]),Color(accent,.9))
+		draw_colored_polygon(PackedVector2Array([mark+Vector2(0,0),mark+Vector2(-6,9),mark+Vector2(6,9)]),Color(accent,.45))
+		var value := remaining if active else cooldown
+		draw_string(font,Vector2(32,size.y*.5+3),"Замедление" if active else "Перезарядка",HORIZONTAL_ALIGNMENT_LEFT,size.x-90,14,WHITE if active else MUTED)
+		draw_string(digits,Vector2(0,size.y*.5+4),("%.1f с" % value).replace(".",","),HORIZONTAL_ALIGNMENT_RIGHT,size.x-12,16,accent)
+		var track := Rect2(10,size.y-8,size.x-20,3)
+		draw_rect(track,Color(WHITE,.12))
+		var share := clampf(remaining/maxf(.01,duration),0,1) if active else clampf(1-cooldown/maxf(.01,cooldown_total),0,1)
+		draw_rect(Rect2(track.position,Vector2(track.size.x*share,track.size.y)),accent)
 
 # Release slow motion tints the screen edges cool blue with thin moving
 # streaks, so the change of pace is obvious even out of the corner of the eye.
@@ -157,38 +151,95 @@ class SlowmoVignette extends Control:
 		if flash>.001:
 			draw_rect(Rect2(Vector2.ZERO,size),rim,false,6.0*flash+1)
 
-# An active item of the run. Tap to use; ready, running (gold frame with the
-# time left), passive (the strap triggers by itself) or spent.
+# An active item of the run: a round hold-like button with its own icon and
+# a short name. Ready (gold rim), armed (rim turns while it waits for flight),
+# running (the rim drains), unavailable right now (dim) or spent.
 class ItemButton extends Control:
+	const CIRCLE := 64.0
 	var index := 0
+	var id := ""
 	var title := ""
 	var used := false
 	var passive := false
 	var running := 0.0
+	var armed := false
+	var blocked := false
+	var unavailable := false
+	var time := 0.0
 	var text_font: Font
 	var on_press := Callable()
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
+	func _process(delta: float) -> void:
+		time += delta
+		if armed: queue_redraw()
 	func _gui_input(event: InputEvent) -> void:
-		# Touch arrives as emulated mouse, so one press is one activation.
-		if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed:
+		# Mouse is not emulated from touch in this project: a finger arrives as
+		# a screen touch, a desktop click as a mouse button. Either is one press.
+		var tapped: bool = (event is InputEventScreenTouch and event.pressed) or (event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed and event.device!=InputEvent.DEVICE_ID_EMULATION)
+		if tapped:
 			accept_event()
+			pivot_offset = Vector2(size.x*.5,CIRCLE*.5)
+			var tween := create_tween()
+			tween.tween_property(self,"scale",Vector2.ONE*.88,.06).set_trans(Tween.TRANS_SINE)
+			tween.tween_property(self,"scale",Vector2.ONE,.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 			if on_press.is_valid(): on_press.call(index)
 	func _draw() -> void:
 		var font := text_font if text_font!=null else ThemeDB.fallback_font
-		var panel := StyleBoxFlat.new()
-		panel.bg_color = Color("141d24f2") if running>0 else Color("24323d",.55 if used else .86)
-		panel.border_color = GOLD if running>0 else Color(MUTED,.3) if used else Color(CYAN,.7)
-		panel.set_border_width_all(2 if running>0 else 1)
-		panel.border_width_bottom = 4 if not used else 2
-		panel.set_corner_radius_all(9)
-		panel.corner_detail = 1
-		draw_style_box(panel,Rect2(Vector2.ZERO,size))
-		draw_string(font,Vector2(0,size.y*.46),title,HORIZONTAL_ALIGNMENT_CENTER,size.x,13,Color(WHITE,.45) if used else WHITE)
-		var note := "исп." if used else "авто" if passive else "1"
-		draw_string(font,Vector2(0,size.y-9),note,HORIZONTAL_ALIGNMENT_CENTER,size.x,11,Color(MUTED,.6) if used else GOLD)
-		if running>0:
-			draw_arc(size*.5,minf(size.x,size.y)*.5-3,-PI*.5,-PI*.5+TAU*running,40,GOLD,3,true)
+		var center := Vector2(size.x*.5,CIRCLE*.5)
+		var radius := CIRCLE*.5-2
+		var live := running>0 or armed
+		var dim := used or (blocked and not live)
+		draw_circle(center+Vector2(0,3),radius,MenuSurface.SLATE_LIP)
+		draw_circle(center,radius,Color("141d24f5") if live else Color("24323d",.6 if dim else .92))
+		if armed:
+			for dash in range(8):
+				var from := time*2.4+dash*TAU/8
+				draw_arc(center,radius-2,from,from+TAU/14,8,GOLD,3,true)
+		elif running>0:
+			draw_arc(center,radius-2,0,TAU,48,Color(GOLD,.22),3,true)
+			draw_arc(center,radius-2,-PI*.5,-PI*.5+TAU*running,48,GOLD,3.5,true)
+		else:
+			draw_arc(center,radius-2,0,TAU,48,Color(MUTED,.22) if dim else Color(GOLD,.75),2,true)
+		var tint := GOLD if live else Color(WHITE,.35) if dim else WHITE
+		draw_set_transform(center,0,Vector2.ONE*radius/26.0)
+		match id:
+			"beacon": _beacon(tint)
+			"booster": _booster(tint)
+			"glide": _glide(tint)
+			_: _strap(tint)
+		draw_set_transform(Vector2.ZERO)
+		var note := "использован" if used else "ждёт полёта" if armed else "авто" if passive else title
+		var color := Color(MUTED,.7) if used else GOLD if armed else WHITE
+		draw_string(font,Vector2(1,CIRCLE+18),note,HORIZONTAL_ALIGNMENT_CENTER,size.x,12,Color(MenuSurface.SLATE_LIP,.85))
+		draw_string(font,Vector2(0,CIRCLE+17),note,HORIZONTAL_ALIGNMENT_CENTER,size.x,12,color)
+	# Lantern with rays: it lights up the exits.
+	func _beacon(tint: Color) -> void:
+		for ray in range(5):
+			var angle := -PI*.5+(ray-2)*.5
+			draw_line(Vector2.from_angle(angle)*13,Vector2.from_angle(angle)*18,tint,2.2,true)
+		draw_colored_polygon(PackedVector2Array([Vector2(-6,-6),Vector2(6,-6),Vector2(8,10),Vector2(-8,10)]),Color(tint,.35))
+		draw_polyline(PackedVector2Array([Vector2(-6,-6),Vector2(6,-6),Vector2(8,10),Vector2(-8,10),Vector2(-6,-6)]),tint,2,true)
+		draw_line(Vector2(-4,-9),Vector2(4,-9),tint,2.5,true)
+		draw_circle(Vector2(0,3),3,tint)
+	# Two chevrons: a push along the flight.
+	func _booster(tint: Color) -> void:
+		for step in range(2):
+			var y := 6-step*11
+			draw_polyline(PackedVector2Array([Vector2(-10,y+6),Vector2(0,y-4),Vector2(10,y+6)]),tint,4,true)
+	# Canopy with lines: a slower fall.
+	func _glide(tint: Color) -> void:
+		draw_colored_polygon(PackedVector2Array([Vector2(-15,-2),Vector2(-12,-10),Vector2(-5,-15),Vector2(5,-15),Vector2(12,-10),Vector2(15,-2)]),Color(tint,.35))
+		draw_polyline(PackedVector2Array([Vector2(-15,-2),Vector2(-12,-10),Vector2(-5,-15),Vector2(5,-15),Vector2(12,-10),Vector2(15,-2),Vector2(-15,-2)]),tint,2,true)
+		for x in [-15,-5,5,15]: draw_line(Vector2(x,-2),Vector2(0,10),Color(tint,.8),1.4,true)
+		draw_rect(Rect2(-3,9,6,6),tint)
+	# Shield with a strap: it catches one fall by itself.
+	func _strap(tint: Color) -> void:
+		var shield := PackedVector2Array([Vector2(-11,-12),Vector2(11,-12),Vector2(11,0),Vector2(0,14),Vector2(-11,0)])
+		draw_colored_polygon(shield,Color(tint,.3))
+		shield.append(shield[0])
+		draw_polyline(shield,tint,2,true)
+		draw_polyline(PackedVector2Array([Vector2(-5,0),Vector2(-1,4),Vector2(6,-5)]),tint,2.6,true)
 
 # Beacon: soft pulsing rings on the two valid exits it found.
 class BeaconMarks extends Control:
@@ -357,6 +408,7 @@ func fit_viewport() -> void:
 	slowmo_vignette.size = get_viewport().get_visible_rect().size
 	backdrop.visible = layout_mode!="play"
 	backdrop.veil = layout_mode in ["pause","revive"]
+	backdrop.art = layout_mode in ["menu","result"]
 	backdrop.queue_redraw()
 	if layout_mode=="menu" and is_instance_valid(lobby_view):
 		lobby_view.update_layout()
@@ -408,19 +460,28 @@ func chip(parent: Node, face: Color) -> PanelContainer:
 	parent.add_child(node)
 	return node
 
+# Native overlays (the ad banner, display cut-outs) report physical pixels.
+# The canvas is stretched, so convert through the window size before the root
+# scale; otherwise a phone with a 2x canvas gets a double-height inset.
+func screen_to_design(pixels: float) -> float:
+	var ratio := 1.0
+	if OS.has_feature("mobile"):
+		var window := DisplayServer.window_get_size()
+		if window.y>0: ratio = get_viewport().get_visible_rect().size.y/float(window.y)
+	return pixels*ratio/maxf(.001,root.scale.y)
+
 func safe_inset_top() -> float:
+	if not OS.has_feature("mobile"): return 0.0
 	var safe := DisplayServer.get_display_safe_area()
-	var visible_size := get_viewport().get_visible_rect().size
-	if safe.size.y > 0 and safe.position.y > 0 and safe.size.y < visible_size.y:
-		return float(safe.position.y) / maxf(0.1, root.scale.y)
-	return 0.0
+	if safe.size.y<=0: return 0.0
+	return screen_to_design(maxf(0.0,safe.position.y))
 
 func safe_inset_bottom() -> float:
+	if not OS.has_feature("mobile"): return 0.0
 	var safe := DisplayServer.get_display_safe_area()
-	var visible_size := get_viewport().get_visible_rect().size
-	if safe.size.y > 0 and safe.end.y < visible_size.y:
-		return float(visible_size.y - safe.end.y) / maxf(0.1, root.scale.y)
-	return 0.0
+	var window := DisplayServer.window_get_size()
+	if safe.size.y<=0 or window.y<=0: return 0.0
+	return screen_to_design(maxf(0.0,window.y-safe.end.y))
 
 func place_toast() -> void:
 	if not is_instance_valid(toast_chip): return
@@ -428,11 +489,20 @@ func place_toast() -> void:
 	toast_chip.visible = has_text
 	toast_label.visible = has_text
 	if not has_text: return
+	# Re-measure and re-place only when the note or the screen changes; this
+	# runs every frame while a toast is shown.
+	var placement := [toast_label.text,layout_mode,root.size,safe_inset_bottom(),safe_inset_top(),toast_chip.get_combined_minimum_size()]
+	if placement==toast_placement: return
+	toast_placement = placement
 	var wide_text := body_font.get_string_size(toast_label.text,HORIZONTAL_ALIGNMENT_LEFT,-1,15).x>440
 	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if wide_text else TextServer.AUTOWRAP_OFF
 	toast_label.custom_minimum_size = Vector2(440 if wide_text else 0,0)
 	toast_chip.reset_size()
 	var safe_bottom := safe_inset_bottom()
+	if layout_mode in ["pause","revive","result"]:
+		# Those screens keep their actions at the bottom; the note goes on top.
+		toast_chip.position = Vector2((root.size.x-toast_chip.size.x)*.5,24+safe_inset_top())
+		return
 	toast_chip.position = Vector2((root.size.x-toast_chip.size.x)*.5,root.size.y-(150 if layout_mode=="play" else 64)-toast_chip.size.y*.5 - safe_bottom)
 
 func label(parent: Node, text: String, size: int = 17, color: Color = WHITE) -> Label:
@@ -452,7 +522,7 @@ func button(parent: Node, text: String, callback: Callable, gold: bool = false) 
 	node.custom_minimum_size = Vector2(0,51)
 	node.focus_mode = Control.FOCUS_NONE
 	parent.add_child(node)
-	node.pressed.connect(callback)
+	if callback.is_valid(): node.pressed.connect(callback)
 	skin_button(node,"primary" if gold else "secondary")
 	return node
 
@@ -499,12 +569,23 @@ func skin_button(node: Button, tone: String = "secondary") -> void:
 	node.add_theme_font_size_override("font_size",18 if tone=="primary" else 16)
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	node.clip_text = true
+	if not node.has_meta("press_motion"):
+		node.set_meta("press_motion",true)
+		node.button_down.connect(_press_motion.bind(node,true))
+		node.button_up.connect(_press_motion.bind(node,false))
+
+# A pressed button sinks a little and springs back when released, so every
+# tap answers in the same physical way.
+func _press_motion(node: Button, down: bool) -> void:
+	if not is_instance_valid(node): return
+	node.pivot_offset = node.size*.5
+	var tween := node.create_tween()
+	if down: tween.tween_property(node,"scale",Vector2.ONE*.95,.07).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	else: tween.tween_property(node,"scale",Vector2.ONE,.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 func select_menu(tab: String) -> void:
-	# A tap fades the section in; swipes and keys also slide it (menu_slide).
+	# Taps, swipes and keys slide the section in from its side (menu_slide).
 	if tab not in MENU_TABS: tab = "expedition"
-	if tab=="equipment" and game.state=="menu":
-		game.ensure_menu_explorer()
 	menu_previous_tab = menu_tab
 	menu_tab = tab
 	show_menu()
@@ -522,7 +603,6 @@ func toggle_sound() -> void:
 	game.model.profile["sound"] = not game.model.profile.get("sound",true)
 	game.request_profile_save()
 	if not game.model.profile["sound"]: game.audio.stop()
-	show_menu()
 
 func toggle_loot_prices() -> void:
 	set_loot_prices("near" if str(game.model.profile.get("loot_prices","near"))=="always" else "always")
@@ -530,17 +610,14 @@ func toggle_loot_prices() -> void:
 func set_loot_prices(mode: String) -> void:
 	game.model.profile["loot_prices"] = mode
 	game.request_profile_save()
-	show_menu()
 
 func toggle_vibration() -> void:
 	game.model.profile["vibration"] = not game.model.profile.get("vibration",true)
 	game.request_profile_save()
-	show_menu()
 
 func toggle_notifications() -> void:
 	game.model.profile["notifications"] = not game.model.profile.get("notifications",true)
 	game.request_profile_save()
-	show_menu()
 
 func clear() -> void:
 	layout_mode = "modal"
@@ -560,6 +637,8 @@ func clear() -> void:
 	height_plate = null
 	bag_tray = null
 	bag_total_label = null
+	bag_count_label = null
+	bag_toggle = null
 	bag_full_chip = null
 	boosts_panel = null
 	slowmo_indicator = null
@@ -573,6 +652,12 @@ func clear() -> void:
 	aim_overlay.active = false
 	aim_overlay.control_active = false
 	aim_overlay.queue_redraw()
+
+# Rebuilds the menu once a switch animation has played, so the new page
+# lands with the control already in its final place.
+func show_menu_soon(delay: float = .22) -> void:
+	get_tree().create_timer(delay).timeout.connect(func():
+		if layout_mode=="menu" and is_instance_valid(lobby_view): show_menu())
 
 func show_menu() -> void:
 	if layout_mode=="menu" and is_instance_valid(lobby_view):
@@ -589,6 +674,20 @@ func show_menu() -> void:
 	content.add_child(lobby)
 	lobby.setup(self)
 
+# Lowest edge of the display cut-outs (camera holes, notches) over a
+# horizontal span, in design units. Bars hug the top edge and only step
+# down where a cut-out actually covers them.
+func cutout_bottom(x_from: float, x_to: float) -> float:
+	if not OS.has_feature("mobile"): return 0.0
+	var window := DisplayServer.window_get_size()
+	if window.x<=0: return 0.0
+	var per_pixel := root.size.x/float(window.x)
+	var bottom := 0.0
+	for rect in DisplayServer.get_display_cutouts():
+		if rect.end.x*per_pixel>=x_from and rect.position.x*per_pixel<=x_to:
+			bottom = maxf(bottom,screen_to_design(rect.end.y))
+	return bottom
+
 func show_play() -> void:
 	game.ads.set_main_menu(false)
 	clear()
@@ -599,51 +698,76 @@ func show_play() -> void:
 	danger_edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(danger_edge)
 	# In-run chrome is dark slate so it reads over the sunlit limestone; the
-	# same chamfer and lip as the menus keep it part of one family.
-	var safe_top := safe_inset_top()
-	var pad_top := maxf(20.0, 20.0 + safe_top)
+	# same chamfer and lip as the menus keep it part of one family. Only what
+	# a climber needs mid-swing: height, route, coins, pause, bag and items.
+	const EDGE := 12.0
+	var width := root.size.x
 	var top := Panel.new()
-	top.position = Vector2(20, pad_top)
-	top.size = Vector2(196,74)
+	top.size = Vector2(156,60)
+	top.position = Vector2(EDGE,EDGE+cutout_bottom(EDGE,EDGE+top.size.x))
 	top.pivot_offset = top.size*.5
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top.add_theme_stylebox_override("panel",slab_style(PLAY_PANEL,MenuSurface.SLATE_LIP,4,10))
 	content.add_child(top)
 	height_plate = top
-	height_label = label(top,"0 м",34)
+	height_label = label(top,"0 м",30)
 	height_label.add_theme_font_override("font",heading_font)
-	height_label.position = Vector2(16,2)
-	height_label.size = Vector2(170,44)
-	record_label = label(top,"Рекорд 0 м",13,MUTED)
-	record_label.position = Vector2(17,44)
-	record_label.size = Vector2(170,20)
+	height_label.position = Vector2(14,2)
+	height_label.size = Vector2(134,38)
+	record_label = label(top,"Рекорд 0 м",12,MUTED)
+	record_label.position = Vector2(15,36)
+	record_label.size = Vector2(134,18)
 	pause_button = button(content,"",game.pause_run)
 	skin_button(pause_button,"dark")
-	pause_button.position = Vector2(root.size.x-76, pad_top)
-	pause_button.custom_minimum_size = Vector2(56,56)
-	pause_button.size = Vector2(56,56)
+	pause_button.custom_minimum_size = Vector2(52,52)
+	pause_button.size = Vector2(52,52)
+	pause_button.position = Vector2(width-EDGE-52,EDGE+cutout_bottom(width-EDGE-52,width-EDGE))
 	var bars := UiSymbol.new()
 	bars.kind = 18
 	bars.tint = WHITE
 	bars.badge = false
-	bars.position = Vector2(14,12)
+	bars.position = Vector2(12,10)
 	bars.size = Vector2(28,28)
 	bars.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	pause_button.add_child(bars)
+	# Coins banked during this run, beside Pause.
+	wallet_plate = Panel.new()
+	wallet_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wallet_plate.add_theme_stylebox_override("panel",slab_style(PLAY_PANEL,MenuSurface.SLATE_LIP,3,8))
+	wallet_plate.size = Vector2(96,40)
+	var wallet_x := pause_button.position.x-8-wallet_plate.size.x
+	wallet_plate.position = Vector2(wallet_x,EDGE+6+cutout_bottom(wallet_x,wallet_x+wallet_plate.size.x))
+	wallet_plate.pivot_offset = wallet_plate.size*.5
+	content.add_child(wallet_plate)
+	var wallet_coin := UiSymbol.new()
+	wallet_coin.kind = 12
+	wallet_coin.tint = Color("ffd15c")
+	wallet_coin.size = Vector2(20,20)
+	wallet_coin.position = Vector2(10,8)
+	wallet_coin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wallet_plate.add_child(wallet_coin)
+	wallet_label = label(wallet_plate,"0",17,WHITE)
+	wallet_label.add_theme_font_override("font",heading_font)
+	wallet_label.position = Vector2(35,6)
+	wallet_label.size = Vector2(56,26)
+	shown_wallet = float(game.model.run_coins(game.run_id))
+	wallet_plate.visible = game.run_mode!="practice"
+	var bar_top := maxf(top.position.y+top.size.y,pause_button.position.y+pause_button.size.y)+8.0
 	climb_bar = PlayGauges.RouteGauge.new()
-	climb_bar.position = Vector2(20, pad_top + 76.0)
-	climb_bar.size = Vector2(root.size.x-40,24)
+	climb_bar.position = Vector2(EDGE,bar_top)
+	climb_bar.size = Vector2(width-EDGE*2,26)
 	climb_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(climb_bar)
+	var below := bar_top+(climb_bar.size.y+10.0 if game.run_mode=="summit" else 0.0)
 	rope_gauge = PlayGauges.RopeGauge.new()
 	rope_gauge.font = heading_font
-	rope_gauge.position = Vector2(root.size.x-64, pad_top + 156.0)
+	rope_gauge.position = Vector2(width-EDGE-44,below+48.0)
 	rope_gauge.size = Vector2(44,170)
 	rope_gauge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rope_gauge.visible = false
 	content.add_child(rope_gauge)
 	var notes := VBoxContainer.new()
-	notes.position = Vector2(20, pad_top + 108.0)
+	notes.position = Vector2(EDGE,below)
 	notes.add_theme_constant_override("separation",6)
 	notes.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(notes)
@@ -659,8 +783,6 @@ func show_play() -> void:
 	danger_timer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	danger_column.add_child(danger_timer)
 	goal_label = label(chip(notes,MenuSurface.SLATE),"",14,WHITE)
-	# Contract rewards remain in settlement data, but there is no finished
-	# contract interaction in the run HUD, so do not show a misleading chip.
 	contract_label = null
 	aim_label = label(chip(notes,MenuSurface.SLATE),"",14,GOLD)
 	aim_label.add_theme_font_override("font",strong_font)
@@ -674,70 +796,43 @@ func show_play() -> void:
 	slowmo_indicator.ready_seconds = game.model.slowmo_seconds()
 	slowmo_indicator.cooldown_total = maxf(.01,game.model.slowmo_cooldown())
 	seen_focus_serial = game.focus_serial
-	slowmo_indicator.size = Vector2(204,50)
-	# Top bar, centred in the gap between the height plate and Pause, so it
-	# stays clear of the climb.
+	slowmo_indicator.size = Vector2(176,42)
+	# Between the height plate and the coins when there is room and no
+	# cut-out; otherwise centred under the route bar.
 	var gap_left := top.position.x+top.size.x+8
-	var gap_right := pause_button.position.x-8
-	slowmo_indicator.position = Vector2(clampf((gap_left+gap_right-slowmo_indicator.size.x)*.5,gap_left,maxf(gap_left,gap_right-slowmo_indicator.size.x)), pad_top + 12.0)
+	var gap_right := wallet_plate.position.x-8
+	var centre := (gap_left+gap_right-slowmo_indicator.size.x)*.5
+	if gap_right-gap_left>=slowmo_indicator.size.x and cutout_bottom(centre,centre+slowmo_indicator.size.x)<=0:
+		slowmo_indicator.position = Vector2(centre,EDGE+9)
+	else:
+		slowmo_indicator.position = Vector2((width-slowmo_indicator.size.x)*.5,below)
 	slowmo_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	slowmo_indicator.visible = false
 	content.add_child(slowmo_indicator)
-	# Wallet: banked gold, apart from the bag cells. Coins land here at once.
-	wallet_plate = Panel.new()
-	wallet_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wallet_plate.add_theme_stylebox_override("panel",slab_style(PLAY_PANEL,MenuSurface.SLATE_LIP,3,8))
-	wallet_plate.size = Vector2(118,38)
-	wallet_plate.position = Vector2(root.size.x-20-wallet_plate.size.x, pad_top + 108.0)
-	wallet_plate.pivot_offset = wallet_plate.size*.5
-	content.add_child(wallet_plate)
-	var wallet_coin := UiSymbol.new()
-	wallet_coin.kind = 12
-	wallet_coin.tint = Color("ffd15c")
-	wallet_coin.size = Vector2(20,20)
-	wallet_coin.position = Vector2(10,8)
-	wallet_coin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wallet_plate.add_child(wallet_coin)
-	wallet_label = label(wallet_plate,"0",17,WHITE)
-	wallet_label.add_theme_font_override("font",heading_font)
-	wallet_label.position = Vector2(36,6)
-	wallet_label.size = Vector2(76,26)
-	shown_wallet = float(game.model.profile["gold"])
-	wallet_plate.visible = game.run_mode!="practice"
 	beacon_marks = BeaconMarks.new()
 	beacon_marks.size = root.size
 	beacon_marks.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(beacon_marks)
-	boosts_panel = Panel.new()
-	boosts_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	boosts_panel.add_theme_stylebox_override("panel",slab_style(Color("18252ed9"),MenuSurface.SLATE_LIP,3,10))
-	boosts_panel.position = Vector2(root.size.x-112,clampf(root.size.y*.38,210,360))
-	boosts_panel.size = Vector2(92,42+game.run_items.size()*66)
-	content.add_child(boosts_panel)
-	var boosts_title := label(boosts_panel,"УСИЛЕНИЯ",11,MUTED)
-	boosts_title.add_theme_font_override("font",strong_font)
-	boosts_title.position = Vector2(8,5)
-	boosts_title.size = Vector2(76,18)
-	var boosts_column := VBoxContainer.new()
-	boosts_column.position = Vector2(8,28)
-	boosts_column.size = Vector2(76,maxf(0,boosts_panel.size.y-32))
-	boosts_column.add_theme_constant_override("separation",8)
-	boosts_column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	boosts_panel.add_child(boosts_column)
+	# Items: round buttons along the left edge, stacked up from the lower
+	# corner; the bag lives on the right.
+	boosts_panel = null
+	var names := {"beacon":"Маяк","booster":"Ускорение","glide":"Парашют","tape":"Страховка"}
+	var floor_y := root.size.y-safe_inset_bottom()-16.0
 	for index in range(game.run_items.size()):
 		var entry: Dictionary = game.run_items[index]
 		var definition := ItemCatalog.consumable(str(entry["id"]))
 		var item_button := ItemButton.new()
 		item_button.index = index
-		var short_names := {"beacon":"Маяк", "booster":"Бустер", "glide":"Падение", "tape":"Лента"}
-		item_button.title = str(short_names.get(str(entry["id"]),str(definition.get("short",definition["name"])).get_slice(" ",0)))
-		item_button.passive = entry["id"]=="tape"
+		item_button.id = str(entry["id"])
+		item_button.title = str(names.get(item_button.id,str(definition.get("short",definition["name"])).get_slice(" ",0)))
+		item_button.passive = item_button.id=="tape"
 		item_button.text_font = strong_font
 		item_button.on_press = game.activate_item
-		item_button.custom_minimum_size = Vector2(76,58)
-		item_button.size = Vector2(76,58)
-		item_button.tooltip_text = str(definition["name"])+" · "+str(definition.get("hint",""))
-		boosts_column.add_child(item_button)
+		item_button.size = Vector2(84,88)
+		item_button.custom_minimum_size = item_button.size
+		item_button.position = Vector2(EDGE-10,floor_y-(game.run_items.size()-index)*(item_button.size.y+6))
+		item_button.tooltip_text = str(definition["name"])+": "+str(definition.get("hint",""))
+		content.add_child(item_button)
 		item_buttons.append(item_button)
 	bag_tray = Panel.new()
 	bag_tray.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -746,17 +841,39 @@ func show_play() -> void:
 	var coin := UiSymbol.new()
 	coin.kind = 12
 	coin.tint = Color("ffd15c")
-	coin.size = Vector2(22,22)
+	coin.size = Vector2(18,18)
 	coin.name = "Coin"
 	coin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bag_tray.add_child(coin)
-	bag_total_label = label(bag_tray,"0",18,WHITE)
+	bag_total_label = label(bag_tray,"0",16,WHITE)
 	bag_total_label.add_theme_font_override("font",heading_font)
+	bag_count_label = label(bag_tray,"0/0",14,MUTED)
+	bag_count_label.add_theme_font_override("font",strong_font)
+	bag_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# The header folds the bag down to its count and value and back; the
+	# choice is remembered between runs.
+	bag_toggle = button(bag_tray,"",toggle_bag)
+	skin_button(bag_toggle,"dark")
+	bag_toggle.custom_minimum_size = Vector2(60,34)
+	bag_toggle.size = Vector2(60,34)
+	bag_icon = UiSymbol.new()
+	bag_icon.kind = 3
+	bag_icon.tint = WHITE
+	bag_icon.position = Vector2(8,5)
+	bag_icon.size = Vector2(22,22)
+	bag_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bag_toggle.add_child(bag_icon)
+	bag_chevron = UiSymbol.new()
+	bag_chevron.tint = MUTED
+	bag_chevron.position = Vector2(34,7)
+	bag_chevron.size = Vector2(18,18)
+	bag_chevron.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bag_toggle.add_child(bag_chevron)
 	bag_full_chip = chip(content,MenuSurface.SLATE)
 	label(bag_full_chip,"Рюкзак полон: удержи находку, чтобы выбросить",13,CORAL).add_theme_font_override("font",strong_font)
 	bag_full_chip.visible = false
 	bag_panel = VBoxContainer.new()
-	bag_panel.add_theme_constant_override("separation",8)
+	bag_panel.add_theme_constant_override("separation",6)
 	bag_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(bag_panel)
 	# Opening the HUD (a new run, a resume, an unpause) shows the bag as it
@@ -787,22 +904,33 @@ func refresh_bag() -> void:
 			child.queue_free()
 		for index in range(capacity):
 			var cell := BagSlot.new()
-			cell.custom_minimum_size = Vector2(54,54)
+			cell.custom_minimum_size = Vector2(46,46)
 			cell.value_font = heading_font
 			bag_panel.add_child(cell)
-	var height: float = capacity*54+(capacity-1)*8
-	var tray_width := 70.0
-	var tray_height := height+52
-	var tray_at := Vector2(18,clampf((root.size.y-tray_height)*.5,132,root.size.y-tray_height-18))
+	var collapsed := bag_collapsed()
+	var header := 34.0
+	var height: float = capacity*46+(capacity-1)*6
+	var tray_width := 60.0
+	var tray_height := header+(52.0 if collapsed else height+48.0)
+	var tray_at := Vector2(root.size.x-12-tray_width,clampf((root.size.y-tray_height)*.55,160,root.size.y-tray_height-18))
 	bag_tray.position = tray_at
 	bag_tray.size = Vector2(tray_width,tray_height)
-	bag_tray.get_node("Coin").position = Vector2(12,height+14)
-	bag_total_label.position = Vector2(32,height+12)
-	bag_total_label.size = Vector2(34,24)
-	bag_panel.position = tray_at+Vector2(8,8)
-	bag_panel.size = Vector2(54,height)
+	bag_chevron.kind = 10 if collapsed else 11
+	bag_chevron.rotation = 0.0
+	bag_chevron.queue_redraw()
+	bag_panel.visible = not collapsed
+	bag_count_label.visible = collapsed
+	bag_count_label.text = "%d/%d" % [game.model.bag.size(),capacity]
+	bag_count_label.position = Vector2(0,header+2)
+	bag_count_label.size = Vector2(tray_width,20)
+	var total_y := header+24.0 if collapsed else header+height+14.0
+	bag_tray.get_node("Coin").position = Vector2(6,total_y+2)
+	bag_total_label.position = Vector2(26,total_y-1)
+	bag_total_label.size = Vector2(32,22)
+	bag_panel.position = tray_at+Vector2(7,header+6)
+	bag_panel.size = Vector2(46,height)
 	bag_full_chip.reset_size()
-	bag_full_chip.position = Vector2(tray_at.x+tray_width+10,tray_at.y)
+	bag_full_chip.position = Vector2(tray_at.x-10-bag_full_chip.size.x,tray_at.y)
 	# Cells are updated in place so their animations survive a pickup.
 	for index in range(capacity):
 		var cell: BagSlot = bag_panel.get_child(index)
@@ -815,6 +943,15 @@ func refresh_bag() -> void:
 		if not item.is_empty() and not shown_bag_ids.has(item.get("id",-999)): cell.pop = 1.0
 		cell.queue_redraw()
 	shown_bag_ids = bag_ids()
+
+func bag_collapsed() -> bool:
+	return bool(game.model.profile.get("bag_collapsed",false))
+
+func toggle_bag() -> void:
+	game.model.profile["bag_collapsed"] = not bag_collapsed()
+	game.request_profile_save()
+	refresh_bag()
+	pulse(bag_tray,.05)
 
 # A coin is banked at once: "+value" rises from the coin into the wallet.
 func animate_coin(value: int, world_position: Vector2) -> void:
@@ -852,7 +989,7 @@ func animate_pickup(item: Dictionary, world_position: Vector2) -> void:
 	flyer.item = item
 	flyer.size = root.size
 	flyer.from = content_point(game.camera.unproject_position(Vector3(world_position.x,world_position.y,0)))
-	flyer.to = content_point(cell.get_global_rect().get_center())
+	flyer.to = content_point(bag_tray.get_global_rect().get_center() if bag_collapsed() else cell.get_global_rect().get_center())
 	flyer.landed = _land_pickup.bind(cell,item)
 	# The tray total waits for the find to arrive before counting it.
 	flying_value += int(item.get("value",0))
@@ -863,6 +1000,9 @@ func _land_pickup(cell: BagSlot, item: Dictionary) -> void:
 	if not is_instance_valid(cell) or not is_instance_valid(content): return
 	cell.land()
 	var center := content_point(cell.get_global_rect().get_center())
+	if bag_collapsed():
+		center = content_point(bag_tray.get_global_rect().get_center())
+		pulse(bag_tray,.08)
 	var burst := PlayGauges.Burst.new()
 	burst.color = LootIcon.rarity_color(item)
 	burst.position = center
@@ -917,7 +1057,7 @@ func update_play() -> void:
 		slowmo_indicator.remaining = game.focus_remaining if game.focus_active() else 0.0
 		slowmo_indicator.duration = maxf(.01,game.focus_duration)
 		slowmo_indicator.cooldown = game.focus_cooldown
-		slowmo_indicator.visible = true
+		slowmo_indicator.visible = slowmo_indicator.state_name()!="ready"
 		slowmo_indicator.queue_redraw()
 		if game.focus_serial!=seen_focus_serial:
 			# Activation: the chip pops and the screen rim flashes once.
@@ -941,7 +1081,9 @@ func update_play() -> void:
 		record_broken = true
 		pulse(height_plate,.12)
 	record_label.text = "Новый рекорд!" if record_broken else "Рекорд %d м" % int(game.model.profile["best"])
-	record_label.add_theme_color_override("font_color",GOLD if record_broken else MUTED)
+	# A theme override notifies and re-lays out the label: set it only on change.
+	var record_color := GOLD if record_broken else MUTED
+	if record_label.get_theme_color("font_color")!=record_color: record_label.add_theme_color_override("font_color",record_color)
 	var remaining: float = game.sim.pos.y-game.screen_bottom_y()
 	var danger: bool = game.sim.launched and remaining<4
 	# Act hazards announce themselves here when the lower edge is not closer.
@@ -955,9 +1097,8 @@ func update_play() -> void:
 		climb_bar.flash_at = float(reached_zone)/climb_bar.zones
 		pulse(height_plate)
 	last_zone = reached_zone
-	goal_label.text = "Тренировка · 16 зацепов" if game.run_mode=="practice" else game.model.next_goal()
-	var lesson := tutorial_hint()
-	if not lesson.is_empty(): goal_label.text = lesson
+	# The goal chip only teaches: once the controls are learned it stays away.
+	goal_label.text = tutorial_hint()
 	aim_overlay.active = game.pressed and not game.sim.attached and not game.bolt_active and (not game.touch_gesture or game.aim_stick_valid)
 	aim_overlay.ui_scale = root.scale.x
 	aim_overlay.control_active = game.pressed and game.touch_gesture
@@ -971,19 +1112,17 @@ func update_play() -> void:
 	aim_overlay.origin = game.camera.unproject_position(Vector3(game.sim.pos.x,game.sim.pos.y,0))
 	var point: Vector2 = game.sim.pos+game.aim_direction*game.model.shot_range()
 	aim_label.text = ""
-	# Rope length now lives in the side gauge; the chip only says what the
-	# current grip will do.
+	# Rope length lives in the side gauge and the aim in the arc itself; the
+	# chip speaks only when a grip behaves unusually.
 	var reel := 0
 	if game.sim.attached:
 		var parts: Array[String] = []
 		var current: Dictionary = game.world.anchor_by_id(game.anchor_id)
 		if not current.is_empty():
-			parts.append("Опора постоянная" if current.get("permanent",true) else "Опора исчезнет при отпускании")
+			if not current.get("permanent",true): parts.append("Опора исчезнет при отпускании")
 			if GripSpec.kind_of(current)==GripSpec.SPRING: parts.append("отпусти по стрелке — ветка подбросит")
-		if not game.sim.rope_pivots.is_empty(): parts.append("канат огибает выступ")
-		if game.pressed and game.touch_gesture and aim_overlay.vertical_direction!=0:
-			if aim_overlay.vertical_progress>=1: reel = aim_overlay.vertical_direction
-			parts.append(("подтягивание" if aim_overlay.vertical_direction>0 else "спуск") if aim_overlay.vertical_progress>=1 else "держи вертикально…")
+		if game.pressed and game.touch_gesture and aim_overlay.vertical_direction!=0 and aim_overlay.vertical_progress>=1:
+			reel = aim_overlay.vertical_direction
 		aim_label.text = " · ".join(parts)
 		if reel==0 and absf(game.sim.target_length-game.sim.length)>.02:
 			reel = 1 if game.sim.target_length<game.sim.length else -1
@@ -1017,27 +1156,21 @@ func update_play() -> void:
 			var contact: Vector2 = branch["contact"]
 			aim_overlay.branches.append({"points":points,"target":game.camera.unproject_position(Vector3(contact.x,contact.y,0)),"color":color})
 		aim_overlay.animation = game.animation_time
-		aim_label.text = "Дуга броска · отпусти для выстрела"
+		# The arc's colour already says hit or miss; words only for a miss.
 		var collision: Dictionary = shot_preview["collision"]
 		if not collision.is_empty():
 			point = collision["contact"]
 			if collision.get("blocked",false):
-				aim_label.text = "Карниз · можно приземлиться сверху" if collision.get("object",{}).get("rest",false) else "Твёрдый выступ · крюк не зацепится"
+				aim_label.text = "Карниз: можно приземлиться сверху" if collision.get("object",{}).get("rest",false) else "Твёрдый выступ: крюк не зацепится"
 				aim_overlay.aim_color = CORAL
 			else:
-				aim_label.text = game.world.object_description(collision["object"])
 				aim_overlay.aim_color = Color("8ae0ac")
-				aim_label.text += " · %.2f с" % float(shot_preview["time"])
 				if not shot_preview["reachable"]:
 					aim_overlay.aim_color = CORAL
-					aim_label.text = "Удаляешься от цели — каната не хватит"
+					aim_label.text = "Каната не хватит до цели"
 	else:
 		shot_preview.clear()
 		aim_overlay.branches.clear()
-		if game.pressed and game.touch_gesture and not game.sim.attached:
-			aim_label.text = "Потяни от места касания — выбери направление"
-	if game.bolt_active: aim_label.text = "Крюк в полёте"
-	elif game.bolt_returning: aim_label.text = "Крюк возвращается · можно бросать снова"
 	aim_overlay.target = game.camera.unproject_position(Vector3(point.x,point.y,0))
 	aim_overlay.queue_redraw()
 	if game.sim.attached and not danger:
@@ -1056,17 +1189,26 @@ func update_play() -> void:
 	var total := float(game.model.bag_value()-flying_value)
 	shown_bag_total = move_toward(shown_bag_total,total,maxf(40,absf(total-shown_bag_total)*6)*delta)
 	bag_total_label.text = str(int(round(shown_bag_total)))
+	bag_count_label.text = "%d/%d" % [game.model.bag.size(),game.model.bag_capacity()]
 	bag_full_chip.visible = false
-	var gold := float(game.model.profile["gold"])
+	var gold := float(game.model.run_coins(game.run_id))
 	shown_wallet = move_toward(shown_wallet,gold,maxf(30,absf(gold-shown_wallet)*5)*delta)
 	wallet_label.text = str(int(round(shown_wallet)))
 	fit_notes()
 	for button_index in range(item_buttons.size()):
 		var item_button: ItemButton = item_buttons[button_index]
 		var entry: Dictionary = game.run_items[button_index] if button_index<game.run_items.size() else {}
+		var mine: bool = game.item_effect_id()==str(entry.get("id","")) and int(game.item_effect.get("index",button_index))==button_index
 		item_button.used = bool(entry.get("used",false))
-		item_button.running = float(game.item_effect.get("remaining",0))/maxf(.01,float(game.item_effect.get("duration",1))) if game.item_effect_id()==str(entry.get("id","")) else 0.0
+		item_button.armed = mine and game.item_armed()
+		item_button.running = float(game.item_effect.get("remaining",0))/maxf(.01,float(game.item_effect.get("duration",1))) if mine and not game.item_armed() else 0.0
+		# Dim while another item runs or this one has nothing to act on.
+		# The beacon's exit search is costly, so it is refreshed a few times a second.
+		if game.elapsed-item_check_time>=.25 or game.elapsed<item_check_time:
+			item_button.unavailable = not game.item_blocked_reason(item_button.id).is_empty()
+		item_button.blocked = not item_button.passive and ((not game.item_effect.is_empty() and not mine) or item_button.unavailable)
 		item_button.queue_redraw()
+	if game.elapsed-item_check_time>=.25 or game.elapsed<item_check_time: item_check_time = game.elapsed
 	beacon_marks.points.clear()
 	for target in game.beacon_targets: beacon_marks.points.append(content_point(game.camera.unproject_position(Vector3(target.x,target.y,0))))
 	beacon_marks.time = game.elapsed
@@ -1090,6 +1232,11 @@ func tutorial_hint() -> String:
 	if "release" not in learned:
 		return "Отпусти палец — отцепись. Затем снова прицелься" if mobile else "Пробел: отпусти канат на взлёте и целься снова"
 	return ""
+
+func item_button_at(point: Vector2) -> bool:
+	for item_button in item_buttons:
+		if is_instance_valid(item_button) and item_button.get_global_rect().has_point(point): return true
+	return false
 
 func world_input_allowed(point: Vector2) -> bool:
 	if not get_viewport().get_visible_rect().has_point(point): return false
@@ -1116,8 +1263,10 @@ func _buy_upgrade(kind: int) -> void:
 	var message: String = game.model.purchase(kind)
 	# The rebuilt row celebrates a real level change only.
 	upgrade_flash = kind if game.model.level(kind)>level_before else -1
-	if kind==2 and is_instance_valid(game.explorer):
-		game.explorer.set_hook_configuration(game.model.hook_tips(),game.model.hook_count())
+	if kind==2:
+		# The climber is only built when hooks change, never on a section switch.
+		if game.state=="menu": game.ensure_menu_explorer()
+		if is_instance_valid(game.explorer): game.explorer.set_hook_configuration(game.model.hook_tips(),game.model.hook_count())
 	show_menu()
 	game.toast(message)
 
@@ -1144,6 +1293,7 @@ func show_revive(reason: String = "Падение") -> void:
 
 func show_result(result: Dictionary) -> void:
 	result_data = result.duplicate(true)
+	backdrop.show_route(game.selected_location)
 	menu_surface("result").build_result(result)
 
 func set_ad_blocked(blocked: bool) -> void:

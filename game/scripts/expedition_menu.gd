@@ -24,51 +24,138 @@ func inline_stat(parent: Node, value: String, caption: String, at: Vector2, widt
 	text(parent,value,at,Vector2(width,30),24,INK,"display")
 	text(parent,caption,at+Vector2(0,30),Vector2(width,20),13,INK_SOFT)
 
-func build_pause() -> void:
-	var practice: bool = game.run_mode=="practice"
-	var column := 480.0 if landscape else 484.0
-	heading("Пауза","Тренировка: кошелёк и снаряжение не меняются." if practice else "Попытка сохранена. Можно выйти в лагерь и вернуться позже.",column)
-	var climbed := maxi(0,roundi((game.sim.highest-game.START_Y)*10))
-	height_figure(self,climbed,Vector2(28,136),64)
-	inline_stat(self,time_string(game.run_seconds),"в пути",Vector2(28+column-110,150),110)
-	if not practice: route(self,Vector2(28,226),column,climbed)
-	var bag_x := 556.0 if landscape else 28.0
-	var bag_y := 136.0 if landscape else 296.0
-	var bag_width := 496.0 if landscape else 484.0
+# Pause and the second chance are bottom sheets over the frozen, veiled
+# climb: everything sits in one stone sheet within thumb reach, with exactly
+# one primary action.
+const SHEET_PAD := 22.0
+
+func sheet_width() -> float:
+	return minf(hud.root.size.x-32,560.0)
+
+# Covers the whole root (the climb shows through the veil above the sheet).
+func open_sheet() -> Panel:
+	size = hud.root.size
+	position = Vector2.ZERO
+	# A shade darker than the buttons, so stone actions stand out on it.
+	return slab(self,Vector2.ZERO,Vector2(sheet_width(),100),STONE_SHADE,STONE_LIP,5)
+
+# Sizes the sheet to its content and docks it to the bottom safe edge.
+func close_sheet(sheet: Panel, content_height: float) -> void:
+	sheet.size = Vector2(sheet_width(),content_height+SHEET_PAD)
+	sheet.position = Vector2((size.x-sheet.size.x)*.5,size.y-hud.safe_inset_bottom()-16-sheet.size.y)
+
+# Bag contents in one row of small cells with the total on the right.
+func bag_strip(parent: Node, at: Vector2, width: float) -> float:
 	var rows: int = model.bag.size()
-	var bag_height := 64.0+maxf(1,rows)*42+(10 if rows>0 else 16)
-	var bag := slab(self,Vector2(bag_x,bag_y),Vector2(bag_width,bag_height))
-	text(bag,"Рюкзак",Vector2(20,16),Vector2(120,26),18,INK,"display")
-	text(bag,"%d из %d" % [rows,model.bag_capacity()],Vector2(106,19),Vector2(120,22),14,INK_SOFT)
+	text(parent,"Рюкзак",at,Vector2(120,24),17,INK,"display")
+	text(parent,"%d из %d" % [rows,model.bag_capacity()],at+Vector2(82,3),Vector2(80,20),13,INK_SOFT)
 	var total := str(model.bag_value())
 	var total_width: float = hud.heading_font.get_string_size(total,HORIZONTAL_ALIGNMENT_LEFT,-1,18).x
-	coin_amount(bag,model.bag_value(),Vector2(bag_width-20-total_width-27,16),18)
+	coin_amount(parent,model.bag_value(),at+Vector2(width-total_width-27,0),18)
 	if model.bag.is_empty():
-		paragraph(bag,"Пусто. Находки на уступах попадут сюда.",Vector2(20,62),Vector2(bag_width-40,24),14)
-	else:
-		for index in range(rows):
-			var item: Dictionary = model.bag[index]
-			var row_y := 58+index*42
-			var slot := BagSlot.new()
-			slot.item = item
-			slot.rare = model.item_is_rare(item)
-			slot.position = Vector2(20,row_y)
-			slot.size = Vector2(36,36)
-			slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			bag.add_child(slot)
-			text(bag,GameModel.loot_name(item),Vector2(68,row_y+6),Vector2(bag_width-200,24),15,INK)
-			if slot.rare or str(item.get("family","valuable"))!="valuable": text(bag,ItemCatalog.family_name(item),Vector2(bag_width-188,row_y+8),Vector2(76,20),12,COIN,"strong")
-			var value := text(bag,str(int(item["value"])),Vector2(bag_width-112,row_y+5),Vector2(92,26),17,INK,"display")
-			value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	var actions_y := 300.0 if landscape else bag_y+bag_height+22
-	action(self,"Продолжить восхождение",Vector2(28,actions_y),Vector2(column,64),game.unpause,"primary").add_theme_font_size_override("font_size",21)
-	action(self,"Выйти из тренировки" if practice else "В лагерь",Vector2(28,actions_y+78),Vector2(column,52),game.show_menu)
-	action(self,"Завершить тренировку" if practice else "Завершить и забрать награду",Vector2(28,actions_y+140),Vector2(column,48),func(): game.finish_run(false),"ghost")
-	if landscape:
-		var help := "Стик задаёт направление, отпускание — бросок или отцепление. Канат: держи строго вверх или вниз 0,28 секунды." if hud.touch_controls_hint else "A / D — раскачка, W / S — длина каната.\nПробел — отцепиться, ЛКМ — следующий бросок."
-		paragraph(self,help,Vector2(bag_x,bag_y+bag_height+18),Vector2(bag_width,48),13)
+		text(parent,"Пусто. Находки с уступов попадут сюда.",at+Vector2(0,34),Vector2(width,20),14,INK_SOFT)
+		return 60.0
+	for index in range(rows):
+		var item: Dictionary = model.bag[index]
+		var slot := BagSlot.new()
+		slot.item = item
+		slot.rare = model.item_is_rare(item)
+		slot.position = at+Vector2(index*48,32)
+		slot.size = Vector2(42,42)
+		slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		slot.tooltip_text = GameModel.loot_name(item)
+		parent.add_child(slot)
+	return 82.0
 
-# Sets, landmarks, materials, tokens and spent items: what changed beyond gold.
+func rule(parent: Node, at: Vector2, width: float) -> void:
+	var line := ColorRect.new()
+	line.color = Color(STONE_LIP,.8)
+	line.position = at
+	line.size = Vector2(width,2)
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(line)
+
+func build_pause() -> void:
+	var practice: bool = game.run_mode=="practice"
+	var sheet := open_sheet()
+	var inner := sheet_width()-SHEET_PAD*2
+	var x := SHEET_PAD
+	var y := SHEET_PAD
+	text(sheet,"Пауза",Vector2(x,y-2),Vector2(inner*.6,40),30,INK,"display")
+	var clock := text(sheet,time_string(game.run_seconds)+" в пути",Vector2(x+inner*.5,y+8),Vector2(inner*.5,22),15,INK_SOFT)
+	clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	y += 46
+	paragraph(sheet,"Тренировка: кошелёк и снаряжение не меняются." if practice else "Попытка сохранится, даже если выйти в лагерь.",Vector2(x,y),Vector2(inner,20),14)
+	y += 30
+	var climbed := maxi(0,roundi((game.sim.highest-game.START_Y)*10))
+	if not practice:
+		route(sheet,Vector2(x,y),inner,climbed)
+		y += RouteLine.HEIGHT+14
+		rule(sheet,Vector2(x,y),inner)
+		y += 16
+		y += bag_strip(sheet,Vector2(x,y),inner)+14
+	else:
+		height_figure(sheet,climbed,Vector2(x,y),48)
+		y += 70
+	action(sheet,"Продолжить",Vector2(x,y),Vector2(inner,64),game.unpause,"primary").add_theme_font_size_override("font_size",22)
+	y += 76
+	var half := (inner-10)*.5
+	action(sheet,"Выйти" if practice else "В лагерь",Vector2(x,y),Vector2(half,52),game.show_menu)
+	var finish := action(sheet,"Завершить" if practice else "Забрать награду",Vector2(x+half+10,y),Vector2(half,52),func(): game.finish_run(false))
+	finish.tooltip_text = "Завершить попытку и оформить награду за пройденное."
+	y += 52
+	close_sheet(sheet,y)
+
+func build_revive(reason: String) -> void:
+	var available: bool = game.revive_available()
+	var return_y: float = game.safe_contact.y-2.8 if game.safe_anchor_id>=0 else game.safe_position.y
+	var return_height := maxi(0,roundi((return_y-game.START_Y)*10))
+	var sheet := open_sheet()
+	var inner := sheet_width()-SHEET_PAD*2
+	var x := SHEET_PAD
+	var y := SHEET_PAD
+	text(sheet,"Ещё один шанс" if available else "Опоры рядом нет",Vector2(x,y-2),Vector2(inner,40),30,INK,"display")
+	y += 42
+	paragraph(sheet,reason,Vector2(x,y),Vector2(inner,20),15)
+	y += 34
+	if available:
+		# Where the climb resumes, as one clear line.
+		var spot := slab(sheet,Vector2(x,y),Vector2(inner,64),Color(STONE,.7),Color.TRANSPARENT,0)
+		text(spot,"Вернёшься к опоре",Vector2(16,10),Vector2(inner-150,22),16,INK,"strong")
+		text(spot,"Высота и рюкзак сохранятся",Vector2(16,33),Vector2(inner-150,20),13,INK_SOFT)
+		var figure := text(spot,"%d м" % return_height,Vector2(inner-150,12),Vector2(134,40),30,INK,"display")
+		figure.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		y += 80
+	else:
+		paragraph(sheet,"На этом участке не осталось безопасной цепочки опор. Забери награду или начни заново.",Vector2(x,y),Vector2(inner,40),14)
+		y += 56
+	var price := int(model.balance["diamond_revive_cost"])
+	var owned := int(model.profile["diamonds"])
+	if available:
+		var diamonds := action(sheet,"Продолжить за %d %s" % [price,plural(price,"алмаз","алмаза","алмазов")],Vector2(x,y),Vector2(inner,64),func(): game.revive("diamonds"),"primary")
+		diamonds.add_theme_font_size_override("font_size",20)
+		diamonds.disabled = owned<price
+		y += 70
+		symbol(sheet,13,Vector2(x,y+1),Vector2(18,18),CRYSTAL)
+		text(sheet,"У тебя %d %s" % [owned,plural(owned,"алмаз","алмаза","алмазов")] if owned>=price else "Не хватает алмазов: есть %d из %d" % [owned,price],Vector2(x+24,y),Vector2(inner-24,20),13,INK_SOFT if owned>=price else DANGER)
+		y += 30
+		if game.ads.supported:
+			var ad_ready: bool = game.ads.rewarded_ready
+			var ad := action(sheet,"Посмотреть рекламу и продолжить" if ad_ready else "Реклама загружается…",Vector2(x,y),Vector2(inner,52),game.request_ad_revive)
+			ad.disabled = game.ads.fullscreen or not ad_ready
+			y += 64
+		elif OS.is_debug_build():
+			action(sheet,"Тестовое продолжение",Vector2(x,y),Vector2(inner,52),func(): game.revive("test_ad"))
+			y += 64
+	var half := (inner-10)*.5
+	# Without a rescue, starting over is the way forward.
+	var restart := action(sheet,"Начать заново",Vector2(x,y),Vector2(half,52),game.restart_failed_run,"secondary" if available else "primary")
+	restart.add_theme_font_size_override("font_size",17)
+	action(sheet,"Забрать награду",Vector2(x+half+10,y),Vector2(half,52),func(): game.finish_run(false))
+	y += 52
+	close_sheet(sheet,y)
+
+# Sets, landmarks, materials and spent items: what changed beyond gold.
 static func progress_line(result: Dictionary) -> String:
 	var parts: Array = []
 	for entry in result.get("sets",[]):
@@ -76,51 +163,9 @@ static func progress_line(result: Dictionary) -> String:
 	for id in result.get("landmarks",[]): parts.append("ориентир: "+str(ItemCatalog.balance()["sets"].get(id,{}).get("landmark",id)))
 	var materials: Dictionary = result.get("materials",{})
 	for id in materials.keys(): parts.append("%s +%d" % [ItemCatalog.material_name(id),int(materials[id])])
-	if int(result.get("tokens",0))>0: parts.append("жетоны мастерства +%d" % int(result["tokens"]))
 	var spent: Array = result.get("spent",[])
 	if not spent.is_empty(): parts.append("использовано: "+", ".join(spent.map(func(id): return str(ItemCatalog.consumable(str(id)).get("name",id)))))
 	return " · ".join(parts) if not parts.is_empty() else "Комплекты, материалы и контракты — на боковых ветках."
-
-func build_revive(reason: String) -> void:
-	var available: bool = game.revive_available()
-	var return_y: float = game.safe_contact.y-2.8 if game.safe_anchor_id>=0 else game.safe_position.y
-	var return_height := maxi(0,roundi((return_y-game.START_Y)*10))
-	var column := 480.0 if landscape else 484.0
-	heading("Ещё один шанс",reason,column)
-	var rescue := slab(self,Vector2(28,140),Vector2(column,200))
-	if available:
-		text(rescue,"Вернёшься к опоре на высоте",Vector2(20,16),Vector2(column-40,22),14,INK_SOFT)
-		height_figure(rescue,return_height,Vector2(20,38),58)
-		paragraph(rescue,"Высота попытки и рюкзак сохранятся. Продолжить можно один раз за попытку.",Vector2(20,124),Vector2(column-40,48),14)
-	else:
-		text(rescue,"Опоры рядом нет",Vector2(20,18),Vector2(column-40,40),28,INK,"display")
-		paragraph(rescue,"На этом участке не осталось безопасной цепочки опор. Заверши попытку, чтобы забрать награду.",Vector2(20,66),Vector2(column-40,72),15)
-	var x := 556.0 if landscape else 28.0
-	var y := 140.0 if landscape else 366.0
-	var width := 496.0 if landscape else 484.0
-	var price := int(model.balance["diamond_revive_cost"])
-	var owned := int(model.profile["diamonds"])
-	var diamonds := action(self,"Продолжить за %d %s" % [price,plural(price,"алмаз","алмаза","алмазов")],Vector2(x,y),Vector2(width,64),func(): game.revive("diamonds"),"primary")
-	diamonds.add_theme_font_size_override("font_size",20)
-	diamonds.disabled = not available or owned<price
-	var wallet_line := slab(self,Vector2(x,y+76),Vector2(width,40),Color(STONE,.0),Color.TRANSPARENT,0)
-	symbol(wallet_line,13,Vector2(0,8),Vector2(20,20),CRYSTAL)
-	text(wallet_line,"У тебя %d %s" % [owned,plural(owned,"алмаз","алмаза","алмазов")] if owned>=price else "Не хватает алмазов: есть %d из %d" % [owned,price],Vector2(28,8),Vector2(width-28,22),14,INK_SOFT if owned>=price else DANGER)
-	if game.ads.supported:
-		var ad_ready: bool = game.ads.rewarded_ready
-		var ad := action(self,"Посмотреть рекламу и продолжить" if ad_ready else "Реклама пока недоступна",Vector2(x,y+126),Vector2(width,52),game.request_ad_revive)
-		ad.disabled = not available or game.ads.fullscreen
-		paragraph(self,"Продолжение после полного просмотра." if ad_ready else "Нажми ещё раз через несколько секунд.",Vector2(x,y+186),Vector2(width,22),13)
-	elif OS.is_debug_build():
-		var test_ad := action(self,"Тестовое продолжение",Vector2(x,y+126),Vector2(width,52),func(): game.revive("test_ad"))
-		test_ad.disabled = not available
-		paragraph(self,"Отладочная сборка: без рекламы.",Vector2(x,y+186),Vector2(width,22),13)
-	else:
-		var ad := action(self,"Реклама пока недоступна",Vector2(x,y+126),Vector2(width,52),func(): pass)
-		ad.disabled = true
-	action(self,"Завершить и забрать награду",Vector2(x,y+226),Vector2(width,48),func(): game.finish_run(false),"ghost")
-	var restart := action(self,"Начать заново",Vector2(x,y+282),Vector2(width,52),game.restart_failed_run,"primary")
-	restart.add_theme_font_size_override("font_size",18)
 
 func build_result(result: Dictionary) -> void:
 	var practice: bool = result.get("mode","")=="practice"
@@ -156,7 +201,7 @@ func build_result(result: Dictionary) -> void:
 			var muted: bool = int(rows[index][1])==0
 			text(reward,rows[index][0],Vector2(20,row_y),Vector2(right_width-140,22),14,INK_FAINT if muted else INK_SOFT)
 			text(reward,"+%d" % rows[index][1],Vector2(right_width-120,row_y),Vector2(100,22),15,INK_FAINT if muted else INK,"display").horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		paragraph(reward,progress_line(result),Vector2(20,196),Vector2(right_width-40,40),12,MOSS if int(result.get("tokens",0))>0 else INK_SOFT).name = "Progress"
+		paragraph(reward,progress_line(result),Vector2(20,196),Vector2(right_width-40,40),12,INK_SOFT).name = "Progress"
 		var rule := ColorRect.new()
 		rule.color = STONE_LIP
 		rule.position = Vector2(20,240)

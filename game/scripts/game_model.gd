@@ -12,7 +12,7 @@ const RECOVERY := 5
 const THROW := 6
 # Release slow motion: four levels of decision time.
 const SLOWMO := 7
-const BUILD_VERSION := "0.15.4"
+const BUILD_VERSION := "0.15.5"
 const PROFILE_VERSION := 6
 const HOOK_NAMES = ["Одинарный", "Тройной", "2 одинарных", "2 тройных"]
 const ZONE_NAMES = ["Лес", "Скалы", "Руины", "Лёд", "Вулкан", "Небеса"]
@@ -747,20 +747,25 @@ func set_loadout(slot: int, id: String) -> String:
 	save()
 	return "Слот %d: %s" % [slot+1,str(ItemCatalog.consumable(id)["name"]) if not id.is_empty() else "пусто"]
 
-# The items a new run carries: loadout entries in stock, one charge each.
+# What the next run carries: one charge of every item in stock. Buying an
+# item is buying it for the next run; there are no slots to fill.
 func run_items() -> Array:
 	var result: Array = []
-	for id in profile["active_loadout"]:
-		if str(id).is_empty() or stock(str(id))<=0: continue
-		result.append({"id":str(id),"used":false})
+	for definition in ItemCatalog.consumables():
+		var id := str(definition["id"])
+		if stock(id)>0: result.append({"id":id,"used":false})
 	return result
 
-# Spends one charge of a carried item; the caller saves the snapshot at once.
+# Starts a run: the carried charges leave the stock at once, so a bought
+# item is always spent on the run it was bought for.
+func take_run_items() -> Array:
+	var result := run_items()
+	for entry in result: profile["consumable_stock"][entry["id"]] = stock(str(entry["id"]))-1
+	return result
+
+# Uses a carried item during the run (its charge left the stock at the start).
 func spend_item(items: Array, index: int) -> bool:
 	if index<0 or index>=items.size() or bool(items[index]["used"]): return false
-	var id := str(items[index]["id"])
-	if stock(id)<=0: return false
-	profile["consumable_stock"][id] = stock(id)-1
 	items[index]["used"] = true
 	return true
 
@@ -852,14 +857,13 @@ func location_requirement(index: int) -> String:
 	var parts: Array = []
 	if unlock.has("cleared"): parts.append("вершина «%s»" % str(balance["locations"][int(unlock["cleared"])]["name"]))
 	if unlock.has("gold"): parts.append("%d золота" % int(unlock["gold"]))
-	if unlock.has("tokens"): parts.append("%d жетонов мастерства" % int(unlock["tokens"]))
 	if unlock.has("diamonds"): parts.append("%d алмазов" % int(unlock["diamonds"]))
 	return " + ".join(parts)
 
 func location_ready(index: int) -> bool:
 	var unlock := location_unlock(index)
 	if unlock.has("cleared") and not profile["cleared_locations"].has(int(unlock["cleared"])): return false
-	return int(profile["gold"])>=int(unlock.get("gold",0)) and int(profile["diamonds"])>=int(unlock.get("diamonds",0)) and int(profile["mastery_tokens"])>=int(unlock.get("tokens",0))
+	return int(profile["gold"])>=int(unlock.get("gold",0)) and int(profile["diamonds"])>=int(unlock.get("diamonds",0))
 
 func purchase_location(index: int) -> String:
 	if index<0 or index>=balance["locations"].size():
@@ -875,7 +879,6 @@ func purchase_location(index: int) -> String:
 		return "Нужно: "+location_requirement(index)
 	profile["gold"] -= int(unlock.get("gold",0))
 	profile["diamonds"] -= int(unlock.get("diamonds",0))
-	# Mastery tokens are a threshold, not spent: they also mark progress.
 	profile["locations"].append(index)
 	save()
 	return "Открыта: " + str(balance["locations"][index]["name"])

@@ -12,7 +12,7 @@ const RECOVERY := 5
 const THROW := 6
 # Release slow motion: four levels of decision time.
 const SLOWMO := 7
-const BUILD_VERSION := "0.15.3"
+const BUILD_VERSION := "0.15.4"
 const PROFILE_VERSION := 6
 const HOOK_NAMES = ["Одинарный", "Тройной", "2 одинарных", "2 тройных"]
 const ZONE_NAMES = ["Лес", "Скалы", "Руины", "Лёд", "Вулкан", "Небеса"]

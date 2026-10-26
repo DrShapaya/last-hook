@@ -12,6 +12,7 @@ class FakeAds extends RefCounted:
 	signal interstitial_closed
 	signal ad_failed(kind: String, message: String)
 	signal banner_height_changed(height: int)
+	signal banner_slot_height_changed(slot: String, height: int)
 	var rewards_shown := 0
 	var interstitials_shown := 0
 	var reward_loads := 0
@@ -26,6 +27,14 @@ class FakeAds extends RefCounted:
 		reward_id = id
 	func loadInterstitial(_id: String) -> void: interstitial_loads += 1
 	func loadBanner(_id: String) -> void: banners_loaded += 1
+	var play_banner_visible := false
+	var play_banner_id := ""
+	func loadBannerSlot(slot: String, id: String) -> void:
+		if slot=="menu": banners_loaded += 1
+		else: play_banner_id = id
+	func setBannerSlotVisible(slot: String, visible: bool) -> void:
+		if slot=="menu": banner_visible = visible
+		else: play_banner_visible = visible
 	func showRewarded() -> void: rewards_shown += 1
 	func showInterstitial() -> void: interstitials_shown += 1
 	func setBannerVisible(visible: bool) -> void: banner_visible = visible
@@ -86,7 +95,7 @@ func run_tests() -> void:
 	# while the section bar stays anchored to the bottom.
 	for dimensions in [Vector2i(432,960),Vector2i(540,960),Vector2i(1280,800)]:
 		root.size = dimensions
-		native.banner_height_changed.emit(110)
+		native.banner_slot_height_changed.emit("menu",110)
 		await flush()
 		var first := INF
 		var lowest := 0.0
@@ -95,8 +104,20 @@ func run_tests() -> void:
 			lowest = maxf(lowest,button.get_global_rect().end.y)
 		check(first>=110,"menu controls start below the top banner at %s" % dimensions)
 		check(lowest<=game.get_viewport().get_visible_rect().size.y+1,"menu controls stay inside the viewport at %s" % dimensions)
+	# The climb has its own banner (unit 4), as tall and also at the top; the
+	# run's top chrome starts below it.
+	root.size = Vector2i(540,960)
+	game.start_run(false)
+	await flush()
+	check(native.play_banner_visible and not native.banner_visible and native.play_banner_id=="demo-banner-yandex","the climb shows its own banner instead of the menu's")
+	native.banner_slot_height_changed.emit("play",110)
+	await flush()
+	check(game.hud.height_plate.get_global_rect().position.y>=110 and game.hud.pause_button.get_global_rect().position.y>=110,"the climb's top chrome starts below the gameplay banner")
+	game.show_menu()
+	await flush()
+	check(native.banner_visible and not native.play_banner_visible,"the menu swaps back to the menu banner")
 	rescue_fixture(game)
-	check(not native.banner_visible,"banner hides before gameplay and modal screens")
+	check(not native.banner_visible and not native.play_banner_visible,"banners hide on modal screens")
 	var test_buttons := 0
 	for button in game.hud.content.find_children("*","Button",true,false):
 		if button.text=="Тестовое продолжение": test_buttons += 1
@@ -200,7 +221,7 @@ func run_tests() -> void:
 	root.add_child(production)
 	production.attach_backend(FakeAds.new(),false)
 	await flush()
-	check(production.units=={"revive_rewarded":"R-M-20238117-1","level_complete_interstitial":"R-M-20238117-2","main_menu_banner":"R-M-20238117-3"},"release config uses all three owner-provided IDs")
+	check(production.units=={"revive_rewarded":"R-M-20238117-1","level_complete_interstitial":"R-M-20238117-2","main_menu_banner":"R-M-20238117-3","gameplay_banner":"R-M-20238117-4"},"release config uses all four owner-provided IDs")
 	production.queue_free()
 	var report := FileAccess.open(directory.path_join("ads-test-report.json"),FileAccess.WRITE)
 	report.store_string(JSON.stringify({"checks":checks,"failures":failures,"passed":failures.is_empty()},"\t"))

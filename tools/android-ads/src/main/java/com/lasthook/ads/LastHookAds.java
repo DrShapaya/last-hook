@@ -15,16 +15,16 @@ import org.godotengine.godot.Godot;
 import org.godotengine.godot.plugin.GodotPlugin;
 import org.godotengine.godot.plugin.SignalInfo;
 import org.godotengine.godot.plugin.UsedByGodot;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 /** All SDK work runs on Android's UI thread. Godot receives queued signals. */
 public final class LastHookAds extends GodotPlugin {
-    private boolean ready, initializing, destroyed, fullscreen, bannerWanted;
+    private boolean ready, initializing, destroyed, fullscreen;
     private String appMetricaApiKey = "";
     private boolean appMetricaActivated;
-    private BannerAdView banner;
-    private FrameLayout bannerContainer;
     private RewardedAdLoader rewardedLoader;
     private InterstitialAdLoader interstitialLoader;
     private RewardedAd rewarded;
@@ -41,6 +41,7 @@ public final class LastHookAds extends GodotPlugin {
         }
         signals.add(new SignalInfo("ad_failed", String.class, String.class));
         signals.add(new SignalInfo("banner_height_changed", Integer.class));
+        signals.add(new SignalInfo("banner_slot_height_changed", String.class, Integer.class));
         return signals;
     }
 
@@ -209,20 +210,55 @@ public final class LastHookAds extends GodotPlugin {
         });
     }
 
-    @UsedByGodot public void setBannerVisible(boolean visible) {
+    /** One banner placement: the menu banner or the gameplay banner. */
+    private static final class BannerSlot {
+        BannerAdView banner;
+        FrameLayout container;
+        BannerAdSize size;
+        // Height of the loaded banner in pixels; 0 while nothing is loaded.
+        int loadedHeight;
+        boolean wanted;
+    }
+    private final Map<String, BannerSlot> slots = new HashMap<>();
+
+    private BannerSlot slot(String name) {
+        BannerSlot result = slots.get(name);
+        if (result == null) {
+            result = new BannerSlot();
+            slots.put(name, result);
+        }
+        return result;
+    }
+
+    private void emitHeight(String name, int height) {
+        emitSignal("banner_slot_height_changed", name, height);
+        if ("menu".equals(name)) emitSignal("banner_height_changed", height);
+    }
+
+    // The menu banner keeps its original entry points.
+    @UsedByGodot public void setBannerVisible(boolean visible) { setBannerSlotVisible("menu", visible); }
+    @UsedByGodot public void loadBanner(String id) { loadBannerSlot("menu", id); }
+
+    @UsedByGodot public void setBannerSlotVisible(String name, boolean visible) {
         ui(() -> {
-            bannerWanted = visible;
-            if (bannerContainer != null) {
-                bannerContainer.setVisibility(visible ? View.VISIBLE : View.GONE);
-                if (visible) bannerContainer.bringToFront();
+            BannerSlot slot = slot(name);
+            slot.wanted = visible;
+            if (slot.container != null) {
+                // INVISIBLE, never GONE: a GONE view is not measured, so a
+                // banner that loaded while hidden reported no height.
+                slot.container.setVisibility(visible && slot.loadedHeight > 0 ? View.VISIBLE : View.INVISIBLE);
+                if (visible) slot.container.bringToFront();
             }
+            // The screen lays itself out below the banner each time it shows.
+            if (visible && slot.loadedHeight > 0) emitHeight(name, slot.loadedHeight);
         });
     }
 
-    @UsedByGodot public void loadBanner(String id) {
+    @UsedByGodot public void loadBannerSlot(String name, String id) {
         ui(() -> {
             if (!ready) return;
-            destroyBanner();
+            destroyBanner(name);
+            final BannerSlot slot = slot(name);
             Activity activity = getActivity();
             ViewGroup parent = (ViewGroup) activity.getWindow().getDecorView();
             int widthPixels = parent.getWidth();
@@ -230,42 +266,44 @@ public final class LastHookAds extends GodotPlugin {
             float density = activity.getResources().getDisplayMetrics().density;
             if (density <= 0f) density = 1f;
             int widthDp = Math.round(widthPixels / density);
+            // Both placements share one height rule, so they are the same size.
             int maxBannerHeightDp = widthDp > 728 ? 90 : 55;
             BannerAdSize size = BannerAdSize.inline(activity, widthDp, maxBannerHeightDp);
-            banner = new BannerAdView(activity);
-            banner.setAdSize(size);
-            bannerContainer = new FrameLayout(activity);
+            slot.size = size;
+            slot.loadedHeight = 0;
+            slot.banner = new BannerAdView(activity);
+            slot.banner.setAdSize(size);
+            slot.container = new FrameLayout(activity);
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, size.getHeightInPixels(activity));
-            // The main-menu banner belongs to the top safe area. Keeping it
-            // outside the bottom navigation prevents a black placeholder from
-            // appearing under the menu and leaves the lower bar anchored.
+            // Banners belong to the top safe area, clear of the bottom
+            // navigation and the thumb zone.
             params.gravity = Gravity.TOP;
-            parent.addView(bannerContainer, params);
+            parent.addView(slot.container, params);
             // Godot's render surface can be a SurfaceView/TextureView. Keep the
             // banner in the decor overlay and explicitly raise it after every
             // load so it cannot end up behind the game surface.
-            bannerContainer.setElevation(1000f);
-            bannerContainer.setTranslationZ(1000f);
-            bannerContainer.setClipChildren(false);
+            slot.container.setElevation(1000f);
+            slot.container.setTranslationZ(1000f);
+            slot.container.setClipChildren(false);
             FrameLayout.LayoutParams childParams = new FrameLayout.LayoutParams(
                     size.getWidthInPixels(activity), size.getHeightInPixels(activity), Gravity.CENTER);
-            bannerContainer.addView(banner, childParams);
-            // Do not reserve or cover the top of the Godot canvas while the
-            // request is still loading. The menu moves only after the first
-            // measured, visible banner is ready.
-            bannerContainer.setVisibility(View.GONE);
+            slot.container.addView(slot.banner, childParams);
+            // Hidden while loading, but laid out (INVISIBLE, not GONE), so the
+            // loaded banner can be measured. The screen moves only once it is.
+            slot.container.setVisibility(View.INVISIBLE);
+            final BannerAdView banner = slot.banner;
             banner.setBannerAdEventListener(new BannerAdEventListener() {
                 @Override public void onAdLoaded() {
-                    measureBanner(0);
+                    measureBanner(name, banner, 0);
                 }
                 @Override public void onAdClicked() {}
                 @Override public void onImpression(ImpressionData data) {}
                 @Override public void onAdFailedToLoad(AdRequestError error) {
-                    if (!destroyed) {
-                        if (bannerContainer != null) bannerContainer.setVisibility(View.GONE);
-                        failed("banner_load", error.getDescription());
-                    }
+                    if (destroyed || slot.banner != banner) return;
+                    slot.loadedHeight = 0;
+                    if (slot.container != null) slot.container.setVisibility(View.INVISIBLE);
+                    failed("menu".equals(name) ? "banner_load" : "banner" + name + "_load", error.getDescription());
                 }
             });
             banner.loadAd(new AdRequest.Builder(id).build());
@@ -273,41 +311,49 @@ public final class LastHookAds extends GodotPlugin {
     }
 
     /** onAdLoaded can arrive before Android has measured the inline slot. */
-    private void measureBanner(final int attempt) {
+    private void measureBanner(final String name, final BannerAdView banner, final int attempt) {
         ui(() -> {
-            if (destroyed || banner == null || bannerContainer == null) return;
+            BannerSlot slot = slot(name);
+            if (destroyed || slot.banner != banner || slot.container == null) return;
             int measured = banner.getHeight();
-            if (measured <= 0) {
-                if (attempt < 8) bannerContainer.postDelayed(() -> measureBanner(attempt + 1), 50L);
+            if (measured <= 0 && attempt < 8) {
+                slot.container.postDelayed(() -> measureBanner(name, banner, attempt + 1), 50L);
                 return;
             }
-            ViewGroup.LayoutParams lp = bannerContainer.getLayoutParams();
+            // Never give up silently: fall back to the size the slot was made for.
+            if (measured <= 0 && slot.size != null) measured = slot.size.getHeightInPixels(getActivity());
+            if (measured <= 0) return;
+            slot.loadedHeight = measured;
+            ViewGroup.LayoutParams lp = slot.container.getLayoutParams();
             if (lp != null && lp.height != measured) {
                 lp.height = measured;
-                bannerContainer.setLayoutParams(lp);
+                slot.container.setLayoutParams(lp);
             }
-            bannerContainer.setVisibility(bannerWanted ? View.VISIBLE : View.GONE);
-            if (bannerWanted) bannerContainer.bringToFront();
-            emitSignal("banner_height_changed", measured);
+            slot.container.setVisibility(slot.wanted ? View.VISIBLE : View.INVISIBLE);
+            if (slot.wanted) slot.container.bringToFront();
+            emitHeight(name, measured);
         });
     }
 
-    private void destroyBanner() {
-        if (banner != null) {
-            banner.setBannerAdEventListener(null);
-            banner.destroy();
-            banner = null;
+    private void destroyBanner(String name) {
+        BannerSlot slot = slots.get(name);
+        if (slot == null) return;
+        slot.loadedHeight = 0;
+        if (slot.banner != null) {
+            slot.banner.setBannerAdEventListener(null);
+            slot.banner.destroy();
+            slot.banner = null;
         }
-        if (bannerContainer != null) {
-            ViewGroup parent = (ViewGroup) bannerContainer.getParent();
-            if (parent != null) parent.removeView(bannerContainer);
-            bannerContainer = null;
+        if (slot.container != null) {
+            ViewGroup parent = (ViewGroup) slot.container.getParent();
+            if (parent != null) parent.removeView(slot.container);
+            slot.container = null;
         }
     }
 
     @Override public void onMainDestroy() {
         destroyed = true;
-        destroyBanner();
+        for (String name : slots.keySet().toArray(new String[0])) destroyBanner(name);
         if (rewardedLoader != null) rewardedLoader.cancelLoading();
         if (interstitialLoader != null) interstitialLoader.cancelLoading();
         if (rewarded != null) rewarded.setAdEventListener(null);

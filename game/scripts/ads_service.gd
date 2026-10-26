@@ -17,11 +17,18 @@ var initialized := false
 var rewarded_ready := false
 var interstitial_ready := false
 var fullscreen := false
+# Two banner placements of the same size at the top of the screen: the main
+# menu's and the climb's. Each has its own ad unit, wish to be shown, request
+# state and measured native height; a screen makes room only for its own.
+const BANNERS := {"menu":"main_menu_banner","play":"gameplay_banner"}
 var banner_height := 0
+var gameplay_banner_height := 0
+var _wanted := {"menu":false,"play":false}
+var _requested := {"menu":false,"play":false}
+var _native_heights := {"menu":0,"play":0}
 var test_mode := true
 var units: Dictionary = {}
 var _menu := false
-var _banner_requested := false
 var _reward_earned := false
 var _showing := ""
 var _loading: Dictionary = {}
@@ -41,7 +48,7 @@ func attach_backend(native: Object, use_demo_units: bool) -> void:
 	if backend.has_method("setAppMetricaApiKey"):
 		backend.call("setAppMetricaApiKey",str(appmetrica_config.get("api_key","")))
 	if test_mode:
-		units = {"revive_rewarded":"demo-rewarded-yandex", "level_complete_interstitial":"demo-interstitial-yandex", "main_menu_banner":"demo-banner-yandex"}
+		units = {"revive_rewarded":"demo-rewarded-yandex", "level_complete_interstitial":"demo-interstitial-yandex", "main_menu_banner":"demo-banner-yandex", "gameplay_banner":"demo-banner-yandex"}
 	supported = true
 	backend.connect("initialized",_on_initialized,CONNECT_DEFERRED)
 	backend.connect("rewarded_loaded",_on_rewarded_loaded,CONNECT_DEFERRED)
@@ -50,11 +57,12 @@ func attach_backend(native: Object, use_demo_units: bool) -> void:
 	backend.connect("rewarded_closed",_on_rewarded_closed,CONNECT_DEFERRED)
 	backend.connect("interstitial_closed",_on_interstitial_closed,CONNECT_DEFERRED)
 	backend.connect("ad_failed",_on_failed,CONNECT_DEFERRED)
-	backend.connect("banner_height_changed",_on_banner_height,CONNECT_DEFERRED)
-	# The menu asked for its banner before the plugin was attached (setup
+	backend.connect("banner_slot_height_changed",_on_banner_height,CONNECT_DEFERRED)
+	# A screen asked for its banner before the plugin was attached (setup
 	# runs a frame later): pass that wish on now, or the banner loads hidden
-	# and shows only after the next menu refresh.
-	if _menu: backend.call("setBannerVisible",not fullscreen)
+	# and shows only after the next screen switch.
+	for name in BANNERS:
+		if _wanted[name]: backend.call("setBannerSlotVisible",name,not fullscreen)
 	backend.call("initialize")
 
 func _on_initialized() -> void:
@@ -62,7 +70,8 @@ func _on_initialized() -> void:
 	initialized = true
 	_report_event("app_initialized")
 	preload_fullscreen()
-	if _menu: _load_banner()
+	for name in BANNERS:
+		if _wanted[name]: _load_banner(name)
 	availability_changed.emit()
 
 func _now() -> float:
@@ -81,20 +90,33 @@ func preload_fullscreen() -> void:
 
 func set_main_menu(visible: bool) -> void:
 	_menu = visible
-	if not visible and banner_height!=0:
-		banner_height = 0
-		banner_layout_changed.emit()
-	if not supported: return
-	backend.call("setBannerVisible",visible and not fullscreen)
-	if visible and not _banner_requested: _load_banner()
+	_set_banner("menu",visible)
 
-func _load_banner() -> void:
-	if not _can_load("banner"): return
-	_banner_requested = true
-	backend.call("loadBanner",str(units["main_menu_banner"]))
+# The climb's own banner: shown while a run is played.
+func set_gameplay(visible: bool) -> void:
+	_set_banner("play",visible)
+
+func _set_banner(name: String, visible: bool) -> void:
+	_wanted[name] = visible
+	_apply_banner_height()
+	if not supported: return
+	backend.call("setBannerSlotVisible",name,visible and not fullscreen)
+	if visible and not bool(_requested[name]): _load_banner(name)
+
+# Failures and retries are kept per placement ("banner", "bannerplay").
+static func _banner_kind(name: String) -> String:
+	return "banner" if name=="menu" else "banner"+name
+
+func _load_banner(name: String) -> void:
+	if not _can_load(_banner_kind(name)) or not units.has(BANNERS[name]): return
+	_requested[name] = true
+	backend.call("loadBannerSlot",name,str(units[BANNERS[name]]))
 
 func menu_banner_height() -> int:
 	return banner_height if supported and _menu else 0
+
+func play_banner_height() -> int:
+	return gameplay_banner_height if supported and bool(_wanted["play"]) else 0
 
 func request_rewarded() -> bool:
 	if not rewarded_ready or fullscreen:
@@ -122,7 +144,8 @@ func show_level_complete() -> bool:
 
 func _set_fullscreen(active: bool) -> void:
 	fullscreen = active
-	backend.call("setBannerVisible",_menu and not active)
+	for name in BANNERS: backend.call("setBannerSlotVisible",name,bool(_wanted[name]) and not active)
+	_apply_banner_height()
 	fullscreen_changed.emit(active)
 	availability_changed.emit()
 
@@ -156,11 +179,19 @@ func _on_interstitial_closed() -> void:
 	_set_fullscreen(false)
 	preload_fullscreen()
 
-func _on_banner_height(height: int) -> void:
-	# A native banner reports its reserved size before the ad has loaded. Do
-	# not move the menu for that placeholder; only a visible menu may consume
-	# the measured banner height.
-	banner_height = maxi(0,height) if _menu else 0
+func _on_banner_height(name: String, height: int) -> void:
+	# Sent once a banner has loaded and been measured (and again whenever it
+	# is shown). Only the screen that shows it makes room for it.
+	if not _native_heights.has(name): return
+	_native_heights[name] = maxi(0,height)
+	_apply_banner_height()
+
+func _apply_banner_height() -> void:
+	var menu := int(_native_heights["menu"]) if bool(_wanted["menu"]) and not fullscreen else 0
+	var play := int(_native_heights["play"]) if bool(_wanted["play"]) and not fullscreen else 0
+	if menu==banner_height and play==gameplay_banner_height: return
+	banner_height = menu
+	gameplay_banner_height = play
 	banner_layout_changed.emit()
 
 func _report_event(event_name: String) -> void:
@@ -177,10 +208,11 @@ func _on_failed(kind: String, message: String) -> void:
 	_retry_after[format] = _now()+RETRY_SECONDS
 	if format=="rewarded": rewarded_ready = false
 	if format=="interstitial": interstitial_ready = false
-	if kind=="banner_load": _banner_requested = false
-	if kind=="banner_load":
-		banner_height = 0
-		banner_layout_changed.emit()
+	for name in BANNERS:
+		if kind==_banner_kind(name)+"_load":
+			_requested[name] = false
+			_native_heights[name] = 0
+			_apply_banner_height()
 	if kind.ends_with("_show") and _showing==format:
 		_showing = ""
 		_reward_earned = false
@@ -189,10 +221,15 @@ func _on_failed(kind: String, message: String) -> void:
 	availability_changed.emit()
 
 func _process(_delta: float) -> void:
-	# No retry loop on no-fill/offline errors. A later user action may retry.
+	# A failed banner tries again on its own after RETRY_SECONDS while its
+	# screen stays open; it no longer waits for a screen switch.
+	if initialized and not fullscreen:
+		for name in BANNERS:
+			if bool(_wanted[name]) and not bool(_requested[name]): _load_banner(name)
 	for kind in _loading.keys():
 		if _now()-float(_loading[kind])>LOAD_TIMEOUT:
 			_on_failed(str(kind)+"_load","Loading timed out")
 
 func _exit_tree() -> void:
-	if is_instance_valid(backend): backend.call("setBannerVisible",false)
+	if is_instance_valid(backend):
+		for name in BANNERS: backend.call("setBannerSlotVisible",name,false)

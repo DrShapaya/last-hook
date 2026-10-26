@@ -704,12 +704,14 @@ func show_menu_soon(delay: float = .22) -> void:
 func show_menu() -> void:
 	if layout_mode=="menu" and is_instance_valid(lobby_view):
 		game.ads.set_main_menu(true)
+		game.ads.set_gameplay(false)
 		fit_viewport()
 		lobby_view.refresh_screen()
 		return
 	clear()
 	layout_mode = "menu"
 	game.ads.set_main_menu(true)
+	game.ads.set_gameplay(false)
 	fit_viewport()
 	var lobby := LobbyView.new()
 	lobby_view = lobby
@@ -738,8 +740,15 @@ func cutout_bottom(x_from: float, x_to: float) -> float:
 			bottom = maxf(bottom,screen_to_design(rect.end.y))
 	return bottom
 
+# Top of the climb's chrome over a span: below the display cut-outs and below
+# the gameplay banner when one is shown.
+func play_top(x_from: float, x_to: float, edge: float) -> float:
+	var banner := screen_to_design(game.ads.play_banner_height())
+	return maxf(edge+cutout_bottom(x_from,x_to),banner+(edge*.5 if banner>0.0 else 0.0))
+
 func show_play() -> void:
 	game.ads.set_main_menu(false)
+	game.ads.set_gameplay(true)
 	clear()
 	layout_mode = "play"
 	fit_viewport()
@@ -754,7 +763,7 @@ func show_play() -> void:
 	var width := root.size.x
 	var top := Panel.new()
 	top.size = Vector2(156,60)
-	top.position = Vector2(EDGE,EDGE+cutout_bottom(EDGE,EDGE+top.size.x))
+	top.position = Vector2(EDGE,play_top(EDGE,EDGE+top.size.x,EDGE))
 	top.pivot_offset = top.size*.5
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top.add_theme_stylebox_override("panel",slab_style(PLAY_PANEL,MenuSurface.SLATE_LIP,4,10))
@@ -771,7 +780,7 @@ func show_play() -> void:
 	skin_button(pause_button,"dark")
 	pause_button.custom_minimum_size = Vector2(52,52)
 	pause_button.size = Vector2(52,52)
-	pause_button.position = Vector2(width-EDGE-52,EDGE+cutout_bottom(width-EDGE-52,width-EDGE))
+	pause_button.position = Vector2(width-EDGE-52,play_top(width-EDGE-52,width-EDGE,EDGE))
 	var bars := UiSymbol.new()
 	bars.kind = 18
 	bars.tint = WHITE
@@ -786,7 +795,7 @@ func show_play() -> void:
 	wallet_plate.add_theme_stylebox_override("panel",slab_style(PLAY_PANEL,MenuSurface.SLATE_LIP,3,8))
 	wallet_plate.size = Vector2(96,40)
 	var wallet_x := pause_button.position.x-8-wallet_plate.size.x
-	wallet_plate.position = Vector2(wallet_x,EDGE+6+cutout_bottom(wallet_x,wallet_x+wallet_plate.size.x))
+	wallet_plate.position = Vector2(wallet_x,6+play_top(wallet_x,wallet_x+wallet_plate.size.x,EDGE))
 	wallet_plate.pivot_offset = wallet_plate.size*.5
 	content.add_child(wallet_plate)
 	var wallet_coin := UiSymbol.new()
@@ -1330,6 +1339,7 @@ func show_locations() -> void:
 
 func menu_surface(mode: String) -> ExpeditionMenu:
 	game.ads.set_main_menu(false)
+	game.ads.set_gameplay(false)
 	clear()
 	layout_mode = mode
 	fit_viewport()

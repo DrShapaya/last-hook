@@ -84,6 +84,7 @@ func run_tests() -> void:
 	# --- Treasure sets ---------------------------------------------------------------
 	var leaks := false
 	var named := true
+	var themed_materials := true
 	for location in range(3):
 		var location_id := str(LevelCatalog.level(location)["id"])
 		var other_sheets: Array = []
@@ -97,11 +98,17 @@ func run_tests() -> void:
 				var sprite := str(item.get("sprite",""))
 				named = named and not str(item["name"]).is_empty() and ResourceLoader.exists("res://assets/sprites/"+sprite+".png")
 				for sheet in other_sheets:
-					if sprite.get_file().begins_with(sheet+"_") and not (location==1 and sprite.ends_with("treasure_b_4")): leaks = true
+					if sprite.get_file().begins_with(sheet+"_"): leaks = true
 		for material_id in ["fiber","silk","sinew","core"]:
 			var material := ItemCatalog.dress(ItemCatalog.material(1,location,"act",1,material_id))
 			named = named and ResourceLoader.exists("res://assets/sprites/"+str(material["sprite"])+".png")
+			if material_id!="core":
+				var material_file := str(material["sprite"]).get_file()
+				var material_matches := false
+				for sheet in preload("res://scripts/treasure_models.gd").THEMES[location_id]: material_matches = material_matches or material_file.begins_with(str(sheet)+"_")
+				themed_materials = themed_materials and material_matches
 	check(not leaks,"a find never shows a picture from another expedition's set")
 	check(named,"every dressed find has a name and an existing picture")
+	check(themed_materials,"regional materials use treasure sheets instead of vegetation sprites")
 	print("AUTHORED_TESTS %d checks, %d failures" % [checks,failures.size()])
 	quit(1 if not failures.is_empty() else 0)

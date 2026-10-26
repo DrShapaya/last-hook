@@ -33,7 +33,7 @@ static func build(visuals: MassifVisuals, prop: String, holder: Node3D, random: 
 		"pine_snow":
 			FloraModels.plant(holder,FloraModels.pick("tree_snow",random),detail,.32)
 		"flag", "ribbon":
-			FloraModels.flag(holder,"flag" if prop=="flag" else "pennant","red" if prop=="flag" else "yellow",Vector3(0,-.05,.1),.95,side,detail)
+			FloraModels.flag(holder,"flag" if prop=="flag" else "pennant","",Vector3(0,-.05,.1),.95,side,detail)
 		"mast", "sail", "signal_light":
 			var colour: String = {"mast":FloraModels.COLORS[random.randi_range(0,FloraModels.COLORS.size()-1)],"sail":"white","signal_light":"orange"}[prop]
 			FloraModels.flag(holder,FloraModels.MASTS[random.randi_range(0,1)],colour,Vector3(0,-.05,.1),1.5,side,detail)

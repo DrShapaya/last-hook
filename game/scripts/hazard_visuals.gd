@@ -164,7 +164,9 @@ func _build_field(hazard: Dictionary, entry: Dictionary, random: RandomNumberGen
 		if marker!="mirror":
 			# A flag on its pole flying downwind; the cloth is the part that
 			# flaps (update).
-			FloraModels.flag(holder,"flag" if marker=="flag" else "pennant","red" if marker=="flag" else "yellow",Vector3.ZERO,1.4,1.0 if direction.x>=0 else -1.0,shadows,"plain" if marker=="flag" else "stripes")
+			# Red and yellow keep meaning "wind"; the pattern varies by place,
+			# and a chevron points downwind.
+			FloraModels.flag(holder,"flag" if marker=="flag" else "pennant","red" if marker=="flag" else "yellow",Vector3.ZERO,1.4,1.0 if direction.x>=0 else -1.0,shadows,"",["chevron","stripes","plain"])
 			continue
 		var points := PackedVector3Array()
 		var colors := PackedColorArray()

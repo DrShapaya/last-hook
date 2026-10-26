@@ -25,6 +25,13 @@ func check(condition: bool, message: String) -> void:
 		failures += 1
 		push_error("FAIL: "+message)
 
+func transparent_region(path: String, region: Rect2i) -> bool:
+	var image := (load(path) as Texture2D).get_image()
+	for y in range(region.position.y,mini(region.end.y,image.get_height())):
+		for x in range(region.position.x,mini(region.end.x,image.get_width())):
+			if image.get_pixel(x,y).a>.01: return false
+	return true
+
 func make_world(seed_value: int, quality: String, location: int = 0, version: int = 0) -> MountainWorld:
 	var world := MountainWorld.new()
 	world.visuals_enabled = false
@@ -239,6 +246,9 @@ func run_tests() -> void:
 	for item in visual_items:
 		visual_style_ok = visual_style_ok and LootIcon.rarity_color(item)==LootVisuals.rarity_color(item) and LootVisuals.kind_of(item)==str(item["kind"])
 	check(visual_style_ok,"map and backpack share the same treasure kind and accent palette")
+	check(transparent_region("res://assets/sprites/vegetation/grass_tuft_4.png",Rect2i(0,0,384,32)),"grass tuft has no fragment from the neighbouring texture at its top edge")
+	check(transparent_region("res://assets/sprites/treasures/treasure_a_7.png",Rect2i(0,0,16,52)),"chest sprite has no stray strip at its left edge")
+	check(transparent_region("res://assets/sprites/treasures/treasure_winter_3.png",Rect2i(0,372,352,12)),"winter music box has no detached object below its feet")
 	var old := make_world(58273,"high",0,10)
 	var old_parent := Node3D.new()
 	old.add_child(old_parent)

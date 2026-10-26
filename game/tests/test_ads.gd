@@ -72,6 +72,7 @@ func run_tests() -> void:
 	var native := FakeAds.new()
 	game.ads.attach_backend(native,true)
 	await flush()
+	check(native.banner_visible,"the menu's banner request made before the plugin attached reaches it at launch")
 	check("app_initialized" in native.reported_events,"AppMetrica receives the SDK initialization event")
 	check(native.reward_id=="demo-rewarded-yandex","debug build requests demo inventory")
 	check(native.reward_loads==1 and native.interstitial_loads==1,"SDK initialization preloads each fullscreen format once")

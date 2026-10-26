@@ -191,6 +191,9 @@ static func plant(holder: Node3D, item: Array, shadows: bool, scale: float = 1.0
 	var mesh := MeshInstance3D.new()
 	mesh.name = "Растение_%s_%d" % [kind,variant] if CATALOGUE[kind]["folder"]=="vegetation" else "Декор_%s_%d" % [kind,variant]
 	mesh.mesh = quad
+	# Vegetation shaders sway the vertices a few centimetres. Expand the
+	# renderer's local bounds so a leaf at the edge is never frustum-clipped.
+	mesh.custom_aabb = AABB(Vector3(-size.x*.5-.10,-size.y*.5-.10,-.12),Vector3(size.x+.20,size.y+.20,.24))
 	mesh.material_override = _material(kind,variant)
 	# The foot (or the point it hangs from) sits a hair inside the painted
 	# outline, on the stone.
@@ -220,6 +223,15 @@ const SMALL_FLAGS := ["flag","flag_wide","pennant"]
 const MASTS := ["mast","mast_pennant"]
 const HIGH_MASTS := ["mast_high","mast_high_pennant"]
 const DESIGNS := ["peak","sun","stripes","chevron","hook","plain"]
+# A picture painted for a rectangle is squeezed out of shape on a tapering
+# cloth: pennants and streamers carry lengthwise designs only, the notched
+# swallowtail keeps its picture clear of the notch.
+const SHAPE_DESIGNS := {"banner":["peak","sun","stripes","chevron","hook","plain"],"swallowtail":["peak","sun","stripes","plain"],
+	"pennant":["stripes","plain"],"streamer":["stripes","plain"]}
+# The pole's foot (and its iron shoe) stands this share of the flag's height
+# inside the stone, so it never shows hanging off a ledge.
+const FOOT_SINK := .1
+const TRIMS := [Color("e6bc4c"),Color("f3ecd9"),Color("2c3a45")]
 const LINE_DESIGNS := ["plain","stripes","sun","peak"]
 const COLORS := ["red","yellow","green","sky","purple","orange","white","blue"]
 const COLOR_VALUES := {"red":Color("d9483a"),"yellow":Color("e7b13a"),"green":Color("4f9a56"),"sky":Color("4f9fd4"),"purple":Color("7f5cc4"),
@@ -235,15 +247,18 @@ static func _shadows(node: Node3D, shadows: bool) -> void:
 	for mesh: MeshInstance3D in node.find_children("*","MeshInstance3D",true,false):
 		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-static func cloth_material(design: String, colour: String, line: bool) -> ShaderMaterial:
-	var key := "cloth_%s_%s_%d" % [design,colour,int(line)]
+static func cloth_material(design: String, colour: String, line: bool, trim: int = 0) -> ShaderMaterial:
+	var key := "cloth_%s_%s_%d_%d" % [design,colour,int(line),trim]
 	if not _materials.has(key):
 		var material := ShaderMaterial.new()
 		material.shader = _shader("cloth",CLOTH_SHADER)
 		material.set_shader_parameter("mask",load(CLOTH_DIR.path_join("cloth_%s.png" % design)))
 		material.set_shader_parameter("cloth_color",COLOR_VALUES.get(colour,COLOR_VALUES["red"]))
 		# Gold trim; a gold cloth gets a deep red one instead.
-		material.set_shader_parameter("trim_color",Color("8e2f24") if colour in ["yellow","orange"] else Color("e6bc4c"))
+		var trim_color: Color = TRIMS[clampi(trim,0,TRIMS.size()-1)]
+		if colour in ["yellow","orange"] and trim==0: trim_color = Color("8e2f24")
+		if colour=="white" and trim==1: trim_color = TRIMS[2]
+		material.set_shader_parameter("trim_color",trim_color)
 		material.set_shader_parameter("hang",1.0 if line else 0.0)
 		_materials[key] = material
 	return _materials[key]
@@ -273,11 +288,11 @@ static func _dress_parts(node: Node3D) -> void:
 		var part := str(mesh.name).to_lower()
 		if part=="wood" or FITTINGS.has(part): mesh.material_override = _part_material(part)
 
-static func cloth(parent: Node3D, shape: String, design: String, colour: String, shadows: bool) -> Node3D:
+static func cloth(parent: Node3D, shape: String, design: String, colour: String, shadows: bool, trim: int = 0) -> Node3D:
 	var node := _model("cloth_%s" % shape)
 	node.name = "Полотно"
 	parent.add_child(node)
-	var material := cloth_material(design,colour,shape in LINE_CLOTHS)
+	var material := cloth_material(design,colour,shape in LINE_CLOTHS,trim)
 	for mesh: MeshInstance3D in node.find_children("*","MeshInstance3D",true,false):
 		if str(mesh.name).to_lower().begins_with("cloth"): mesh.material_override = material
 	_dress_parts(node)
@@ -285,23 +300,30 @@ static func cloth(parent: Node3D, shape: String, design: String, colour: String,
 	return node
 
 # A flag on its pole standing at `at` (the pole's foot), the pole `height`
-# tall on the face, the cloth flying to `side` (+1 right, -1 left). The
-# design follows the place unless one is given.
-static func flag(parent: Node3D, kind: String, colour: String, at: Vector3, height: float, side: float, shadows: bool, design: String = "") -> Node3D:
+# tall on the face, the cloth flying to `side` (+1 right, -1 left). Design,
+# colour ("" for any) and trim follow the place unless given; a design the
+# cloth's shape would distort is swapped for one that suits it.
+static func flag(parent: Node3D, kind: String, colour: String, at: Vector3, height: float, side: float, shadows: bool, design: String = "", designs: Array = []) -> Node3D:
 	var entry: Array = FLAGS[kind]
+	var place := absi(int(at.x*131.0)*7+int(at.y*97.0)*13+int(at.z*61.0))
 	var root := Node3D.new()
 	root.name = "Флаг на древке"
-	root.position = at
+	root.position = at+Vector3(0,-height*FOOT_SINK,0)
 	parent.add_child(root)
 	var pole := _model("pole_%s" % entry[1])
 	pole.name = "Древко"
 	root.add_child(pole)
 	_dress_parts(pole)
 	_shadows(pole,shadows)
-	if design.is_empty(): design = DESIGNS[posmod(int(absf(at.x*13.0+at.y*7.0)),DESIGNS.size())]
-	var flag_cloth := cloth(root,entry[0],design,colour,shadows)
+	var fitting: Array = SHAPE_DESIGNS.get(entry[0],DESIGNS)
+	var allowed: Array = designs.filter(func(d): return d in fitting) if not designs.is_empty() else fitting
+	if allowed.is_empty(): allowed = fitting
+	if design.is_empty() or design not in fitting: design = allowed[place%allowed.size()]
+	if colour.is_empty(): colour = COLORS[(place/7)%COLORS.size()]
+	var flag_cloth := cloth(root,entry[0],design,colour,shadows,(place/3)%TRIMS.size())
 	flag_cloth.position = Vector3(0,float(POLE_HEIGHTS[entry[1]])-FLAG_TOP,0)
-	var size := height/float(POLE_HEIGHTS[entry[1]])
+	# The pole grows by the sunk part, so the flag still stands `height` tall.
+	var size := height*(1.0+FOOT_SINK)/float(POLE_HEIGHTS[entry[1]])
 	root.scale = Vector3(size*signf(side),size,size)
 	return root
 

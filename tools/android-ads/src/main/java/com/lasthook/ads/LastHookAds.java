@@ -251,31 +251,44 @@ public final class LastHookAds extends GodotPlugin {
             FrameLayout.LayoutParams childParams = new FrameLayout.LayoutParams(
                     size.getWidthInPixels(activity), size.getHeightInPixels(activity), Gravity.CENTER);
             bannerContainer.addView(banner, childParams);
-            bannerContainer.setVisibility(bannerWanted ? View.VISIBLE : View.GONE);
-            if (bannerWanted) bannerContainer.bringToFront();
-            emitSignal("banner_height_changed", size.getHeightInPixels(activity));
+            // Do not reserve or cover the top of the Godot canvas while the
+            // request is still loading. The menu moves only after the first
+            // measured, visible banner is ready.
+            bannerContainer.setVisibility(View.GONE);
             banner.setBannerAdEventListener(new BannerAdEventListener() {
                 @Override public void onAdLoaded() {
-                    ui(() -> {
-                        if (destroyed || banner == null || bannerContainer == null) return;
-                        int measured = banner.getHeight();
-                        if (measured > 0) {
-                            ViewGroup.LayoutParams lp = bannerContainer.getLayoutParams();
-                            if (lp != null && lp.height != measured) {
-                                lp.height = measured;
-                                bannerContainer.setLayoutParams(lp);
-                            }
-                            emitSignal("banner_height_changed", measured);
-                        }
-                    });
+                    measureBanner(0);
                 }
                 @Override public void onAdClicked() {}
                 @Override public void onImpression(ImpressionData data) {}
                 @Override public void onAdFailedToLoad(AdRequestError error) {
-                    if (!destroyed) failed("banner_load", error.getDescription());
+                    if (!destroyed) {
+                        if (bannerContainer != null) bannerContainer.setVisibility(View.GONE);
+                        failed("banner_load", error.getDescription());
+                    }
                 }
             });
             banner.loadAd(new AdRequest.Builder(id).build());
+        });
+    }
+
+    /** onAdLoaded can arrive before Android has measured the inline slot. */
+    private void measureBanner(final int attempt) {
+        ui(() -> {
+            if (destroyed || banner == null || bannerContainer == null) return;
+            int measured = banner.getHeight();
+            if (measured <= 0) {
+                if (attempt < 8) bannerContainer.postDelayed(() -> measureBanner(attempt + 1), 50L);
+                return;
+            }
+            ViewGroup.LayoutParams lp = bannerContainer.getLayoutParams();
+            if (lp != null && lp.height != measured) {
+                lp.height = measured;
+                bannerContainer.setLayoutParams(lp);
+            }
+            bannerContainer.setVisibility(bannerWanted ? View.VISIBLE : View.GONE);
+            if (bannerWanted) bannerContainer.bringToFront();
+            emitSignal("banner_height_changed", measured);
         });
     }
 

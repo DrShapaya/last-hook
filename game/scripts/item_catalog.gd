@@ -38,18 +38,21 @@ const TREASURE_SETS := {
 			[["treasures/treasure_a_8","Горная жемчужина"],["treasures/treasure_b_6","Аметистовая жемчужина"]]],
 		"artifact":[["treasures/treasure_a_9","Золотая арфа"],["treasures/treasure_b_8","Маска хранителя"],["treasures/treasure_a_10","Резная птица"]],
 		"relic":[["treasures/treasure_a_7","Сундучок лесника"],["treasures/treasure_b_10","Окованный сундук"]],
-		"materials":{"fiber":"vegetation/vine_green_2","silk":"vegetation/grass_blades_2","sinew":"vegetation/vine_root_2","core":"crystals/crystal_blue_3"}},
+		# Materials are still crafting resources in the economy, but their
+		# displayed find must belong to the treasure sheets.  Vegetation sprites
+		# made the treasure pool look like it was dropping grass and leaves.
+		"materials":{"fiber":"treasures/treasure_b_4","silk":"treasures/treasure_a_7","sinew":"treasures/treasure_b_10","core":"crystals/crystal_blue_3"}},
 	"stone_spires":{"title":"Сокровища пустыни",
 		"valuable":[
 			[["treasures/treasure_desert_9","Флакон благовоний"],["treasures/treasure_desert_8","Бирюзовый браслет"]],
 			[["treasures/treasure_desert_10","Фигурка верблюда"],["treasures/treasure_desert_3","Изогнутый кинжал"]],
-			[["treasures/treasure_desert_2","Солнечный медальон"],["treasures/treasure_b_4","Бирюзовый скарабей"]],
+			[["treasures/treasure_desert_2","Солнечный медальон"],["treasures/treasure_desert_6","Звёздная астролябия"]],
 			[["treasures/treasure_desert_4","Канопа сокола"]],
 			[["treasures/treasure_desert_6","Звёздная астролябия"],["treasures/treasure_desert_5","Солнечная скрижаль"]],
 			[["treasures/treasure_desert_1","Крылатый скарабей"],["treasures/treasure_desert_7","Страж гробницы"]]],
 		"artifact":[["treasures/treasure_desert_7","Страж гробницы"],["treasures/treasure_desert_1","Крылатый скарабей"],["treasures/treasure_desert_5","Солнечная скрижаль"]],
 		"relic":[["treasures/treasure_desert_4","Канопа каравана"],["treasures/treasure_desert_2","Знак караванщика"]],
-		"materials":{"fiber":"vegetation/vine_dry_2","silk":"vegetation/dry_plant_2","sinew":"vegetation/vine_dry_4","core":"crystals/crystal_amber_1"}},
+		"materials":{"fiber":"treasures/treasure_desert_8","silk":"treasures/treasure_desert_9","sinew":"treasures/treasure_desert_6","core":"crystals/crystal_amber_1"}},
 	"sky_city":{"title":"Зимние находки",
 		"valuable":[
 			[["treasures/treasure_winter_7","Шишка с лентой"],["treasures/treasure_winter_5","Тёплая варежка"]],
@@ -60,7 +63,7 @@ const TREASURE_SETS := {
 			[["treasures/treasure_winter_3","Музыкальная шкатулка"],["treasures/treasure_winter_6","Снежный шар"]]],
 		"artifact":[["treasures/treasure_winter_6","Снежный шар"],["treasures/treasure_winter_4","Снежная сова"],["treasures/treasure_winter_9","Тотем перевала"]],
 		"relic":[["treasures/treasure_winter_3","Шкатулка станции"],["treasures/treasure_winter_8","Колокольчики станции"]],
-		"materials":{"fiber":"vegetation/vine_frost_2","silk":"treasures/treasure_winter_10","sinew":"treasures/treasure_winter_2","core":"crystals/crystal_ice_1"}},
+		"materials":{"fiber":"treasures/treasure_winter_7","silk":"treasures/treasure_winter_10","sinew":"treasures/treasure_winter_2","core":"crystals/crystal_ice_1"}},
 }
 
 static func treasure_set(location_id: String) -> Dictionary:

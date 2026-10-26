@@ -847,6 +847,11 @@ func _build_decor(index: int, parent: Node3D) -> void:
 			# little smaller.
 			scale = clampf(float(candidate[4])/1.6,.85,1.0) if kind=="grass" else 1.0
 			size = FloraModels.size_of(entry,scale)
+		else:
+			# Act props choose their final sprite inside ActProps.build(). Reserve
+			# the full visual envelope here, before the prop is instantiated, so a
+			# bush/leaf cluster cannot overlap a nearby find or another plant.
+			size = Vector2(1.4,1.7)
 		var hangs := not entry.is_empty() and FloraModels.hangs(entry)
 		var anchor := point
 		if kind=="climb": anchor = (candidate[5] as Vector2)+Vector2(0,-.04)

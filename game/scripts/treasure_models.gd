@@ -140,6 +140,9 @@ static func instantiate(item: Dictionary, shadows: bool) -> Node3D:
 		var sprite := MeshInstance3D.new()
 		sprite.name = "Рисунок сокровища"
 		sprite.mesh = quad
+		# Idle bob/rock and texture filtering need a little culling margin;
+		# otherwise a treasure can disappear one frame at the edge of a view.
+		sprite.custom_aabb = AABB(Vector3(-quad.size.x*.5-.08,-quad.size.y*.5-.08,-.10),Vector3(quad.size.x+.16,quad.size.y+.16,.20))
 		sprite.material_override = _sprite_material(path)
 		model = Node3D.new()
 		model.add_child(sprite)

@@ -20,6 +20,28 @@ var timeline: Tween
 var bob: Tween
 var leaving := false
 var icon_size := 220.0
+var landing_goal := Rect2()
+
+# The profile's mini icon has a chamfered frame (MenuSurface.rounded_material,
+# MARK_CUT of its 38 px side). The flying icon starts square and cuts its
+# corners in step with its size, so it lands exactly in that shape.
+const MARK_CUT := 9.0
+const MARK_SIDE := 38.0
+var corner_material: ShaderMaterial
+
+# The live target: the lobby rebuilds itself when the ad banner reports its
+# height, and the old mini icon is freed then.
+func _live_target() -> Control:
+	if is_instance_valid(hud) and is_instance_valid(hud.lobby_view) and is_instance_valid(hud.lobby_view.profile_mark):
+		target = hud.lobby_view.profile_mark
+	return target
+
+func _target_rect_in_splash() -> Rect2:
+	var fallback := Rect2(Vector2(28,22),Vector2(38,38))
+	_live_target()
+	if not is_instance_valid(target) or not target.is_inside_tree(): return fallback
+	var target_to_splash := get_global_transform_with_canvas().affine_inverse()*target.get_global_transform_with_canvas()
+	return Rect2(target_to_splash.origin,target.size*target_to_splash.get_scale())
 
 class Glow extends Control:
 	var strength := 0.0
@@ -143,23 +165,49 @@ func _leave() -> void:
 	fade.tween_property(tagline,"modulate:a",0.0,.2)
 	fade.tween_property(glow,"strength",0.0,.3)
 	fade.tween_property(veil,"modulate:a",0.0,.55).set_delay(.15)
-	var goal := Rect2(Vector2(28,22),Vector2(38,38))
-	if is_instance_valid(target) and target.is_inside_tree(): goal = target.get_global_rect()
+	var goal := _target_rect_in_splash()
+	landing_goal = goal
 	var fly := create_tween()
 	# A small wind-up, then a curved flight into the corner.
 	fly.tween_property(icon,"scale",Vector2.ONE*1.08,.14).set_trans(Tween.TRANS_SINE)
 	fly.tween_property(icon,"scale",Vector2.ONE,.08)
-	fly.tween_callback(func(): icon.pivot_offset = Vector2.ZERO)
+	fly.tween_callback(func():
+		icon.pivot_offset = Vector2.ZERO
+		corner_material = MenuSurface.chamfer_material(icon.size,0.0)
+		icon.material = corner_material)
 	var start := icon.position
 	var start_size := icon.size.x
 	fly.tween_method(func(t: float):
-		var arc := start.lerp(goal.position,t)+Vector2(0,-60.0*sin(PI*t))
+		# The Android banner can report its height while this animation is in
+		# flight. Follow the live target so the icon does not land in the old,
+		# pre-banner header position.
+		var live_goal := _target_rect_in_splash()
+		landing_goal = live_goal
+		var arc := start.lerp(live_goal.position,t)+Vector2(0,-60.0*sin(PI*t))
+		var side := lerpf(start_size,live_goal.size.x,t)
 		icon.position = arc
-		icon.size = Vector2.ONE*lerpf(start_size,goal.size.x,t)
-		icon.rotation = -.5*sin(PI*t),0.0,1.0,.7).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		icon.size = Vector2.ONE*side
+		# One small turn that unwinds before landing.
+		icon.rotation = -.35*sin(PI*t)*(1.0-t)
+		# Corners cut in proportion: square at the start, the frame's chamfer
+		# (in the icon's own pixels) at the end.
+		var cut := side*MARK_CUT/MARK_SIDE*smoothstep(0.0,.85,t)
+		corner_material.set_shader_parameter("rect_size",icon.size)
+		corner_material.set_shader_parameter("cut",cut),0.0,1.0,.75).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
 	fly.tween_callback(_land)
 
 func _land() -> void:
+	# Snap the final frame to the exact target rect so tween interpolation or
+	# fractional UI scaling can never leave a one-pixel offset.
+	landing_goal = _target_rect_in_splash()
+	if landing_goal.size.x>0.0:
+		icon.position = landing_goal.position
+		icon.size = landing_goal.size
+		if corner_material!=null:
+			corner_material.set_shader_parameter("rect_size",icon.size)
+			corner_material.set_shader_parameter("cut",icon.size.x*MARK_CUT/MARK_SIDE)
+		icon.scale = Vector2.ONE
+		icon.rotation = 0.0
 	if is_instance_valid(target):
 		target.modulate.a = 1.0
 		target.pivot_offset = target.size*.5

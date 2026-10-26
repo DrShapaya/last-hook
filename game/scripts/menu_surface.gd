@@ -38,6 +38,8 @@ class RouteLine extends Control:
 	var zone := 200.0
 	var record := -1.0
 	var current := -1.0
+	var progress := 0.0
+	var progress_tween: Tween
 	var caption := ""
 	var font: Font
 	var strong: Font
@@ -66,8 +68,8 @@ class RouteLine extends Control:
 		for index in range(1,zone_count):
 			var tick := x_of(index*zone)
 			draw_line(Vector2(tick,y-6),Vector2(tick,y+6),Color(soft,.55),2,true)
-		var rope_end := x_of(maxf(current,0))
-		if current>0:
+		var rope_end := x_of(progress)
+		if progress>0.0:
 			draw_line(Vector2(left,y),Vector2(rope_end,y),Color("7a4a1c"),6,true)
 			draw_line(Vector2(left,y-1),Vector2(rope_end,y-1),ROPE,4,true)
 			# Strands: short diagonal twists make it read as rope, not a bar.
@@ -102,6 +104,19 @@ class RouteLine extends Control:
 			draw_string(use,Vector2(left-2,y+24),caption,HORIZONTAL_ALIGNMENT_LEFT,size.x*.6,13,soft)
 		var summit_text := "%d м" % roundi(summit)
 		draw_string(use,Vector2(size.x-4-text_width(summit_text,use,13),y+24),summit_text,HORIZONTAL_ALIGNMENT_LEFT,-1,13,soft)
+
+	func animate_progress(value: float) -> void:
+		var target := clampf(value,0.0,summit)
+		if progress_tween!=null and progress_tween.is_valid(): progress_tween.kill()
+		if progress<0.0: progress = 0.0
+		if is_zero_approx(progress-target):
+			progress = target
+			queue_redraw()
+			return
+		progress_tween = create_tween()
+		progress_tween.tween_method(func(v: float):
+			progress = v
+			queue_redraw(),progress,target,.95).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 	func text_width(value: String, use: Font, font_size: int) -> float:
 		return (use if use!=null else ThemeDB.fallback_font).get_string_size(value,HORIZONTAL_ALIGNMENT_LEFT,-1,font_size).x
@@ -247,12 +262,15 @@ func paint_segments(buttons: Array[Button], selected: int) -> void:
 
 func _segment_pressed(buttons: Array[Button], thumb: Panel, index: int, callback: Callable, left: float, each: float) -> void:
 	if not is_instance_valid(thumb) or int(thumb.get_meta("index",-1))==index: return
+	# A disabled/locked segment may handle the tap itself and return false;
+	# leave the selected thumb exactly where it was in that case.
+	var result: Variant = callback.call(index)
+	if result is bool and not result: return
 	thumb.set_meta("index",index)
 	thumb.visible = true
 	var tween := thumb.create_tween()
 	tween.tween_property(thumb,"position:x",left+index*each,.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	paint_segments(buttons,index)
-	callback.call(index)
 
 # A small hold-yellow "Скоро" plate for features that are not open yet.
 func soon_tag(parent: Node, at: Vector2, width: float = 54.0) -> Panel:
@@ -293,6 +311,9 @@ func time_string(seconds: float) -> String:
 static var _rounded_shader: Shader
 
 func rounded_material(dimensions: Vector2, cut: float = 14) -> ShaderMaterial:
+	return chamfer_material(dimensions,cut)
+
+static func chamfer_material(dimensions: Vector2, cut: float = 14) -> ShaderMaterial:
 	if _rounded_shader==null:
 		_rounded_shader = Shader.new()
 		_rounded_shader.code = "shader_type canvas_item; uniform vec2 rect_size; uniform float cut; varying vec2 point; void vertex(){point=VERTEX;} void fragment(){vec2 q=abs(point-rect_size*0.5)-rect_size*0.5; float box=max(q.x,q.y); float corner=(q.x+q.y+cut)*0.70710678; float d=max(box,corner); COLOR.a*=1.0-smoothstep(-0.75,0.75,d);}"

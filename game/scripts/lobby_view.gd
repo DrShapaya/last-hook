@@ -208,9 +208,10 @@ func setup(owner_hud: GameHud) -> void:
 func _calculate_layout_bounds() -> Dictionary:
 	var target_landscape: bool = hud.wide
 	# The native banner is the top edge of the menu: the header starts right
-	# under it, as if the screen ended there.
+	# under it, as if the screen ended there. Keep a small visual breathing
+	# room so the first card can never touch or slip under the ad overlay.
 	var banner: float = hud.screen_to_design(game.ads.menu_banner_height())
-	var top_boundary: float = maxf(hud.safe_inset_top(), banner)
+	var top_boundary: float = maxf(hud.safe_inset_top(), banner)+(8.0 if banner>0.0 else 0.0)
 	var bottom_boundary: float = hud.root.size.y - hud.safe_inset_bottom()
 	var target_size: Vector2
 	var target_position: Vector2
@@ -1037,7 +1038,9 @@ const ACTS_HEIGHT_MAX := 210.0
 func update_route_line() -> void:
 	if not is_instance_valid(route_line): return
 	route_line.summit = float(model.balance["locations"][game.lobby_location]["height_units"])*10
-	route_line.record = model.record(game.lobby_location,"summit")
+	var record := model.record(game.lobby_location,"summit")
+	route_line.record = record
+	route_line.animate_progress(record)
 	route_line.queue_redraw()
 
 # The three acts of the shown route in climbing order with their heights.
@@ -1143,10 +1146,7 @@ func build_equipment() -> void:
 	# tap with a "Скоро" note and the upgrades stay on screen.
 	hud.equipment_view = "upgrades"
 	var switch: Array[Button] = []
-	switch.append_array(segmented(self,Vector2(size.x-28-260,82),260,["Улучшения","Сборы"],0,func(index: int):
-		if index==1:
-			paint_segments(switch,0)
-			_supplies_soon(switch),40))
+	switch.append_array(segmented(self,Vector2(size.x-28-260,82),260,["Улучшения","Сборы"],0,func(index: int): return _supplies_soon(switch) if index==1 else true,40))
 	switch[1].tooltip_text = "Сборы: скоро"
 	switch[1].add_theme_color_override("font_color",INK_FAINT)
 	supplies_badge = soon_tag(switch[1].get_parent(),switch[1].position+Vector2(switch[1].size.x-50,-12),46)
@@ -1163,13 +1163,12 @@ func build_equipment() -> void:
 		var row := index%per_column
 		build_upgrade(order[index],Vector2(28+column*(row_width+16),base_y+row*(row_height+row_gap)),Vector2(row_width,row_height),active)
 
-func _supplies_soon(switch: Array[Button]) -> void:
-	# The thumb slid over on the tap; it returns to "Улучшения".
-	for node in switch[0].get_parent().get_children():
-		if node is Panel and node.has_meta("index"):
-			node.set_meta("index",0)
-			node.create_tween().tween_property(node,"position:x",switch[0].position.x,.22).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+func _supplies_soon(switch: Array[Button]) -> bool:
+	# This section is still locked: keep the selected segment on upgrades and
+	# let the shared segmented control know that it must not move its thumb.
+	paint_segments(switch,0)
 	wiggle_soon(supplies_badge,"Раздел «Сборы» скоро откроется")
+	return false
 
 func effect_text(kind: int, at_level: int) -> String:
 	var i := clampi(at_level-1,0,model.max_level(kind)-1)

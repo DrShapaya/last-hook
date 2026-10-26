@@ -76,6 +76,25 @@ func run_tests() -> void:
 	game.preview = true
 	game.set_physics_process(false)
 	game.model.profile = GameModel.fresh_profile()
+	# Android Back semantics: the main expedition page asks before leaving;
+	# pressing Back again dismisses the confirmation.
+	game.preview = false
+	game.state = "menu"
+	game.hud.show_menu()
+	await process_frame
+	game.go_back()
+	check(game.hud.exit_confirmation_visible(),"main menu Back opens the exit confirmation")
+	game.go_back()
+	check(not game.hud.exit_confirmation_visible(),"Back dismisses the exit confirmation")
+	game.preview = true
+	game.start_run(false)
+	game.pause_run()
+	check(game.state=="pause","Back flow exposes the pause screen from an active run")
+	game.go_back()
+	check(game.state=="play","Back from pause resumes the active run")
+	game.go_back()
+	check(game.state=="pause","Back from the run opens pause instead of closing the game")
+	game.show_menu()
 	for dimensions in [Vector2i(432,960),Vector2i(540,960),Vector2i(800,800),Vector2i(1280,800),Vector2i(1600,720)]:
 		root.size = dimensions
 		await process_frame

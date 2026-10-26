@@ -51,6 +51,7 @@ var primary_touch := -1
 var touch_gesture := false
 var gesture_last_msec := 0
 var climb_gesture := ClimbGesture.new()
+const TOUCH_STICK_TOP_SHARE := .40
 var touch_controls: Dictionary = {}
 var aim_stick_valid := false
 var gesture_suppressed := false
@@ -822,6 +823,13 @@ func _unhandled_input(event: InputEvent) -> void:
 func pointer_down(point: Vector2, from_touch: bool = false) -> void:
 	if state!="play" or ads.fullscreen or pressed or not hud.world_input_allowed(point):
 		return
+	# Keep the floating touch stick out of the top HUD: on a phone its origin
+	# may be placed only in the lower 60% of the viewport. Mouse aiming keeps
+	# the desktop behaviour and is not subject to this touch-only safe area.
+	if from_touch and OS.has_feature("mobile"):
+		var viewport_height := get_viewport().get_visible_rect().size.y
+		if viewport_height>0.0 and point.y<viewport_height*TOUCH_STICK_TOP_SHARE:
+			return
 	pressed = true
 	gesture_suppressed = false
 	press_start = point
@@ -1987,8 +1995,17 @@ func show_menu() -> void:
 	if is_instance_valid(world): world.visible = false
 	if is_instance_valid(explorer): explorer.visible = false
 
+func exit_app() -> void:
+	if ads.fullscreen: return
+	flush_profile_save()
+	save_snapshot()
+	get_tree().quit()
+
 func go_back() -> void:
 	if ads.fullscreen: return
+	if hud.exit_confirmation_visible():
+		hud.hide_exit_confirmation()
+		return
 	match state:
 		"play": pause_run()
 		"pause": unpause()
@@ -2000,9 +2017,7 @@ func go_back() -> void:
 				hud.menu_focus = "tab"
 				hud.select_menu("expedition")
 			elif not preview:
-				flush_profile_save()
-				save_snapshot()
-				get_tree().quit()
+				hud.show_exit_confirmation()
 
 func show_workshop() -> void:
 	show_menu()

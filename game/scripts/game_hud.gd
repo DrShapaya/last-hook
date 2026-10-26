@@ -76,10 +76,12 @@ const PREVIEW_TURN := .99966 # cos 1.5 degrees
 var shot_preview_time := -1.0
 var shot_preview_direction := Vector2.ZERO
 var ad_blocker: Control
+var exit_overlay: Control
+var exit_dialog: Panel
 var touch_controls_hint := OS.has_feature("mobile")
 var strong_font: FontVariation
 var hud_chips: Array[PanelContainer] = []
-var toast_chip: PanelContainer
+var toast_chip: Panel
 const INK := MenuSurface.INK
 const GOLD := MenuSurface.HOLD
 const WHITE := MenuSurface.STONE
@@ -88,6 +90,8 @@ const CYAN := MenuSurface.CRYSTAL_LIGHT
 const CORAL := Color("ff8f70")
 const INK_PANEL := MenuSurface.SLATE
 const PLAY_PANEL := Color("24323deb")
+const BUY_FACE := Color("fdefc3")
+const BUY_RIM := Color("ecbe3a")
 
 class SlowmoIndicator extends Control:
 	# A compact chip that only appears while release slow motion runs (gold,
@@ -386,7 +390,11 @@ func setup(controller) -> void:
 	content = Control.new()
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(content)
-	toast_chip = chip(root,MenuSurface.SLATE)
+	toast_chip = Panel.new()
+	toast_chip.name = "Уведомление"
+	toast_chip.add_theme_stylebox_override("panel",slab_style(Color(MenuSurface.SLATE,.92),MenuSurface.SLATE_LIP,3,7))
+	toast_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(toast_chip)
 	toast_chip.visible = false
 	toast_label = label(toast_chip,"",15,WHITE)
 	toast_label.visible = false
@@ -397,6 +405,7 @@ func setup(controller) -> void:
 	ad_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
 	ad_blocker.visible = false
 	add_child(ad_blocker)
+	_build_exit_confirmation()
 	get_viewport().size_changed.connect(_resize)
 	fit_viewport()
 
@@ -409,6 +418,10 @@ func fit_viewport() -> void:
 	root.size = viewport_size/factor
 	content.size = root.size
 	content.position = (root.size-Vector2(540,960))*.5 if layout_mode=="modal" else Vector2.ZERO
+	if is_instance_valid(exit_overlay):
+		exit_overlay.size = root.size
+		exit_overlay.position = Vector2.ZERO
+		if is_instance_valid(exit_dialog): exit_dialog.position = (root.size-exit_dialog.size)*.5
 	backdrop.size = viewport_size
 	if layout_mode!="play": slowmo_vignette.visible = false
 	slowmo_vignette.size = get_viewport().get_visible_rect().size
@@ -427,6 +440,9 @@ func _resize() -> void:
 	elif layout_mode=="pause": show_pause()
 	elif layout_mode=="revive": show_revive(revive_reason)
 	elif layout_mode=="result": show_result(result_data)
+	# The banner's height arrives after the menu is built: lay the menu out
+	# again below it, so the header never sits under the ad.
+	elif layout_mode=="menu" and is_instance_valid(lobby_view): lobby_view.update_layout()
 
 func style(color: Color, radius: int = 10, border: Color = Color.TRANSPARENT) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
@@ -500,10 +516,20 @@ func place_toast() -> void:
 	var placement := [toast_label.text,layout_mode,root.size,safe_inset_bottom(),safe_inset_top(),toast_chip.get_combined_minimum_size()]
 	if placement==toast_placement: return
 	toast_placement = placement
-	var wide_text := body_font.get_string_size(toast_label.text,HORIZONTAL_ALIGNMENT_LEFT,-1,15).x>440
+	var max_width := maxf(120.0,root.size.x-32.0)
+	var text_width := body_font.get_string_size(toast_label.text,HORIZONTAL_ALIGNMENT_LEFT,-1,15).x
+	var wide_text := text_width>max_width-36.0
 	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if wide_text else TextServer.AUTOWRAP_OFF
-	toast_label.custom_minimum_size = Vector2(440 if wide_text else 0,0)
-	toast_chip.reset_size()
+	toast_label.custom_minimum_size = Vector2.ZERO
+	var chip_width := maxf(120.0,minf(max_width,text_width+36.0))
+	if wide_text: chip_width = max_width
+	var lines := 1
+	for line in toast_label.text.split("\n"):
+		lines = maxi(lines,ceili(body_font.get_string_size(line,HORIZONTAL_ALIGNMENT_LEFT,-1,15).x/maxf(1.0,chip_width-24.0)))
+	var chip_height := 12.0+float(lines)*21.0
+	toast_chip.size = Vector2(chip_width,chip_height)
+	toast_label.position = Vector2(12,6)
+	toast_label.size = Vector2(chip_width-24,chip_height-12)
 	var safe_bottom := safe_inset_bottom()
 	if layout_mode in ["pause","revive","result"]:
 		# Those screens keep their actions at the bottom; the note goes on top.
@@ -535,7 +561,7 @@ func button(parent: Node, text: String, callback: Callable, gold: bool = false) 
 # Tones: primary (hold yellow), secondary (stone), buy (stone on a yellow
 # lip), selected (slate), ghost (text only), dark (slate over the climb).
 func skin_button(node: Button, tone: String = "secondary") -> void:
-	var faces := {"primary":MenuSurface.HOLD,"secondary":MenuSurface.STONE,"buy":MenuSurface.STONE,"selected":MenuSurface.SLATE,"ghost":Color(MenuSurface.STONE,0),"dark":PLAY_PANEL}
+	var faces := {"primary":MenuSurface.HOLD,"secondary":MenuSurface.STONE,"buy":BUY_FACE,"selected":MenuSurface.SLATE,"ghost":Color(MenuSurface.STONE,0),"dark":PLAY_PANEL}
 	var lips := {"primary":MenuSurface.HOLD_LIP,"secondary":MenuSurface.STONE_LIP,"buy":MenuSurface.HOLD,"selected":MenuSurface.SLATE_LIP,"ghost":Color.TRANSPARENT,"dark":MenuSurface.SLATE_LIP}
 	var inks := {"primary":MenuSurface.INK,"secondary":MenuSurface.INK,"buy":MenuSurface.INK,"selected":MenuSurface.STONE,"ghost":MenuSurface.INK_SOFT,"dark":MenuSurface.STONE}
 	var face: Color = faces.get(tone,MenuSurface.STONE)
@@ -554,6 +580,13 @@ func skin_button(node: Button, tone: String = "secondary") -> void:
 			edge = Color.TRANSPARENT
 			depth = 0
 		var box := slab_style(fill,edge,depth,9)
+		# A purchase stands out from the stone row it sits on: a warm cream
+		# face with a thin hold-yellow rim.
+		if tone=="buy" and state_name!="disabled":
+			box.border_color = BUY_RIM
+			box.border_width_left = 2
+			box.border_width_right = 2
+			box.border_width_top = 2
 		box.content_margin_left = 14
 		box.content_margin_right = 14
 		# Pressing sinks the face into its lip: the label moves down by the
@@ -1320,3 +1353,55 @@ func show_result(result: Dictionary) -> void:
 
 func set_ad_blocked(blocked: bool) -> void:
 	ad_blocker.visible = blocked
+
+func _build_exit_confirmation() -> void:
+	exit_overlay = Control.new()
+	exit_overlay.name = "Подтверждение выхода"
+	exit_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	exit_overlay.visible = false
+	root.add_child(exit_overlay)
+	var veil := ColorRect.new()
+	veil.color = Color("0b1218b8")
+	veil.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	exit_overlay.add_child(veil)
+	exit_dialog = Panel.new()
+	exit_dialog.name = "Диалог выхода"
+	exit_dialog.size = Vector2(430,230)
+	exit_dialog.add_theme_stylebox_override("panel",slab_style(Color("24323df7"),MenuSurface.SLATE_LIP,5,12))
+	exit_dialog.mouse_filter = Control.MOUSE_FILTER_STOP
+	exit_overlay.add_child(exit_dialog)
+	var title := label(exit_dialog,"Выйти из игры?",22,WHITE)
+	title.position = Vector2(24,24)
+	title.size = Vector2(382,34)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var message := label(exit_dialog,"Прогресс текущего восхождения сохранён.",15,MUTED)
+	message.position = Vector2(24,68)
+	message.size = Vector2(382,48)
+	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var stay := button(exit_dialog,"Остаться",hide_exit_confirmation)
+	stay.position = Vector2(24,150)
+	stay.size = Vector2(184,54)
+	var leave := button(exit_dialog,"Выйти",game.exit_app,true)
+	leave.position = Vector2(222,150)
+	leave.size = Vector2(184,54)
+
+func show_exit_confirmation() -> void:
+	if not is_instance_valid(exit_overlay): return
+	exit_overlay.visible = true
+	exit_overlay.move_to_front()
+	exit_dialog.position = (root.size-exit_dialog.size)*.5
+	exit_dialog.pivot_offset = exit_dialog.size*.5
+	exit_dialog.scale = Vector2.ONE*.92
+	exit_dialog.modulate.a = 0.0
+	var tween := create_tween().set_parallel(true)
+	tween.tween_property(exit_dialog,"scale",Vector2.ONE,.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.tween_property(exit_dialog,"modulate:a",1.0,.16).set_trans(Tween.TRANS_SINE)
+
+func hide_exit_confirmation() -> void:
+	if not is_instance_valid(exit_overlay): return
+	exit_overlay.visible = false
+
+func exit_confirmation_visible() -> bool:
+	return is_instance_valid(exit_overlay) and exit_overlay.visible

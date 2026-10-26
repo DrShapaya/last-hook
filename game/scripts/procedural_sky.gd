@@ -20,6 +20,7 @@ var render_accumulator := 0.0
 var last_sky_time := -1.0
 var render_scale := 1.0
 var render_dirty := true
+var warmup_frames := 0
 var location := 0
 var view_size := Vector2.ZERO
 var quad_size := Vector2.ZERO
@@ -48,6 +49,7 @@ func set_quality(quality: String) -> void:
 	render_scale = scale_value
 	if render_scale>=1.0:
 		material_override = sky_material
+		warmup_frames = 0
 		if sky_viewport!=null:
 			sky_viewport.queue_free()
 			sky_viewport = null
@@ -78,7 +80,11 @@ func set_quality(quality: String) -> void:
 		cached_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		cached_material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 		cached_material.albedo_texture = sky_viewport.get_texture()
-	material_override = cached_material
+		# The SubViewport texture is black until its first render. Keep the
+		# direct shader on the main quad for the first couple of frames so the
+		# game never presents that uninitialised texture as a black background.
+		warmup_frames = 3
+		material_override = sky_material
 	_resize()
 
 func _apply_biome_palette(loc: int) -> void:
@@ -157,6 +163,17 @@ func advance(time: float, delta: float) -> void:
 	_set_param("sky_time",time)
 	if sky_viewport==null: return
 	render_accumulator += delta
+	if warmup_frames>0:
+		# Force the first cached render immediately; the direct material remains
+		# visible until the render has completed at the end of this frame.
+		if render_dirty:
+			render_accumulator = 0.0
+			render_dirty = false
+			sky_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+		warmup_frames -= 1
+		if warmup_frames==0:
+			material_override = cached_material
+		return
 	if render_dirty and render_accumulator>=UPDATE_INTERVAL:
 		render_accumulator = 0.0
 		render_dirty = false

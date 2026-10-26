@@ -51,6 +51,10 @@ func attach_backend(native: Object, use_demo_units: bool) -> void:
 	backend.connect("interstitial_closed",_on_interstitial_closed,CONNECT_DEFERRED)
 	backend.connect("ad_failed",_on_failed,CONNECT_DEFERRED)
 	backend.connect("banner_height_changed",_on_banner_height,CONNECT_DEFERRED)
+	# The menu asked for its banner before the plugin was attached (setup
+	# runs a frame later): pass that wish on now, or the banner loads hidden
+	# and shows only after the next menu refresh.
+	if _menu: backend.call("setBannerVisible",not fullscreen)
 	backend.call("initialize")
 
 func _on_initialized() -> void:
@@ -77,6 +81,9 @@ func preload_fullscreen() -> void:
 
 func set_main_menu(visible: bool) -> void:
 	_menu = visible
+	if not visible and banner_height!=0:
+		banner_height = 0
+		banner_layout_changed.emit()
 	if not supported: return
 	backend.call("setBannerVisible",visible and not fullscreen)
 	if visible and not _banner_requested: _load_banner()
@@ -150,7 +157,10 @@ func _on_interstitial_closed() -> void:
 	preload_fullscreen()
 
 func _on_banner_height(height: int) -> void:
-	banner_height = maxi(0,height)
+	# A native banner reports its reserved size before the ad has loaded. Do
+	# not move the menu for that placeholder; only a visible menu may consume
+	# the measured banner height.
+	banner_height = maxi(0,height) if _menu else 0
 	banner_layout_changed.emit()
 
 func _report_event(event_name: String) -> void:
@@ -168,6 +178,9 @@ func _on_failed(kind: String, message: String) -> void:
 	if format=="rewarded": rewarded_ready = false
 	if format=="interstitial": interstitial_ready = false
 	if kind=="banner_load": _banner_requested = false
+	if kind=="banner_load":
+		banner_height = 0
+		banner_layout_changed.emit()
 	if kind.ends_with("_show") and _showing==format:
 		_showing = ""
 		_reward_earned = false

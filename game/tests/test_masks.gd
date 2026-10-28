@@ -145,6 +145,21 @@ func split_tests() -> void:
 	var designer := LevelDesigner.new(0,0,int(LevelCatalog.route(0,0)["seed"])*31+4)
 	var source := designer.build()
 	check(designer.splits.size()==3 and source.brief["splits"].size()==3,"the designer plans a split in every act")
+	# Splits take different shapes, and acts lean the mountain apart.
+	var styles := {}
+	var repeats := 0
+	var leans := 0
+	for design in range(6):
+		var other := LevelDesigner.new(0,0,900+design)
+		other.plan()
+		for k in range(other.splits.size()):
+			styles[other.splits[k]["style"]] = true
+			if k>0 and other.splits[k]["style"]==other.splits[k-1]["style"]: repeats += 1
+		var centers: Array = []
+		for section in other.sections: centers.append(float(section["center1"]))
+		if centers.max()-centers.min()>=4.0: leans += 1
+	check(styles.size()>=4 and repeats==0,"splits come in many shapes, never twice in a row %s" % str(styles.keys()))
+	check(leans>=5,"acts lean the mountain to different sides (%d of 6 designs)" % leans)
 	var world := MountainWorld.new()
 	world.visuals_enabled = false
 	root.add_child(world)

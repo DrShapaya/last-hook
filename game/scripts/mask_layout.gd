@@ -445,7 +445,7 @@ func _components_empty(layer: String) -> bool:
 # cross.
 
 const ISOLATION := 9.4
-const HOPS := {"ledge":[4.2,.35,0.0],"ridge":[3.4,.25,.9]}  # length, length jitter, side swing
+const HOPS := {"ledge":[4.2,.35,0.0],"ridge":[3.4,.25,.9],"arc":[3.9,.3,0.0],"stones":[4.2,.2,0.0],"diagonal":[4.4,.3,.4]}  # length, length jitter, side swing
 
 var splits_built: Array = []
 # Why split spots were turned down, by reason (for tools and the editor).

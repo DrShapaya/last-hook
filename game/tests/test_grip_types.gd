@@ -80,7 +80,7 @@ func traverse(game, route: Array) -> int:
 # First branch of a hazard whose entry is consumed behind the player.
 # The ice check keeps its v13 case on the first location: the mechanic is the
 # same, and some v14 ice blocks have a drawn outline whose bump stops the
-# slide early (see CHAT_3_REPORT).
+# slide early.
 func find_branch(seeds: Array, hazard: String, version: int = 0) -> Dictionary:
 	for index in range(seeds.size()*3):
 		var seed_number: int = seeds[index/3]

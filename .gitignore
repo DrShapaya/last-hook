@@ -1,21 +1,34 @@
-UnityProject/Library/
-UnityProject/Temp/
-UnityProject/Obj/
-UnityProject/Logs/
-UnityProject/UserSettings/
-UnityProject/UserData/
-Builds/
-artifacts/
-*.csproj
-*.sln
-.vs/
+# Godot
 game/.godot/
+game/*.tmp
+game/android/build/
+game/android/.build_version
+*.hprof
+
+# Local toolchain, builds, saves and logs
 tools/godot/
 tools/android-sdk/
+tools/android-ads/.gradle/
+tools/android-ads/build/
+tools/android-ads/local.properties
+Builds/
+/game.zip
 UserData/
-game/*.tmp
+artifacts/
+.artifacts/
+.tmp*/
+.test-save/
+
+# Agent tooling
+.agents/
+.claude/
+skills-lock.json
+
+# Python
 **/__pycache__/
 *.pyc
+
+# Signing keys and secrets
 *.keystore
 *.jks
 *.pfx
@@ -23,9 +36,3 @@ game/*.tmp
 .env
 .env.*
 !.env.example
-/game.zip
-game/android/build/
-game/android/.build_version
-tools/android-ads/.gradle/
-tools/android-ads/build/
-tools/android-ads/local.properties

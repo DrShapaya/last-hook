@@ -1,9 +1,10 @@
 """Deterministic economy table for the chat 4 balance (NOT a player prediction).
 
-Run: python tools/economy_table.py [--output docs/validation/chat4-economy.json]
+Run: python tools/economy_table.py [--output artifacts/economy/economy.json]
 
 Inputs: game/data/balance.json and the placement statistics of generator v15
-(docs/validation/chat4-loot-fixture.json, written by tools/loot_fixture.gd).
+(artifacts/economy/loot-fixture.json: copy user://loot-fixture.json written by
+game/tools/loot_fixture.gd there).
 Three explicit skill profiles climb run after run with expected values only
 (no random numbers): reached share of the expedition, summit chance, share of
 coins and branch finds taken. After every run the profile buys the cheapest
@@ -16,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 B = json.loads((ROOT / "game/data/balance.json").read_text(encoding="utf-8"))
-LOOT = json.loads((ROOT / "docs/validation/chat4-loot-fixture.json").read_text(encoding="utf-8"))
+LOOT = json.loads((ROOT / "artifacts/economy/loot-fixture.json").read_text(encoding="utf-8"))
 
 # reach: expected share of the expedition reached on the first run, gain per
 # run, summit: chance once the whole route is reached, coins/branch: share of
@@ -194,12 +195,13 @@ def farm_rate(profile):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default=str(ROOT / "docs/validation/chat4-economy.json"))
+    parser.add_argument("--output", default=str(ROOT / "artifacts/economy/economy.json"))
     args = parser.parse_args()
     result = {"balance_version": B.get("balance_version"), "profiles": [], "farm": {}}
     for name, profile in PROFILES.items():
         result["profiles"].append(simulate(name, profile))
         result["farm"][name] = farm_rate(profile)
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     for row in result["profiles"]:
         print(row["profile"], json.dumps(row["milestones"]), json.dumps(row["income_share_percent"]), "avg", row["avg_run_income_last10"], json.dumps(row["consumable_share_percent"]))

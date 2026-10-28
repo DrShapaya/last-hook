@@ -48,7 +48,8 @@ func run() -> void:
 	var ratio: float = float(samples.portrait.render_size[0])/samples.portrait.render_size[1]
 	if absf(ratio-540.0/960)>0.003: failures.append("portrait aspect was stretched")
 	var result := {"date":Time.get_date_string_from_system(),"renderer":"gl_compatibility","generation":"runtime shader, no image assets","samples":samples,"failures":failures,"mobile_performance":"not measured on device"}
-	var report := FileAccess.open(ProjectSettings.globalize_path("res://../docs/validation/sky.json"),FileAccess.WRITE)
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://../artifacts/validation"))
+	var report := FileAccess.open(ProjectSettings.globalize_path("res://../artifacts/validation/sky.json"),FileAccess.WRITE)
 	if report==null:
 		push_error("Unable to write sky validation report")
 		quit(2)

@@ -214,13 +214,14 @@ func run_tests() -> void:
 			var baked := MountainWorld.new()
 			baked.visuals_enabled = false
 			root.add_child(baked)
-			baked.setup(level.seed_value,location,0,false,route)
+			baked.setup(level.seed_value,location,0,false,route,level.generator=="masks")
 			baked.load_bake(level)
 			if not level.edited:
 				var fresh := MountainWorld.new()
 				fresh.visuals_enabled = false
 				root.add_child(fresh)
-				fresh.setup(level.seed_value,location,0,false,route)
+				fresh.setup(level.seed_value,location,0,false,route,level.generator=="masks")
+				if level.generator=="masks": (fresh.layout as MaskLayout).use_source(LevelSource.open(LevelSource.source_directory(location,route)))
 				fresh.generate_to(height+6,true,height)
 				# Compared by value: a saved dictionary keeps its keys sorted.
 				if signature(fresh)!=signature(baked) or fresh.ledges!=baked.ledges or fresh.layout.hazards!=baked.layout.hazards or fresh.main_route!=baked.main_route or fresh.layout.summit_added!=baked.layout.summit_added:
@@ -248,7 +249,7 @@ func run_tests() -> void:
 			var world := MountainWorld.new()
 			world.visuals_enabled = false
 			root.add_child(world)
-			world.setup(level.seed_value,location,0,false,route)
+			world.setup(level.seed_value,location,0,false,route,level.generator=="masks")
 			world.load_bake(level)
 			var outside := 0
 			for id in world.main_route:

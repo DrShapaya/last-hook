@@ -515,10 +515,13 @@ func _create_world(seed_number: int, location_number: int, height: float, saved_
 	world.generation_row_budget = -1
 	world.visuals_enabled = not menu_preview
 	add_child(world)
-	world.setup(seed_number,location_number,saved_version,run_mode=="practice",route)
+	var version := saved_version if saved_version>0 else MountainWorld.generation_version_for(location_number)
+	var level := _level_bake(location_number,route,version,height) if not menu_preview and run_mode=="summit" else null
+	# A baked level is set up exactly as it was baked: its seed and generator.
+	if level!=null: world.setup(level.seed_value,location_number,saved_version,false,route,level.generator=="masks")
+	else: world.setup(seed_number,location_number,saved_version,run_mode=="practice",route)
 	world.set_visual_quality(str(model.profile.get("graphics_quality","balanced")))
 	scene_environment.background_color = Color("88bfd9") if location_number==0 else Color("142438")
-	var level := _level_bake(location_number,route,world.generation_version,height) if not menu_preview and run_mode=="summit" else null
 	if level!=null: world.load_bake(level)
 	else: world.generate_to(height,run_mode in ["summit","practice"],summit_height)
 	world.generation_row_budget = 1 if visual_budget>=0 and not (world.layout is LegacyMountainLayout) else -1
@@ -584,9 +587,10 @@ func _update_prepared_world() -> void:
 		prepared_world.visual_build_budget = 1
 		prepared_world.generation_row_budget = -1
 		add_child(prepared_world)
-		prepared_world.setup(prepared_seed,location,0,false,route)
+		var level := _level_bake(location,route,MountainWorld.generation_version_for(location),height+6) if not endless else null
+		if level!=null: prepared_world.setup(level.seed_value,location,0,false,route,level.generator=="masks")
+		else: prepared_world.setup(prepared_seed,location,0,false,route)
 		prepared_world.set_visual_quality(key["quality"])
-		var level := _level_bake(location,route,prepared_world.generation_version,height+6) if not endless else null
 		if level!=null:
 			# A level made in advance: its layout is read, not generated.
 			prepared_world.load_bake(level)

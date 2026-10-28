@@ -41,9 +41,14 @@ func bake_level(location: int, route: int, height: float) -> int:
 	var path := LevelBake.layout_path(location,route)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(LevelBake.directory(location,route)))
 	var level: LevelBake = null
-	if ResourceLoader.exists(path) and not regenerate:
+	# A source marked "generator": "masks" is the level's design: its layout
+	# is rebuilt from the masks on every bake.
+	var source_level := LevelSource.open(LevelSource.source_directory(location,route))
+	var from_masks := source_level!=null and str(source_level.brief.get("generator","layout"))=="masks"
+	if from_masks: seed_value = int(source_level.brief.get("seeds",{}).get("route",seed_value))
+	if ResourceLoader.exists(path) and not regenerate and not from_masks:
 		level = ResourceLoader.load(path,"",ResourceLoader.CACHE_MODE_IGNORE) as LevelBake
-		if level!=null and (level.format!=LevelBake.FORMAT or level.generation_version!=version or (level.seed_value!=seed_value and not level.edited)): level = null
+		if level!=null and (level.format!=LevelBake.FORMAT or level.generation_version!=version or level.generator!="layout" or (level.seed_value!=seed_value and not level.edited)): level = null
 	if level==null:
 		level = LevelBake.new()
 		level.location = location
@@ -51,19 +56,33 @@ func bake_level(location: int, route: int, height: float) -> int:
 		level.generation_version = version
 		level.seed_value = seed_value
 		level.height = height
+		level.generator = "masks" if from_masks else "layout"
 		var source := MountainWorld.new()
 		source.visuals_enabled = false
 		root.add_child(source)
-		source.setup(seed_value,location,version,false,route)
+		source.setup(seed_value,location,version,false,route,from_masks)
+		if from_masks: (source.layout as MaskLayout).use_source(source_level)
 		source.generate_to(height+6,true,height)
 		level.layout_data = LevelBake.capture(source.layout)
+		if from_masks:
+			# What the masks could not get and what the route audit found go to
+			# the log and to a report the level editor shows.
+			var report: Array = []
+			for note in (source.layout as MaskLayout).mask_notes: report.append(note)
+			for problem in RouteGraph.audit(source.layout).get("problems",[]): report.append("Маршрут: %s" % problem)
+			var level_id := LevelBake.directory(location,route).get_file()
+			for line in report: print("BAKE_NOTE %s: %s" % [level_id,line])
+			var file := FileAccess.open("user://bake_report_%s.txt" % level_id,FileAccess.WRITE)
+			if file!=null:
+				file.store_string("\n".join(report) if not report.is_empty() else "Замечаний нет")
+				file.close()
 		source.free()
 	var chunk_count := 0
 	for quality in LevelBake.QUALITIES:
 		var world := MountainWorld.new()
 		world.visuals_enabled = false
 		root.add_child(world)
-		world.setup(level.seed_value,location,version,false,route)
+		world.setup(level.seed_value,location,version,false,route,level.generator=="masks")
 		world.set_visual_quality(quality)
 		world.load_bake(level)
 		var folder := LevelBake.directory(location,route).path_join(quality)

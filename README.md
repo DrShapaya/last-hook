@@ -65,7 +65,7 @@ Android · Windows · Godot 4.7 · версия **0.15.6**
 ./tools/build.ps1 -Target All
 ```
 
-Скрипт запекает уровни, прогоняет 20 наборов headless-тестов (`game/tests/test_*.gd`), собирает EXE и APK и проверяет подпись. Параметры: `-Target Windows|Android`, `-Release`, `-SkipTests`, пути к SDK и ключу. Журналы и тестовые сохранения пишутся в `artifacts/`.
+Скрипт запекает уровни, прогоняет 21 набор headless-тестов (`game/tests/test_*.gd`), собирает EXE и APK и проверяет подпись. Параметры: `-Target Windows|Android`, `-Release`, `-SkipTests`, пути к SDK и ключу. Журналы и тестовые сохранения пишутся в `artifacts/`.
 
 Один набор тестов вручную (`LASTHOOK_SAVE_DIR` — любая временная папка):
 

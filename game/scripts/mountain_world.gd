@@ -89,14 +89,14 @@ static func resumable(version: int, biome: int) -> bool:
 # is `route_index`; -1 keeps the seed's own route (endless, menus, tests).
 var route_index := -1
 
-func setup(world_seed: int, world_location: int, saved_version: int = 0, practice: bool = false, route: int = -1) -> void:
+func setup(world_seed: int, world_location: int, saved_version: int = 0, practice: bool = false, route: int = -1, from_masks: bool = false) -> void:
 	seed_value = world_seed
 	location = world_location
 	generation_version = saved_version if saved_version>0 else generation_version_for(location)
 	if generation_version>=10 and location==0: layout = EncounterLayout.new()
 	if generation_version>=11 and location==0: layout = MassifLayout.new()
 	# v14: acts of the level decide route, silhouette, profile and hazards.
-	if generation_version>=14: layout = ExpeditionLayout.new()
+	if generation_version>=14: layout = MaskLayout.new() if from_masks else ExpeditionLayout.new()
 	if practice: layout = PracticeLayout.new()
 	# v15 changes only the finds layer; v14 geometry and hazards are kept.
 	if layout is ExpeditionLayout: layout.economy_loot = generation_version>=15

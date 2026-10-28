@@ -40,7 +40,7 @@ func export_level(level: LevelBake) -> void:
 	var world := MountainWorld.new()
 	world.visuals_enabled = false
 	root.add_child(world)
-	world.setup(level.seed_value,level.location,level.generation_version,false,level.route)
+	world.setup(level.seed_value,level.location,level.generation_version,false,level.route,level.generator=="masks")
 	world.load_bake(level)
 	var layout := world.layout as ExpeditionLayout
 	var massif := world.visuals as MassifVisuals

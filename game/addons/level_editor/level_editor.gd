@@ -30,6 +30,8 @@ var size_slider := HSlider.new()
 var hardness_slider := HSlider.new()
 var opacity_slider := HSlider.new()
 var objects_toggle := CheckBox.new()
+var masks_toggle := CheckBox.new()
+var notes := Label.new()
 var save_button := Button.new()
 var rebuild_button := Button.new()
 var status := Label.new()
@@ -78,6 +80,15 @@ func _init() -> void:
 		canvas.show_objects = on
 		canvas.overlay.queue_redraw())
 	bar.add_child(objects_toggle)
+	masks_toggle.text = "Строить по маскам"
+	masks_toggle.tooltip_text = "Уровень собирается из масок этого редактора, а не старым генератором"
+	masks_toggle.toggled.connect(func(on: bool) -> void:
+		if source==null: return
+		if on: source.brief["generator"] = "masks"
+		else: source.brief.erase("generator")
+		dirty = true
+		_update_status())
+	bar.add_child(masks_toggle)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar.add_child(spacer)
@@ -114,6 +125,11 @@ func _init() -> void:
 	remove_zone.pressed.connect(remove_active_zone)
 	zone_buttons.add_child(remove_zone)
 	side.add_child(zone_buttons)
+	side.add_child(_label("Заметки сборки"))
+	notes.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	notes.add_theme_font_size_override("font_size",11)
+	notes.custom_minimum_size = Vector2(220,0)
+	side.add_child(notes)
 	var help := Label.new()
 	help.text = "ЛКМ — рисовать или поставить пин\nПКМ — двигать вид; на пине — удалить\nКолесо — масштаб\nCtrl+Z / Ctrl+Y — отмена, повтор"
 	help.add_theme_font_size_override("font_size",11)
@@ -174,6 +190,8 @@ func open_level(folder: String) -> void:
 		return
 	level_directory = folder
 	source = level
+	masks_toggle.set_pressed_no_signal(str(source.brief.get("generator",""))=="masks")
+	_load_notes()
 	level_picker.select(levels.find(folder))
 	canvas.set_source(source)
 	_load_layout()
@@ -286,7 +304,13 @@ func _process(_delta: float) -> void:
 		_load_layout()
 		_reload_scenes()
 		_refresh_preview()
+		_load_notes()
 		status.text = "Уровень пересобран"
+
+# The bake tool's report for this level: what the masks could not get.
+func _load_notes() -> void:
+	var path := "user://bake_report_%s.txt" % level_directory.get_file()
+	notes.text = FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) and source!=null and str(source.brief.get("generator",""))=="masks" else "—"
 
 # Baked scenes changed on disk: drop the cached copies before showing them.
 func _reload_scenes() -> void:

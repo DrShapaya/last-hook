@@ -337,39 +337,58 @@ func _generate_band(band: int, owner: Object = null) -> void:
 	var region := region_of(low+12.0)
 	var form := region_form(region)
 	var kind := int(form.get("kind",0))
-	# Trunk: a few large host masses along the route, alternating sides and
-	# depths, each fused from a tilted body and its lobes.
-	var y := low+random.randf_range(-1.0,1.5)
-	var side := -1.0 if random.randf()<.5 else 1.0
-	while y<high:
-		if not await _band_pause(band,owner,signature): return
-		if y>-3.0 and y<top:
-			var size := Vector2(random.randf_range(5.5,9.0),random.randf_range(4.6,7.0))
-			var center := Vector2(_route_x(y)+side*random.randf_range(.4,2.2),y)
-			_host(list,band,"trunk",center,size,random.randf_range(-1.75,-1.0),random)
-			side = -side
-		y += random.randf_range(4.4,6.0)
-	# Landform set pieces of the region, before the blocks that must keep
-	# out of an arch opening.
-	var piece_y := clampf(float(form.get("y",low+12.0)),low+3.0,high-6.0)
-	if piece_y<top-6.0 and piece_y>4.0:
-		var flank := float(form.get("side",1))
-		if kind==1: _overhang(list,band,piece_y,flank,random)
-		elif kind in [3,5]: _arch(list,band,piece_y,flank,random)
-	# Body: larger, deeper blocks behind the trunk give the mountain depth.
-	y = low+random.randf_range(0,3.0)
-	while y<high:
-		if not await _band_pause(band,owner,signature): return
-		if y>-3.0 and y<top-1.0:
-			for flank in [-1.0,1.0]:
-				if random.randf()<.35:
-					var center := Vector2(_route_x(y)+flank*random.randf_range(3.8,5.2),y+random.randf_range(-1.0,1.0))
-					var size := Vector2(random.randf_range(6.5,9.0),random.randf_range(5.0,7.0))
-					var box := Rect2(center-size*.6,size*1.2)
-					var blocked := false
-					for opening in arch_openings: blocked = blocked or opening.grow(.5).intersects(box)
-					if not blocked: _host(list,band,"body",center,size,random.randf_range(-3.3,-3.0),random,-4.6)
-		y += random.randf_range(6.0,8.0)
+	# A level drawn as masks plans its relief itself (MaskLayout.relief): its
+	# masses fill the painted silhouette and replace the route trunk, set
+	# pieces, body, islands and rubble below.
+	var planned := layout is MaskLayout and not (layout as MaskLayout).relief.is_empty()
+	var planned_islands: Array = []
+	if planned:
+		for entry in (layout as MaskLayout).relief:
+			var at := Vector2(float(entry[0]),float(entry[1]))
+			if at.y<low or at.y>=high or at.y>top: continue
+			if not await _band_pause(band,owner,signature): return
+			var radius := float(entry[2])
+			var depth := float(entry[3])
+			var size := Vector2(radius*1.9,radius*1.7)
+			if radius>=2.4:
+				_host(list,band,"body" if str(entry[4])=="body" else "trunk",at,size,lerpf(-2.8,-1.2,depth),random,-4.4)
+			else:
+				var mass := _block(list,band,"island","island",at,size,lerpf(-2.2,-1.0,depth),random)
+				if mass!=null: planned_islands.append([mass])
+	if not planned:
+		# Trunk: a few large host masses along the route, alternating sides and
+		# depths, each fused from a tilted body and its lobes.
+		var y := low+random.randf_range(-1.0,1.5)
+		var side := -1.0 if random.randf()<.5 else 1.0
+		while y<high:
+			if not await _band_pause(band,owner,signature): return
+			if y>-3.0 and y<top:
+				var size := Vector2(random.randf_range(5.5,9.0),random.randf_range(4.6,7.0))
+				var center := Vector2(_route_x(y)+side*random.randf_range(.4,2.2),y)
+				_host(list,band,"trunk",center,size,random.randf_range(-1.75,-1.0),random)
+				side = -side
+			y += random.randf_range(4.4,6.0)
+		# Landform set pieces of the region, before the blocks that must keep
+		# out of an arch opening.
+		var piece_y := clampf(float(form.get("y",low+12.0)),low+3.0,high-6.0)
+		if piece_y<top-6.0 and piece_y>4.0:
+			var flank := float(form.get("side",1))
+			if kind==1: _overhang(list,band,piece_y,flank,random)
+			elif kind in [3,5]: _arch(list,band,piece_y,flank,random)
+		# Body: larger, deeper blocks behind the trunk give the mountain depth.
+		y = low+random.randf_range(0,3.0)
+		while y<high:
+			if not await _band_pause(band,owner,signature): return
+			if y>-3.0 and y<top-1.0:
+				for flank in [-1.0,1.0]:
+					if random.randf()<.35:
+						var center := Vector2(_route_x(y)+flank*random.randf_range(3.8,5.2),y+random.randf_range(-1.0,1.0))
+						var size := Vector2(random.randf_range(6.5,9.0),random.randf_range(5.0,7.0))
+						var box := Rect2(center-size*.6,size*1.2)
+						var blocked := false
+						for opening in arch_openings: blocked = blocked or opening.grow(.5).intersects(box)
+						if not blocked: _host(list,band,"body",center,size,random.randf_range(-3.3,-3.0),random,-4.6)
+			y += random.randf_range(6.0,8.0)
 	# Fill: the route corridor stays on stone.
 	for step in range(int(BAND*2)):
 		var at := low+step*.5
@@ -411,35 +430,36 @@ func _generate_band(band: int, owner: Object = null) -> void:
 		# so loot never reads as a platform of the route.
 		_seat(list,band,p,Vector2(.6,.6),random)
 	# Side islands: separate clusters off the route, sky between them.
-	var islands: Array = []
-	for cluster in range(1 if kind in [2,3] else 2):
-		if not await _band_pause(band,owner,signature): return
-		var cy := low+random.randf_range(3.0,20.0)
-		var flank := -1.0 if (cluster==0)==(random.randf()<.5) else 1.0
-		if cy<3.0 or cy>top-3.0: continue
-		var cx := _route_x(cy)+flank*random.randf_range(7.5,10.5)
-		var members: Array = []
-		var core := _block(list,band,"island","island",Vector2(cx,cy),Vector2(random.randf_range(4.2,6.2),random.randf_range(3.4,5.0)),random.randf_range(-2.4,-1.6),random,-3.4,null,.4)
-		if core!=null:
-			members.append(core)
-			for member in range(random.randi_range(1,2)):
-				var pillar := random.randf()<.4
-				var size := Vector2(random.randf_range(1.8,2.6),random.randf_range(3.8,5.4)) if pillar else Vector2(random.randf_range(2.4,3.6),random.randf_range(2.0,3.0))
-				var center := Vector2(cx,cy)+Vector2(random.randf_range(-2.6,2.6),random.randf_range(-2.0,2.2))
-				var mass := _block(list,band,"island","pillar" if pillar else "island",center,size,core.z_rim+random.randf_range(-.3,.25),random,-3.4,core,.3)
-				if mass!=null: members.append(mass)
-		islands.append(members)
-	# Rubble at the feet of big blocks, away from every gameplay object.
-	var bases := list.duplicate()
-	for count in range(random.randi_range(2,4) if not bases.is_empty() else 0):
-		var parent: RockMassSpec = bases[random.randi_range(0,bases.size()-1)]
-		if parent.landform in ["shelf","rubble"]: continue
-		var foot := Vector2(INF,INF)
-		for point in parent.outer_contour:
-			if point.y<foot.y: foot = point
-		var at := foot+Vector2(random.randf_range(-.6,.6),random.randf_range(.1,.5))
-		if at.y<low or at.y>=high or _objects_near(at,1.2): continue
-		_block(list,band,"rubble","rubble",at,Vector2(random.randf_range(.9,1.6),random.randf_range(.7,1.2)),_front_z(list,at,-1.4)-.15,random)
+	var islands: Array = planned_islands
+	if not planned:
+		for cluster in range(1 if kind in [2,3] else 2):
+			if not await _band_pause(band,owner,signature): return
+			var cy := low+random.randf_range(3.0,20.0)
+			var flank := -1.0 if (cluster==0)==(random.randf()<.5) else 1.0
+			if cy<3.0 or cy>top-3.0: continue
+			var cx := _route_x(cy)+flank*random.randf_range(7.5,10.5)
+			var members: Array = []
+			var core := _block(list,band,"island","island",Vector2(cx,cy),Vector2(random.randf_range(4.2,6.2),random.randf_range(3.4,5.0)),random.randf_range(-2.4,-1.6),random,-3.4,null,.4)
+			if core!=null:
+				members.append(core)
+				for member in range(random.randi_range(1,2)):
+					var pillar := random.randf()<.4
+					var size := Vector2(random.randf_range(1.8,2.6),random.randf_range(3.8,5.4)) if pillar else Vector2(random.randf_range(2.4,3.6),random.randf_range(2.0,3.0))
+					var center := Vector2(cx,cy)+Vector2(random.randf_range(-2.6,2.6),random.randf_range(-2.0,2.2))
+					var mass := _block(list,band,"island","pillar" if pillar else "island",center,size,core.z_rim+random.randf_range(-.3,.25),random,-3.4,core,.3)
+					if mass!=null: members.append(mass)
+			islands.append(members)
+		# Rubble at the feet of big blocks, away from every gameplay object.
+		var bases := list.duplicate()
+		for count in range(random.randi_range(2,4) if not bases.is_empty() else 0):
+			var parent: RockMassSpec = bases[random.randi_range(0,bases.size()-1)]
+			if parent.landform in ["shelf","rubble"]: continue
+			var foot := Vector2(INF,INF)
+			for point in parent.outer_contour:
+				if point.y<foot.y: foot = point
+			var at := foot+Vector2(random.randf_range(-.6,.6),random.randf_range(.1,.5))
+			if at.y<low or at.y>=high or _objects_near(at,1.2): continue
+			_block(list,band,"rubble","rubble",at,Vector2(random.randf_range(.9,1.6),random.randf_range(.7,1.2)),_front_z(list,at,-1.4)-.15,random)
 	if not await _band_pause(band,owner,signature): return
 	band_masses[band] = list
 	band_islands[band] = islands

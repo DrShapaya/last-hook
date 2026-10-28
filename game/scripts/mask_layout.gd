@@ -187,8 +187,12 @@ func outer_edge(y: float, side: int) -> float:
 	var edges := edge_rows[clampi(int(y/ROW_STEP),0,edge_rows.size()-1)]
 	return edges.x if side<0 else edges.y
 
+# Objects keep 0.9 units clear of the painted edge, so the stone seats under
+# them never grow over sky windows and gaps.
+const EDGE_CLEAR := .9
+
 func outside(point: Vector2, margin: float = .65) -> bool:
-	if not _inside.is_empty(): return inside_distance(point)< -margin
+	if not _inside.is_empty(): return inside_distance(point)<EDGE_CLEAR-margin
 	return super.outside(point,margin)
 
 # --- Relief -------------------------------------------------------------------------
@@ -375,6 +379,20 @@ func crowded(point: Vector2) -> bool:
 		if zone.has_point(point): return true
 	return super.crowded(point)
 
+# The generator lays its extra grips in columns across the face and only
+# clamps them to the outer edge; on a painted mountain a column can fall in
+# a gap or window. Such a spot slides towards the corridor onto stone.
+func auxiliary_point(index: int, column: int, point: Vector2, random: RandomNumberGenerator) -> Vector2:
+	var candidate := super.auxiliary_point(index,column,point,random)
+	if _inside.is_empty() or inside_distance(candidate)>=EDGE_CLEAR: return candidate
+	var center := corridor_at(candidate.y).x
+	var step := signf(center-candidate.x)*.25
+	var probe := candidate
+	for attempt in range(int(absf(center-candidate.x)/.25)+1):
+		probe.x += step
+		if inside_distance(probe)>=EDGE_CLEAR: return probe
+	return candidate
+
 func branch_allowed(point: Vector2, index: int) -> bool:
 	for zone in _rest_zones:
 		if zone.has_point(point): return false
@@ -410,6 +428,75 @@ func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 	_add_free_pins()
 	_add_mask_obstacles()
 	_add_mask_rests()
+	_summit_ledge_last()
+	_settle_on_stone()
+	_note_objects_in_sky()
+
+# Side grips and finds the generator left over painted sky move to the
+# nearest stone within 2 units, as long as every transfer of the grip stays
+# within reach and clear. Main route grips are never moved.
+func _settle_on_stone() -> void:
+	var main := {}
+	for id in main_route: main[id] = true
+	var links := {}
+	for edge in edges:
+		links[edge.x] = links.get(edge.x,[])+[edge.y]
+		links[edge.y] = links.get(edge.y,[])+[edge.x]
+	for anchor in anchors:
+		var id: int = anchor["id"]
+		var from: Vector2 = anchor["pos"]
+		if main.has(id) or str(anchor.get("role",""))!="auxiliary" or anchor.get("reserve",false) or inside_distance(from)>=EDGE_CLEAR: continue
+		for spot in _stone_spots(from):
+			var fits := true
+			for other in links.get(id,[]):
+				var there: Vector2 = anchors[other]["pos"]
+				if spot.distance_to(there)>REACH or not transition_clear(spot,there): fits = false
+			if not fits: continue
+			_move_anchor(id,spot)
+			break
+	for find in finds:
+		var at: Vector2 = find["pos"]
+		if inside_distance(at)>=.4: continue
+		var spots := _stone_spots(at)
+		if not spots.is_empty():
+			find["pos"] = spots[0]
+			find["origin"] = spots[0]
+
+# Stone points round a spot, nearest first (rings of 0.4 units).
+func _stone_spots(at: Vector2) -> Array[Vector2]:
+	var result: Array[Vector2] = []
+	for ring in range(1,6):
+		var radius := ring*.4
+		for step in range(12):
+			var spot := at+Vector2.from_angle(TAU*step/12.0)*radius
+			if inside_distance(spot)>=EDGE_CLEAR: result.append(spot)
+	return result
+
+func _move_anchor(id: int, spot: Vector2) -> void:
+	var old_key := int(floor(anchors[id]["pos"].y/CHUNK_HEIGHT))
+	var new_key := int(floor(spot.y/CHUNK_HEIGHT))
+	anchors[id]["pos"] = spot
+	if old_key!=new_key:
+		(bins[old_key] as Array).erase(id)
+		if not bins.has(new_key): bins[new_key] = []
+		bins[new_key].append(id)
+
+# Grips, finds and platforms must stand on painted stone; their seats would
+# otherwise fill a sky window or gap. Each one in the sky is noted.
+var sky_objects := 0
+
+func _note_objects_in_sky() -> void:
+	sky_objects = 0
+	var points: Array = []
+	for anchor in anchors: points.append(["Опора (%s)" % anchor.get("role",""),anchor["pos"]])
+	for find in finds: points.append(["Находка",find["pos"]])
+	for ledge in ledges: points.append(["Площадка",Vector2((float(ledge["left"])+float(ledge["right"]))*.5,float(ledge["top"])-.3)])
+	for entry in points:
+		var point: Vector2 = entry[1]
+		if point.y<1.0 or point.y>summit: continue
+		if inside_distance(point)<.15:
+			sky_objects += 1
+			mask_notes.append("%s в небе: x %.1f, %d м" % [entry[0],point.x,roundi(point.y*10)])
 
 func _add_free_pins() -> void:
 	for pin in source.brief.get("pins",[]):
@@ -485,6 +572,15 @@ func _add_mask_rests() -> void:
 			mask_notes.append("Площадка на высоте %d м не поместилась между опорами" % roundi(top*10))
 			continue
 		ledges.append({"left":best.x,"right":best.y,"top":top,"style":int(rng(roundi(top*10),330).randi_range(0,2)),"role":"rest","mask":true})
+
+# The summit platform stays the last ledge, as on every other level.
+func _summit_ledge_last() -> void:
+	for index in range(ledges.size()):
+		if absf(float(ledges[index]["top"])-(summit-.4))<.001 and not ledges[index].get("mask",false):
+			var platform: Dictionary = ledges[index]
+			ledges.remove_at(index)
+			ledges.append(platform)
+			return
 
 static func _cut(parts: Array[Vector2], hole: Vector2) -> Array[Vector2]:
 	var result: Array[Vector2] = []

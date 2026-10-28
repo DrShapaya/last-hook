@@ -4,130 +4,148 @@
 	"route": 0,
 	"name": "Тропа лесника",
 	"height": 120.0,
+	"generator": "masks",
 	"seeds": {
-		"route": 1333
+		"route": 1333,
+		"design": 41325
 	},
 	"pins": [],
-	"zones": [
+	"zones": [],
+	"design": [
 		{
-			"mask": "zone_0",
-			"type": "wind_pocket",
-			"kind": "field",
-			"act": 1,
-			"params": {
-				"telegraph_time": 0.0,
-				"calm_time": 0.0,
-				"phase": 1.30046343803406,
-				"haze": false,
-				"affects_main": false,
-				"force": [
-					-3.0,
-					0.0
-				]
-			}
+			"form": "base",
+			"beat": "start",
+			"act": 0,
+			"from": -2.0,
+			"to": 3.0
 		},
 		{
-			"mask": "zone_1",
-			"type": "wind_pocket",
-			"kind": "field",
-			"act": 1,
-			"params": {
-				"telegraph_time": 0.0,
-				"calm_time": 0.0,
-				"phase": 1.30046343803406,
-				"haze": false,
-				"affects_main": false,
-				"force": [
-					3.0,
-					0.0
-				]
-			}
+			"form": "wall",
+			"beat": "intro",
+			"act": 0,
+			"from": 3.0,
+			"to": 7.8
 		},
 		{
-			"mask": "zone_2",
-			"type": "wind_pocket",
-			"kind": "field",
-			"act": 1,
-			"params": {
-				"telegraph_time": 0.0,
-				"calm_time": 0.0,
-				"phase": 1.30046343803406,
-				"haze": false,
-				"affects_main": false,
-				"force": [
-					-3.0,
-					0.0
-				]
-			}
+			"form": "overhang",
+			"beat": "teach",
+			"act": 0,
+			"from": 5.8,
+			"to": 16.2
 		},
 		{
-			"mask": "zone_3",
-			"type": "wind_pocket",
-			"kind": "field",
+			"form": "split",
+			"beat": "fork",
+			"act": 0,
+			"from": 14.2,
+			"to": 23.0
+		},
+		{
+			"form": "terrace",
+			"beat": "rest",
+			"act": 0,
+			"from": 21.0,
+			"to": 28.3
+		},
+		{
+			"form": "traverse",
+			"beat": "combo",
+			"act": 0,
+			"from": 26.3,
+			"to": 33.9
+		},
+		{
+			"form": "neck",
+			"beat": "exit",
+			"act": 0,
+			"from": 31.9,
+			"to": 39.3
+		},
+		{
+			"form": "wall",
+			"beat": "intro",
+			"act": 1,
+			"from": 40.0,
+			"to": 45.0
+		},
+		{
+			"form": "islands",
+			"beat": "teach",
+			"act": 1,
+			"from": 43.0,
+			"to": 54.1
+		},
+		{
+			"form": "split",
+			"beat": "fork",
+			"act": 1,
+			"from": 52.1,
+			"to": 61.5
+		},
+		{
+			"form": "terrace",
+			"beat": "rest",
+			"act": 1,
+			"from": 59.5,
+			"to": 67.2
+		},
+		{
+			"form": "islands",
+			"beat": "combo",
+			"act": 1,
+			"from": 65.2,
+			"to": 73.3
+		},
+		{
+			"form": "neck",
+			"beat": "exit",
+			"act": 1,
+			"from": 71.3,
+			"to": 79.1
+		},
+		{
+			"form": "wall",
+			"beat": "intro",
 			"act": 2,
-			"params": {
-				"telegraph_time": 0.0,
-				"calm_time": 0.0,
-				"phase": 2.81966471672058,
-				"haze": false,
-				"affects_main": false,
-				"force": [
-					-3.0,
-					0.0
-				]
-			}
+			"from": 80.0,
+			"to": 85.0
 		},
 		{
-			"mask": "zone_4",
-			"type": "wind_pocket",
-			"kind": "field",
+			"form": "islands",
+			"beat": "teach",
 			"act": 2,
-			"params": {
-				"telegraph_time": 0.0,
-				"calm_time": 0.0,
-				"phase": 2.81966471672058,
-				"haze": false,
-				"affects_main": false,
-				"force": [
-					-3.0,
-					0.0
-				]
-			}
+			"from": 83.0,
+			"to": 94.1
+		},
+		{
+			"form": "terrace",
+			"beat": "rest",
+			"act": 2,
+			"from": 92.1,
+			"to": 99.8
+		},
+		{
+			"form": "traverse",
+			"beat": "combo",
+			"act": 2,
+			"from": 97.8,
+			"to": 105.9
+		},
+		{
+			"form": "split",
+			"beat": "fork",
+			"act": 2,
+			"from": 103.9,
+			"to": 113.3
+		},
+		{
+			"form": "neck",
+			"beat": "exit",
+			"act": 2,
+			"from": 111.3,
+			"to": 119.1
 		}
 	],
-	"acts": [
-		{
-			"id": "root_wall",
-			"until": 40.0,
-			"biome": "forest",
-			"grips": {
-				"stone": 0.87,
-				"spring": 0.05,
-				"root": 0.08
-			}
-		},
-		{
-			"id": "wind_traverse",
-			"until": 80.0,
-			"biome": "ridge",
-			"grips": {
-				"stone": 0.88,
-				"root": 0.05,
-				"spring": 0.07
-			}
-		},
-		{
-			"id": "old_post",
-			"until": 120.0,
-			"biome": "ruins",
-			"grips": {
-				"stone": 0.86,
-				"crystal": 0.05,
-				"spring": 0.07,
-				"root": 0.02
-			}
-		}
-	],
-	"loot_budget": 8946,
+	"design_variant": 0,
 	"format": 1
 }

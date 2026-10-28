@@ -1,0 +1,14 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_8a20f306fd0eac6e.gdshader" id="1_eig27"]
+[ext_resource type="Texture2D" path="res://assets/sprites/vegetation/bush_5.png" id="2_jty3q"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_eig27")
+shader_parameter/albedo_tex = ExtResource("2_jty3q")
+shader_parameter/tint = null
+shader_parameter/hanging = 0.0
+shader_parameter/sway = 0.04
+shader_parameter/wind = null
+shader_parameter/contact = null

@@ -106,5 +106,33 @@ func run_tests() -> void:
 	level.layout_data = data
 	baked.load_bake(level)
 	check(is_equal_approx(baked.layout.outer_edge(30.0,1),layout.outer_edge(30.0,1)) and baked.layout.main_route==layout.main_route,"a mask level loads from its bake without masks")
+	designer_tests()
 	print("MASKS_TESTS ",checks," checks, ",failures.size()," failures")
 	quit(0 if failures.is_empty() else 1)
+
+# The automatic designer: beats dressed in landforms, the route on stone,
+# the same seed giving the same source.
+func designer_tests() -> void:
+	var designer := LevelDesigner.new(1,0,777)
+	var source := designer.build()
+	check(source.masks["silhouette"].get_size()==source.size() and source.brief["generator"]=="masks","the designer writes a mask source of the level's size")
+	var forms_ok := true
+	var repeats := 0
+	for index in range(1,designer.sections.size()):
+		var section: Dictionary = designer.sections[index]
+		if not LevelDesigner.BEAT_FORMS[section["beat"]].has(section["form"]): forms_ok = false
+		if section["form"]==designer.sections[index-1]["form"]: repeats += 1
+	check(forms_ok and repeats==0,"every section suits its beat and no two neighbours share a landform")
+	var acts := {}
+	for section in designer.sections: acts[section["act"]] = true
+	check(acts.size()==3,"the designer dresses all three acts")
+	var off_stone := 0
+	var y := 2.0
+	while y<designer.height:
+		if source.sample("silhouette",Vector2(designer.corridor_center(y),y))<.5: off_stone += 1
+		y += .5
+	check(off_stone==0,"the designed route corridor runs on stone all the way up (%d gaps)" % off_stone)
+	var again := LevelDesigner.new(1,0,777).build()
+	check(again.masks["silhouette"].get_data()==source.masks["silhouette"].get_data() and again.masks["route"].get_data()==source.masks["route"].get_data(),"the same design seed gives the same masks")
+	var other := LevelDesigner.new(1,0,778).build()
+	check(other.masks["silhouette"].get_data()!=source.masks["silhouette"].get_data(),"another design seed gives another mountain")

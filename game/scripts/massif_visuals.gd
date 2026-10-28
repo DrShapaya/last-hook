@@ -349,12 +349,15 @@ func _generate_band(band: int, owner: Object = null) -> void:
 			if not await _band_pause(band,owner,signature): return
 			var radius := float(entry[2])
 			var depth := float(entry[3])
-			var size := Vector2(radius*1.9,radius*1.7)
-			if radius>=2.4:
-				_host(list,band,"body" if str(entry[4])=="body" else "trunk",at,size,lerpf(-2.8,-1.2,depth),random,-4.4)
-			else:
-				var mass := _block(list,band,"island","island",at,size,lerpf(-2.2,-1.0,depth),random)
-				if mass!=null: planned_islands.append([mass])
+			# Corners of a full boulder reach about 1.3 half-sizes out: this keeps
+			# them within the planned circle.
+			var size := Vector2(radius*1.55,radius*1.4)
+			# Single boulders that keep inside their planned circle: a host's
+			# lobes would grow over the painted sky windows.
+			var role := "body" if str(entry[4])=="body" else "trunk" if radius>=2.4 else "island"
+			var z_rim := lerpf(-2.8,-1.2,depth) if radius>=2.4 else lerpf(-2.2,-1.0,depth)
+			var mass := _block(list,band,role,"island",at,size,z_rim,random,-4.4 if radius>=2.4 else -3.4)
+			if mass!=null and role=="island": planned_islands.append([mass])
 	if not planned:
 		# Trunk: a few large host masses along the route, alternating sides and
 		# depths, each fused from a tilted body and its lobes.
@@ -389,8 +392,9 @@ func _generate_band(band: int, owner: Object = null) -> void:
 						for opening in arch_openings: blocked = blocked or opening.grow(.5).intersects(box)
 						if not blocked: _host(list,band,"body",center,size,random.randf_range(-3.3,-3.0),random,-4.6)
 			y += random.randf_range(6.0,8.0)
-	# Fill: the route corridor stays on stone.
-	for step in range(int(BAND*2)):
+	# Fill: the route corridor stays on stone. A planned relief already
+	# covers its whole silhouette; slabs here would spill over its edges.
+	for step in range(int(BAND*2) if not planned else 0):
 		var at := low+step*.5
 		if at<-2.0 or at>top-1.0: continue
 		if step%4==0 and not await _band_pause(band,owner,signature): return

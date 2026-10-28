@@ -4,136 +4,148 @@
 	"route": 1,
 	"name": "Ледяная расщелина",
 	"height": 160.0,
+	"generator": "masks",
 	"seeds": {
-		"route": 211185
+		"route": 211185,
+		"design": 6546738
 	},
 	"pins": [],
-	"zones": [
+	"zones": [],
+	"design": [
 		{
-			"mask": "zone_0",
-			"type": "icicle",
-			"kind": "falling",
+			"form": "base",
+			"beat": "start",
+			"act": 0,
+			"from": -2.0,
+			"to": 3.0
+		},
+		{
+			"form": "wall",
+			"beat": "intro",
+			"act": 0,
+			"from": 3.0,
+			"to": 13.6
+		},
+		{
+			"form": "overhang",
+			"beat": "teach",
+			"act": 0,
+			"from": 11.6,
+			"to": 22.4
+		},
+		{
+			"form": "terrace",
+			"beat": "rest",
+			"act": 0,
+			"from": 20.4,
+			"to": 27.9
+		},
+		{
+			"form": "split",
+			"beat": "fork",
+			"act": 0,
+			"from": 25.9,
+			"to": 35.0
+		},
+		{
+			"form": "chimney",
+			"beat": "combo",
+			"act": 0,
+			"from": 33.0,
+			"to": 46.6
+		},
+		{
+			"form": "neck",
+			"beat": "exit",
+			"act": 0,
+			"from": 44.6,
+			"to": 52.2
+		},
+		{
+			"form": "wall",
+			"beat": "intro",
 			"act": 1,
-			"params": {
-				"telegraph_time": 1.1,
-				"active_time": 0.7,
-				"calm_time": 3.0,
-				"phase": 2.72652983665466,
-				"radius": 0.45,
-				"affects_main": false
-			}
+			"from": 53.0,
+			"to": 64.3
 		},
 		{
-			"mask": "zone_1",
-			"type": "icicle",
-			"kind": "falling",
+			"form": "islands",
+			"beat": "teach",
 			"act": 1,
-			"params": {
-				"telegraph_time": 1.1,
-				"active_time": 0.7,
-				"calm_time": 3.0,
-				"phase": 2.72652983665466,
-				"radius": 0.45,
-				"affects_main": false
-			}
+			"from": 62.3,
+			"to": 73.8
 		},
 		{
-			"mask": "zone_2",
-			"type": "icicle",
-			"kind": "falling",
+			"form": "terrace",
+			"beat": "rest",
 			"act": 1,
-			"params": {
-				"telegraph_time": 1.1,
-				"active_time": 0.7,
-				"calm_time": 3.0,
-				"phase": 2.72652983665466,
-				"radius": 0.45,
-				"affects_main": false
-			}
+			"from": 71.8,
+			"to": 79.7
 		},
 		{
-			"mask": "zone_3",
-			"type": "blizzard_gust",
-			"kind": "field",
-			"act": 2,
-			"params": {
-				"telegraph_time": 1.0,
-				"active_time": 0.7,
-				"calm_time": 3.8,
-				"phase": 0.291262984275818,
-				"haze": false,
-				"affects_main": false,
-				"force": [
-					-6.0,
-					0.0
-				]
-			}
+			"form": "arch",
+			"beat": "fork",
+			"act": 1,
+			"from": 77.7,
+			"to": 87.4
 		},
 		{
-			"mask": "zone_4",
-			"type": "icicle",
-			"kind": "falling",
-			"act": 2,
-			"params": {
-				"telegraph_time": 1.1,
-				"active_time": 0.7,
-				"calm_time": 3.0,
-				"phase": 0.291262984275818,
-				"radius": 0.45,
-				"affects_main": false
-			}
+			"form": "traverse",
+			"beat": "combo",
+			"act": 1,
+			"from": 85.4,
+			"to": 99.9
 		},
 		{
-			"mask": "zone_5",
-			"type": "blizzard_gust",
-			"kind": "field",
+			"form": "neck",
+			"beat": "exit",
+			"act": 1,
+			"from": 97.9,
+			"to": 106.0
+		},
+		{
+			"form": "wall",
+			"beat": "intro",
 			"act": 2,
-			"params": {
-				"telegraph_time": 1.0,
-				"active_time": 0.7,
-				"calm_time": 3.8,
-				"phase": 0.291262984275818,
-				"haze": false,
-				"affects_main": false,
-				"force": [
-					6.0,
-					0.0
-				]
-			}
+			"from": 107.0,
+			"to": 118.2
+		},
+		{
+			"form": "overhang",
+			"beat": "teach",
+			"act": 2,
+			"from": 116.2,
+			"to": 127.4
+		},
+		{
+			"form": "terrace",
+			"beat": "rest",
+			"act": 2,
+			"from": 125.4,
+			"to": 133.3
+		},
+		{
+			"form": "islands",
+			"beat": "combo",
+			"act": 2,
+			"from": 131.3,
+			"to": 145.6
+		},
+		{
+			"form": "arch",
+			"beat": "fork",
+			"act": 2,
+			"from": 143.6,
+			"to": 153.1
+		},
+		{
+			"form": "neck",
+			"beat": "exit",
+			"act": 2,
+			"from": 151.1,
+			"to": 159.1
 		}
 	],
-	"acts": [
-		{
-			"id": "white_saddle",
-			"until": 53.0,
-			"biome": "snow",
-			"grips": {
-				"stone": 0.92,
-				"spring": 0.05,
-				"ice": 0.03
-			}
-		},
-		{
-			"id": "blue_crevasse",
-			"until": 107.0,
-			"biome": "crevasse",
-			"grips": {
-				"stone": 0.93,
-				"spring": 0.05,
-				"ice": 0.02
-			}
-		},
-		{
-			"id": "shattered_crown",
-			"until": 160.0,
-			"biome": "crown",
-			"grips": {
-				"stone": 0.92,
-				"ice": 0.05,
-				"spring": 0.03
-			}
-		}
-	],
-	"loot_budget": 10507,
+	"design_variant": 0,
 	"format": 1
 }

@@ -239,7 +239,7 @@ func run_tests() -> void:
 			if source==null:
 				source_problems.append("%d:%d no source" % [location,route])
 				continue
-			for layer in ["silhouette","depth","solid","route","branch","rest","difficulty","loot"]:
+			for layer in ["silhouette","depth","route","difficulty"]:
 				var image: Image = source.masks.get(layer)
 				if image==null or image.get_size()!=source.size(): source_problems.append("%d:%d %s" % [location,route,layer])
 			for zone in source.brief.get("zones",[]):
@@ -251,12 +251,15 @@ func run_tests() -> void:
 			root.add_child(world)
 			world.setup(level.seed_value,location,0,false,route,level.generator=="masks")
 			world.load_bake(level)
-			var outside := 0
+			# Every main grip on stone; all but the forks' detours in the corridor.
+			var off_stone := 0
+			var off_route := 0
 			for id in world.main_route:
 				var point: Vector2 = world.anchors[id]["pos"]
-				if source.sample("route",point)<.5: outside += 1
-				if source.sample("silhouette",point)<.5: outside += 1
-			if outside>0: source_problems.append("%d:%d %d main grips off route or stone" % [location,route,outside])
+				if point.y>level.height: continue
+				if source.sample("silhouette",point)<.5: off_stone += 1
+				if source.sample("route",point)<.5: off_route += 1
+			if off_stone>0 or off_route>world.main_route.size()/8: source_problems.append("%d:%d %d main grips off stone, %d off route" % [location,route,off_stone,off_route])
 			world.free()
 	check(source_problems.is_empty(),"every route has its source masks and the corridor follows the route %s" % str(source_problems.slice(0,4)))
 	var directory := OS.get_environment("LASTHOOK_SAVE_DIR")

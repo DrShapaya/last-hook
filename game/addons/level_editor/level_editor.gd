@@ -34,6 +34,9 @@ var masks_toggle := CheckBox.new()
 var notes := Label.new()
 var save_button := Button.new()
 var rebuild_button := Button.new()
+var design_button := Button.new()
+# Background steps still to run after the current one: [tool path, arguments].
+var pending_steps: Array = []
 var status := Label.new()
 var coordinates := Label.new()
 var layer_list := VBoxContainer.new()
@@ -99,6 +102,10 @@ func _init() -> void:
 	rebuild_button.tooltip_text = "Сохраняет маски и пересобирает уровень в фоне, затем обновляет превью"
 	rebuild_button.pressed.connect(rebuild_level)
 	bar.add_child(rebuild_button)
+	design_button.text = "Новый вариант"
+	design_button.tooltip_text = "Автодизайнер придумывает уровень заново со следующим сидом и пересобирает его"
+	design_button.pressed.connect(redesign_level)
+	bar.add_child(design_button)
 
 	var body := HSplitContainer.new()
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -290,21 +297,54 @@ func save_level() -> void:
 func rebuild_level() -> void:
 	if source==null or rebuild_pid>0: return
 	save_level()
+	_run_steps([["res://tools/bake_levels.gd",[]]],"Пересборка уровня…")
+
+# The automatic designer makes the level anew (next design variant), then
+# the level is rebuilt; the editor reloads the new masks.
+func redesign_level() -> void:
+	if source==null or rebuild_pid>0: return
+	var variant := int(source.brief.get("design_variant",0))+1
+	_run_steps([["res://tools/design_levels.gd",["--variant=%d" % variant]],["res://tools/bake_levels.gd",[]]],"Автодизайн, вариант %d…" % variant)
+	redesigning = true
+
+var redesigning := false
+
+func _run_steps(steps: Array, message: String) -> void:
+	pending_steps = steps.duplicate()
+	status.text = message
+	_start_next_step()
+
+func _start_next_step() -> void:
+	var step: Array = pending_steps.pop_front()
 	var executable := godot_executable if not godot_executable.is_empty() else OS.get_executable_path()
-	var arguments := ["--headless","--path",ProjectSettings.globalize_path("res://"),"--script","res://tools/bake_levels.gd","--",
+	var arguments := ["--headless","--path",ProjectSettings.globalize_path("res://"),"--script",step[0],"--",
 		"--only=%d:%d" % [int(source.brief.get("location",0)),int(source.brief.get("route",0))]]
+	arguments.append_array(step[1])
 	rebuild_pid = OS.create_process(executable,arguments)
 	rebuild_button.disabled = rebuild_pid>0
-	status.text = "Пересборка уровня…" if rebuild_pid>0 else "Не удалось запустить пересборку"
+	design_button.disabled = rebuild_pid>0
+	if rebuild_pid<=0:
+		pending_steps.clear()
+		status.text = "Не удалось запустить фоновую сборку"
 
 func _process(_delta: float) -> void:
 	if rebuild_pid>0 and not OS.is_process_running(rebuild_pid):
 		rebuild_pid = -1
+		if not pending_steps.is_empty():
+			_start_next_step()
+			return
 		rebuild_button.disabled = false
-		_load_layout()
+		design_button.disabled = false
 		_reload_scenes()
-		_refresh_preview()
-		_load_notes()
+		if redesigning:
+			# New masks on disk: open the level afresh.
+			redesigning = false
+			dirty = false
+			open_level(level_directory)
+		else:
+			_load_layout()
+			_refresh_preview()
+			_load_notes()
 		status.text = "Уровень пересобран"
 
 # The bake tool's report for this level: what the masks could not get.

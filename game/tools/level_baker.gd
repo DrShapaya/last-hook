@@ -40,6 +40,10 @@ func bake_level(location: int, route: int, height: float) -> int:
 		level.seed_value = seed_value
 		level.height = height
 		level.generator = "masks" if from_masks else "layout"
+		# Section digests carry over: a rebuilt layout whose scenery comes out
+		# the same leaves its section files untouched.
+		var previous := ResourceLoader.load(path,"",ResourceLoader.CACHE_MODE_IGNORE) as LevelBake if ResourceLoader.exists(path) else null
+		if previous!=null: level.chunk_digests = previous.chunk_digests.duplicate()
 		var source := MountainWorld.new()
 		source.visuals_enabled = false
 		root.add_child(source)

@@ -1,0 +1,178 @@
+{
+	"id": "stone_spires_r2",
+	"location": 1,
+	"route": 2,
+	"name": "Дозор бурь",
+	"height": 140.0,
+	"seeds": {
+		"route": 121000
+	},
+	"pins": [],
+	"zones": [
+		{
+			"mask": "zone_0",
+			"type": "cactus",
+			"kind": "contact",
+			"act": 0,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 0.715909361839294,
+				"radius": 0.6,
+				"affects_main": false
+			}
+		},
+		{
+			"mask": "zone_1",
+			"type": "sand_storm",
+			"kind": "field",
+			"act": 1,
+			"params": {
+				"telegraph_time": 1.3,
+				"active_time": 2.4,
+				"calm_time": 3.4,
+				"phase": 0.0333213843405247,
+				"haze": true,
+				"affects_main": false,
+				"force": [
+					3.40000009536743,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_2",
+			"type": "sand_storm",
+			"kind": "field",
+			"act": 1,
+			"params": {
+				"telegraph_time": 1.3,
+				"active_time": 2.4,
+				"calm_time": 3.4,
+				"phase": 0.0333213843405247,
+				"haze": true,
+				"affects_main": false,
+				"force": [
+					-3.40000009536743,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_3",
+			"type": "scorpion",
+			"kind": "contact",
+			"act": 1,
+			"params": {
+				"telegraph_time": 0.9,
+				"active_time": 0.6,
+				"calm_time": 2.8,
+				"phase": 0.0333213843405247,
+				"radius": 0.75,
+				"affects_main": false
+			}
+		},
+		{
+			"mask": "zone_4",
+			"type": "sand_storm",
+			"kind": "field",
+			"act": 2,
+			"params": {
+				"telegraph_time": 1.3,
+				"active_time": 2.4,
+				"calm_time": 3.4,
+				"phase": 3.39284634590149,
+				"haze": true,
+				"affects_main": false,
+				"force": [
+					3.40000009536743,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_5",
+			"type": "storm_cycle",
+			"kind": "field",
+			"act": 2,
+			"params": {
+				"telegraph_time": 1.5,
+				"active_time": 2.0,
+				"calm_time": 3.6,
+				"phase": 3.39284634590149,
+				"haze": true,
+				"affects_main": true,
+				"force": [
+					-2.20000004768372,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_6",
+			"type": "sand_bridge",
+			"kind": "collapse",
+			"act": 2,
+			"params": {
+				"telegraph_time": 1.0,
+				"active_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 0.0,
+				"affects_main": false
+			}
+		},
+		{
+			"mask": "zone_7",
+			"type": "sand_storm",
+			"kind": "field",
+			"act": 2,
+			"params": {
+				"telegraph_time": 1.3,
+				"active_time": 2.4,
+				"calm_time": 3.4,
+				"phase": 3.39284634590149,
+				"haze": true,
+				"affects_main": false,
+				"force": [
+					3.40000009536743,
+					0.0
+				]
+			}
+		}
+	],
+	"acts": [
+		{
+			"id": "dry_canyon",
+			"until": 47.0,
+			"biome": "desert",
+			"grips": {
+				"stone": 0.84,
+				"spring": 0.09,
+				"root": 0.07
+			}
+		},
+		{
+			"id": "buried_caravan",
+			"until": 93.0,
+			"biome": "caravan",
+			"grips": {
+				"stone": 0.95,
+				"root": 0.04,
+				"spring": 0.02
+			}
+		},
+		{
+			"id": "storm_observatory",
+			"until": 140.0,
+			"biome": "observatory",
+			"grips": {
+				"stone": 0.91,
+				"crystal": 0.02,
+				"spring": 0.04,
+				"root": 0.02
+			}
+		}
+	],
+	"loot_budget": 9782,
+	"format": 1
+}

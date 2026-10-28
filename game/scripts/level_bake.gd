@@ -1,3 +1,4 @@
+@tool
 class_name LevelBake
 extends Resource
 
@@ -31,6 +32,9 @@ const SKIP := ["generation_row_budget","relief_noise","grain_noise","loot_plan"]
 @export var layout_data: Dictionary = {}
 # Highest section with scenery, per quality.
 @export var chunk_count := 0
+# Content digest of each baked section ("<quality>/<key>"), so a rebake
+# rewrites only sections that changed.
+@export var chunk_digests: Dictionary = {}
 
 static func directory(level_location: int, level_route: int) -> String:
 	return ROOT.path_join("%s_r%d" % [LevelCatalog.level(level_location)["id"],level_route])

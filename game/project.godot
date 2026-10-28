@@ -36,7 +36,7 @@ window/handheld/orientation=1
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/last_hook_ads/plugin.cfg")
+enabled=PackedStringArray("res://addons/last_hook_ads/plugin.cfg", "res://addons/level_editor/plugin.cfg")
 
 [input_devices]
 

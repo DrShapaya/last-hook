@@ -1,0 +1,133 @@
+{
+	"id": "green_peak_r0",
+	"location": 0,
+	"route": 0,
+	"name": "Тропа лесника",
+	"height": 120.0,
+	"seeds": {
+		"route": 1333
+	},
+	"pins": [],
+	"zones": [
+		{
+			"mask": "zone_0",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 1,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 1.30046343803406,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					-3.0,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_1",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 1,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 1.30046343803406,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					3.0,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_2",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 1,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 1.30046343803406,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					-3.0,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_3",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 2,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 2.81966471672058,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					-3.0,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_4",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 2,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 2.81966471672058,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					-3.0,
+					0.0
+				]
+			}
+		}
+	],
+	"acts": [
+		{
+			"id": "root_wall",
+			"until": 40.0,
+			"biome": "forest",
+			"grips": {
+				"stone": 0.87,
+				"spring": 0.05,
+				"root": 0.08
+			}
+		},
+		{
+			"id": "wind_traverse",
+			"until": 80.0,
+			"biome": "ridge",
+			"grips": {
+				"stone": 0.88,
+				"root": 0.05,
+				"spring": 0.07
+			}
+		},
+		{
+			"id": "old_post",
+			"until": 120.0,
+			"biome": "ruins",
+			"grips": {
+				"stone": 0.86,
+				"crystal": 0.05,
+				"spring": 0.07,
+				"root": 0.02
+			}
+		}
+	],
+	"loot_budget": 8946,
+	"format": 1
+}

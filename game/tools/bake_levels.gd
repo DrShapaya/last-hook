@@ -76,26 +76,82 @@ func bake_level(location: int, route: int, height: float) -> int:
 			world.visuals.build_chunk(key,scenery)
 			_own(scenery,scenery)
 			_externalize(scenery)
+			_number_subresources(scenery)
 			var scene := PackedScene.new()
 			var error := scene.pack(scenery)
-			if error==OK: error = ResourceSaver.save(scene,LevelBake.chunk_path(location,route,quality,key),ResourceSaver.FLAG_COMPRESS)
+			var chunk_file := LevelBake.chunk_path(location,route,quality,key)
+			# Godot names references and nodes with fresh random ids on every
+			# save; an unchanged section keeps its file so git sees no change.
+			var digest := _content_digest(scene) if error==OK else ""
+			var slot := "%s/%d" % [quality,key]
+			if error==OK and (level.chunk_digests.get(slot,"")!=digest or not FileAccess.file_exists(chunk_file)):
+				error = _save_stable(scene,chunk_file)
+				level.chunk_digests[slot] = digest
 			if error!=OK: push_error("BAKE chunk %d %s failed: %d" % [key,quality,error])
 			scenery.free()
 		world.free()
 	level.chunk_count = chunk_count
-	var error := ResourceSaver.save(level,path)
+	var error := _save_stable(level,path)
 	if error!=OK: push_error("BAKE layout %s failed: %d" % [path,error])
 	print("BAKE %s chunks=%d edited=%s in %d ms" % [LevelBake.directory(location,route),chunk_count,level.edited,Time.get_ticks_msec()-started])
 	return 1
 
 # Every node becomes part of the section scene itself. Model instances are
 # flattened: their parts carry materials and shadow settings set in code,
-# which an instance reference would drop.
+# which an instance reference would drop. Nodes left unnamed by code get a
+# name from their place, not from a global counter, so an unchanged section
+# bakes to the same bytes.
 func _own(node: Node, scene_root: Node) -> void:
+	var index := 0
 	for child in node.get_children():
+		if str(child.name).begins_with("@"): child.name = "%s_%d" % [child.get_class(),index]
+		index += 1
 		child.owner = scene_root
 		child.scene_file_path = ""
 		_own(child,scene_root)
+
+# Resources embedded in a scene get ids from their order, not random ones.
+func _number_subresources(scene_root: Node) -> void:
+	var seen := {}
+	var queue: Array[Node] = [scene_root]
+	while not queue.is_empty():
+		var node: Node = queue.pop_front()
+		var resources: Array = []
+		if node is GeometryInstance3D:
+			resources.append_array([(node as GeometryInstance3D).material_override,(node as GeometryInstance3D).material_overlay])
+		if node is MeshInstance3D:
+			var instance := node as MeshInstance3D
+			resources.append(instance.mesh)
+			if instance.mesh!=null:
+				for surface in range(instance.mesh.get_surface_count()): resources.append(instance.mesh.surface_get_material(surface))
+			for surface in range(instance.get_surface_override_material_count()): resources.append(instance.get_surface_override_material(surface))
+		if node is SpriteBase3D: resources.append((node as SpriteBase3D).get("texture"))
+		if node is Label3D: resources.append((node as Label3D).font)
+		for resource in resources:
+			if resource is Resource and (resource as Resource).resource_path.is_empty() and not seen.has(resource):
+				seen[resource] = true
+				(resource as Resource).resource_scene_unique_id = "r%d" % seen.size()
+		queue.append_array(node.get_children())
+
+# The scene's text form without the ids Godot draws at random on each save.
+func _content_digest(scene: PackedScene) -> String:
+	var temporary := "user://bake_digest.tscn"
+	if ResourceSaver.save(scene,temporary)!=OK: return ""
+	var text := FileAccess.get_file_as_string(temporary)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temporary))
+	var ids := RegEx.create_from_string("([0-9]+)_[a-z0-9]{5}\"")
+	text = ids.sub(text,"$1\"",true)
+	text = RegEx.create_from_string(" unique_id=[0-9]+").sub(text,"",true)
+	text = RegEx.create_from_string("uid=\"uid://[a-z0-9]+\"").sub(text,"",true)
+	return text.sha256_text()
+
+# Saves keeping the file's previous UID: re-baking an unchanged level leaves
+# its files untouched in git.
+func _save_stable(resource: Resource, file: String) -> Error:
+	var uid := ResourceLoader.get_resource_uid(file) if ResourceLoader.exists(file) else ResourceUID.INVALID_ID
+	var error := ResourceSaver.save(resource,file,ResourceSaver.FLAG_COMPRESS)
+	if error==OK and uid!=ResourceUID.INVALID_ID: error = ResourceSaver.set_uid(file,uid)
+	return error
 
 func _externalize(node: Node) -> void:
 	if node is GeometryInstance3D:
@@ -127,8 +183,10 @@ func _save_shader(shader: Shader) -> void:
 
 func _save_shared(resource: Resource, file: String) -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(file.get_base_dir()))
-	var error := ResourceSaver.save(resource,file)
-	if error!=OK: push_error("BAKE shared %s failed: %d" % [file,error])
+	# Shared files are named by content: an existing one is already right.
+	if not FileAccess.file_exists(file):
+		var error := ResourceSaver.save(resource,file)
+		if error!=OK: push_error("BAKE shared %s failed: %d" % [file,error])
 	resource.take_over_path(file)
 	saved_resources[resource] = file
 

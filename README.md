@@ -82,6 +82,8 @@ tools/godot/Godot_v4.7.2-stable_win64_console.exe --headless --path game --scrip
 tools/godot/Godot_v4.7.2-stable_win64_console.exe --headless --path game --script res://tools/bake_levels.gd
 ```
 
+Рядом с каждым уровнем в `source/` лежит его исходник для редактора уровней: бриф `level.json` и маски (силуэт, коридор маршрута, площадки, зоны опасностей…). Нынешние маршруты выгружены в маски инструментом `game/tools/export_level_masks.gd`. Маски открываются, рисуются и пересобираются во вкладке **«Уровни»** редактора Godot (плагин `game/addons/level_editor`).
+
 Уже запечённая раскладка сохраняется, а геометрия всегда пересобирается из неё. Раскладки, поправленные вручную, помечаются `edited = true`. Аргументы: `-- --only=0:1` — один уровень, `-- --regenerate` — переписать раскладки из генератора. Как будут создаваться следующие уровни — в [LEVEL_PIPELINE.md](docs/LEVEL_PIPELINE.md).
 
 ### Структура

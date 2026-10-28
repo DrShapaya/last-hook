@@ -229,6 +229,35 @@ func run_tests() -> void:
 			baked.free()
 	bakes_ok = bake_problems.is_empty()
 	check(bakes_ok,"every route ships made in advance and matches its generator %s" % str(bake_problems.slice(0,4)))
+	# Each route has its authored source: brief and masks of the right size,
+	# the route corridor over every main grip and stone behind it.
+	var source_problems: Array[String] = []
+	for location in range(3):
+		for route in range(LevelCatalog.routes(location).size()):
+			var source := LevelSource.open(LevelSource.source_directory(location,route))
+			if source==null:
+				source_problems.append("%d:%d no source" % [location,route])
+				continue
+			for layer in ["silhouette","depth","solid","route","branch","rest","difficulty","loot"]:
+				var image: Image = source.masks.get(layer)
+				if image==null or image.get_size()!=source.size(): source_problems.append("%d:%d %s" % [location,route,layer])
+			for zone in source.brief.get("zones",[]):
+				if not source.masks.has(str(zone["mask"])): source_problems.append("%d:%d %s" % [location,route,zone["mask"]])
+			var level := LevelBake.find(location,route,MountainWorld.generation_version_for(location))
+			if level==null: continue
+			var world := MountainWorld.new()
+			world.visuals_enabled = false
+			root.add_child(world)
+			world.setup(level.seed_value,location,0,false,route)
+			world.load_bake(level)
+			var outside := 0
+			for id in world.main_route:
+				var point: Vector2 = world.anchors[id]["pos"]
+				if source.sample("route",point)<.5: outside += 1
+				if source.sample("silhouette",point)<.5: outside += 1
+			if outside>0: source_problems.append("%d:%d %d main grips off route or stone" % [location,route,outside])
+			world.free()
+	check(source_problems.is_empty(),"every route has its source masks and the corridor follows the route %s" % str(source_problems.slice(0,4)))
 	var directory := OS.get_environment("LASTHOOK_SAVE_DIR")
 	DirAccess.make_dir_recursive_absolute(directory)
 	var report := FileAccess.open(directory.path_join("generation-test-report.json"),FileAccess.WRITE)

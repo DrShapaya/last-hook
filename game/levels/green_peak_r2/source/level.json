@@ -1,0 +1,150 @@
+{
+	"id": "green_peak_r2",
+	"location": 0,
+	"route": 2,
+	"name": "Кулуар смельчаков",
+	"height": 120.0,
+	"seeds": {
+		"route": 21111
+	},
+	"pins": [],
+	"zones": [
+		{
+			"mask": "zone_0",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 1,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 2.71669578552246,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					3.0,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_1",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 1,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 2.71669578552246,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					-3.0,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_2",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 1,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 2.71669578552246,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					-3.0,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_3",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 2,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 2.34164476394653,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					-3.0,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_4",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 2,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 2.34164476394653,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					-3.0,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_5",
+			"type": "wind_pocket",
+			"kind": "field",
+			"act": 2,
+			"params": {
+				"telegraph_time": 0.0,
+				"calm_time": 0.0,
+				"phase": 2.34164476394653,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					-3.0,
+					0.0
+				]
+			}
+		}
+	],
+	"acts": [
+		{
+			"id": "root_wall",
+			"until": 40.0,
+			"biome": "forest",
+			"grips": {
+				"stone": 0.83,
+				"spring": 0.12,
+				"root": 0.05
+			}
+		},
+		{
+			"id": "wind_traverse",
+			"until": 80.0,
+			"biome": "ridge",
+			"grips": {
+				"stone": 0.91,
+				"root": 0.04,
+				"spring": 0.04
+			}
+		},
+		{
+			"id": "old_post",
+			"until": 120.0,
+			"biome": "ruins",
+			"grips": {
+				"stone": 0.91,
+				"crystal": 0.02,
+				"spring": 0.02,
+				"root": 0.05
+			}
+		}
+	],
+	"loot_budget": 8405,
+	"format": 1
+}

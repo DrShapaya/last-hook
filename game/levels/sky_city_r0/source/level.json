@@ -1,0 +1,139 @@
+{
+	"id": "sky_city_r0",
+	"location": 2,
+	"route": 0,
+	"name": "Северный склон",
+	"height": 160.0,
+	"seeds": {
+		"route": 202998
+	},
+	"pins": [],
+	"zones": [
+		{
+			"mask": "zone_0",
+			"type": "icicle",
+			"kind": "falling",
+			"act": 1,
+			"params": {
+				"telegraph_time": 1.1,
+				"active_time": 0.7,
+				"calm_time": 3.0,
+				"phase": 3.15046453475952,
+				"radius": 0.45,
+				"affects_main": false
+			}
+		},
+		{
+			"mask": "zone_1",
+			"type": "icicle",
+			"kind": "falling",
+			"act": 1,
+			"params": {
+				"telegraph_time": 1.1,
+				"active_time": 0.7,
+				"calm_time": 3.0,
+				"phase": 3.15046453475952,
+				"radius": 0.45,
+				"affects_main": false
+			}
+		},
+		{
+			"mask": "zone_2",
+			"type": "icicle",
+			"kind": "falling",
+			"act": 1,
+			"params": {
+				"telegraph_time": 1.1,
+				"active_time": 0.7,
+				"calm_time": 3.0,
+				"phase": 3.15046453475952,
+				"radius": 0.45,
+				"affects_main": false
+			}
+		},
+		{
+			"mask": "zone_3",
+			"type": "blizzard_gust",
+			"kind": "field",
+			"act": 2,
+			"params": {
+				"telegraph_time": 1.0,
+				"active_time": 0.7,
+				"calm_time": 3.8,
+				"phase": 0.71216207742691,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					6.0,
+					0.0
+				]
+			}
+		},
+		{
+			"mask": "zone_4",
+			"type": "icicle",
+			"kind": "falling",
+			"act": 2,
+			"params": {
+				"telegraph_time": 1.1,
+				"active_time": 0.7,
+				"calm_time": 3.0,
+				"phase": 0.71216207742691,
+				"radius": 0.45,
+				"affects_main": false
+			}
+		},
+		{
+			"mask": "zone_5",
+			"type": "blizzard_gust",
+			"kind": "field",
+			"act": 2,
+			"params": {
+				"telegraph_time": 1.0,
+				"active_time": 0.7,
+				"calm_time": 3.8,
+				"phase": 0.71216207742691,
+				"haze": false,
+				"affects_main": false,
+				"force": [
+					-6.0,
+					0.0
+				]
+			}
+		}
+	],
+	"acts": [
+		{
+			"id": "white_saddle",
+			"until": 53.0,
+			"biome": "snow",
+			"grips": {
+				"stone": 0.88,
+				"spring": 0.07,
+				"ice": 0.05
+			}
+		},
+		{
+			"id": "blue_crevasse",
+			"until": 107.0,
+			"biome": "crevasse",
+			"grips": {
+				"stone": 0.96,
+				"ice": 0.02,
+				"spring": 0.02
+			}
+		},
+		{
+			"id": "shattered_crown",
+			"until": 160.0,
+			"biome": "crown",
+			"grips": {
+				"stone": 0.92,
+				"ice": 0.04,
+				"spring": 0.04
+			}
+		}
+	],
+	"loot_budget": 10882,
+	"format": 1
+}

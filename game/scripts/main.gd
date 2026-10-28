@@ -5,6 +5,15 @@ var model: GameModel
 var sim := RopeSim.new()
 var world: MountainWorld
 var explorer: ExplorerView
+# The world of the next likely attempt, generated and streamed in hidden
+# while the lobby or the result screen is up, so a run starts on a mountain
+# that is already standing (see _update_prepared_world).
+var prepared_world: MountainWorld
+var prepared_key: Dictionary = {}
+var prepared_seed := 0
+var prepared_rows_left := false
+# Off in headless runs (tests, tools) unless a tool turns it on.
+var prepare_worlds := DisplayServer.get_name()!="headless"
 var camera: Camera3D
 var sound_cache: Dictionary = {}
 var scene_environment: Environment
@@ -21,6 +30,7 @@ var run_seed := 0
 var run_route := -1
 var summit_height := 120.0
 const INITIAL_WORLD_HEIGHT := 65.0
+const START_CAMERA_Y := 4.8
 var anchor_id := -1
 var anchor_time := 0.0
 var anchor_contact := Vector2.ZERO
@@ -508,14 +518,126 @@ func _create_world(seed_number: int, location_number: int, height: float, saved_
 	world.setup(seed_number,location_number,saved_version,run_mode=="practice",route)
 	world.set_visual_quality(str(model.profile.get("graphics_quality","balanced")))
 	scene_environment.background_color = Color("88bfd9") if location_number==0 else Color("142438")
-	world.generate_to(height,run_mode in ["summit","practice"],summit_height)
+	var level := _level_bake(location_number,route,world.generation_version,height) if not menu_preview and run_mode=="summit" else null
+	if level!=null: world.load_bake(level)
+	else: world.generate_to(height,run_mode in ["summit","practice"],summit_height)
 	world.generation_row_budget = 1 if visual_budget>=0 and not (world.layout is LegacyMountainLayout) else -1
-	if not menu_preview:
-		explorer = ExplorerView.new()
-		add_child(explorer)
-		explorer.setup(world,model.hook_tips())
-		explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
-		explorer.set_walk_speed(WALK_SPEED)
+	if not menu_preview: _attach_explorer()
+
+func _attach_explorer() -> void:
+	explorer = ExplorerView.new()
+	add_child(explorer)
+	explorer.setup(world,model.hook_tips())
+	explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
+	explorer.set_walk_speed(WALK_SPEED)
+
+# The level made in advance for this summit climb, when it matches the world
+# being created (same generator and height); null to generate it instead.
+func _level_bake(location: int, route: int, version: int, world_height: float) -> LevelBake:
+	var level := LevelBake.find(location,route,version)
+	if level==null or not is_equal_approx(level.height+6,world_height): return null
+	return level
+
+# What start_run would build for this location and mode, except a random
+# seed: two equal keys give the same world. Empty when no run is likely.
+func _run_world_key(location: int, endless: bool) -> Dictionary:
+	if practice_return_model!=null or preview: return {}
+	if not model.profile["locations"].has(location): return {}
+	if endless and not model.profile["summit_cleared"]: return {}
+	return {"location":location,"endless":endless,"route":-1 if endless else model.route_choice(location),
+		"quality":str(model.profile.get("graphics_quality","balanced")),"version":MountainWorld.generation_version_for(location)}
+
+# The attempt the player would start next from the current screen.
+func _next_run_key() -> Dictionary:
+	if state=="menu":
+		if not model.profile["active"].is_empty(): return {}
+		return _run_world_key(lobby_location,lobby_endless)
+	# Retry from the failure or reward screen starts the same summit again.
+	if state in ["result","revive"]: return _run_world_key(selected_location,false)
+	return {}
+
+func _discard_prepared_world() -> void:
+	if is_instance_valid(prepared_world): prepared_world.queue_free()
+	prepared_world = null
+	prepared_key = {}
+	prepared_rows_left = false
+
+# Off the run, builds the next attempt's world a slice per frame: the route
+# graph in one pass when the screen changes, then the sections round the
+# start through the usual streaming jobs. Nothing of it is shown until
+# start_run takes it over.
+func _update_prepared_world() -> void:
+	var key := _next_run_key()
+	if key!=prepared_key: _discard_prepared_world()
+	if key.is_empty() or not prepare_worlds: return
+	if not is_instance_valid(prepared_world):
+		var endless: bool = key["endless"]
+		var location: int = key["location"]
+		var route: int = key["route"]
+		prepared_key = key
+		prepared_seed = int(LevelCatalog.route(location,route)["seed"]) if route>=0 else randi_range(1000,999999)
+		var height := float(model.balance["locations"][location]["height_units"])
+		prepared_world = MountainWorld.new()
+		prepared_world.name = "Подготовленная гора"
+		prepared_world.visible = false
+		prepared_world.build_urgency = false
+		prepared_world.visual_build_budget = 1
+		prepared_world.generation_row_budget = -1
+		add_child(prepared_world)
+		prepared_world.setup(prepared_seed,location,0,false,route)
+		prepared_world.set_visual_quality(key["quality"])
+		var level := _level_bake(location,route,prepared_world.generation_version,height+6) if not endless else null
+		if level!=null:
+			# A level made in advance: its layout is read, not generated.
+			prepared_world.load_bake(level)
+			prepared_world.generation_row_budget = -1
+			return
+		prepared_rows_left = true
+		return
+	if prepared_rows_left:
+		# The route graph a few rows per frame, then the summit and loot.
+		_prepare_rows(MountainWorld.BUILD_SLICE_USEC)
+		return
+	if prepared_world.stream_pending or prepared_world.stream_dirty:
+		prepared_world.update_visibility(START_CAMERA_Y,0,1)
+
+# Generates prepared rows for up to `slice` microseconds (0: all of them);
+# the last step adds the summit and resolves the loot as generate_to does.
+func _prepare_rows(slice: int) -> void:
+	var endless: bool = prepared_key["endless"]
+	var height := float(model.balance["locations"][int(prepared_key["location"])]["height_units"])
+	var target := height+6 if not endless else INITIAL_WORLD_HEIGHT
+	var deadline := Time.get_ticks_usec()+slice
+	while prepared_rows_left and (slice<=0 or Time.get_ticks_usec()<deadline):
+		prepared_rows_left = prepared_world.generate_rows(target,not endless,height,1)
+	if prepared_rows_left: return
+	prepared_world.generate_to(target,not endless,height)
+	prepared_world.generation_row_budget = 1 if not (prepared_world.layout is LegacyMountainLayout) else -1
+
+# A short start transition: the HUD's iris opens on the climber over the
+# place's name while the camera settles back from a slightly closer view.
+# The run is live from the first frame; this only dresses it.
+func _play_level_intro() -> void:
+	if preview: return
+	var heading: String = LevelCatalog.level(selected_location)["display_name"]
+	var note := "Тренировка" if run_mode=="practice" else "Бесконечный подъём" if run_mode=="endless" else ""
+	if run_route>=0: note = str(LevelCatalog.route(selected_location,run_route).get("name",""))
+	if run_mode=="practice": heading = "Тренировочная стена"
+	hud.play_intro(camera.unproject_position(Vector3(sim.pos.x,sim.pos.y,0)),heading,note)
+	camera_zoom_current = camera_zoom_target()*1.12
+	_position_camera()
+
+func _adopt_prepared_world() -> void:
+	if prepared_rows_left: _prepare_rows(0)
+	if is_instance_valid(world): world.queue_free()
+	if is_instance_valid(explorer): explorer.queue_free()
+	world = prepared_world
+	world.build_urgency = true
+	prepared_world = null
+	prepared_key = {}
+	world.name = "MountainWorld"
+	scene_environment.background_color = Color("88bfd9") if world.location==0 else Color("142438")
+	_attach_explorer()
 
 func ensure_menu_explorer() -> void:
 	if is_instance_valid(explorer) or not is_instance_valid(world):
@@ -535,7 +657,11 @@ func start_run(endless: bool) -> void:
 		return
 	var practice := practice_return_model!=null
 	run_mode = "practice" if practice else "endless" if endless else "summit"
-	run_seed = PracticeLayout.SEED if practice else randi_range(1000,999999)
+	# The world prepared behind the lobby or result screen is taken over
+	# when it matches this attempt; its random seed then is the run's.
+	var key := _run_world_key(selected_location,endless) if not practice else {}
+	var adopt := not key.is_empty() and is_instance_valid(prepared_world) and key==prepared_key
+	run_seed = PracticeLayout.SEED if practice else prepared_seed if adopt else randi_range(1000,999999)
 	# A summit climb runs on the prepared route chosen in the lobby; its seed
 	# is fixed, so the route is the same on every attempt.
 	run_route = model.route_choice(selected_location) if run_mode=="summit" else -1
@@ -545,7 +671,10 @@ func start_run(endless: bool) -> void:
 	# Generate the finite route graph before play starts so the summit and its
 	# final platform always exist in the same world snapshot. Visual chunks are
 	# still streamed incrementally by MountainWorld.
-	_create_world(run_seed,selected_location,summit_height+6 if not endless else INITIAL_WORLD_HEIGHT,0,false,1,run_route)
+	if adopt: _adopt_prepared_world()
+	else:
+		_discard_prepared_world()
+		_create_world(run_seed,selected_location,summit_height+6 if not endless else INITIAL_WORLD_HEIGHT,0,false,1,run_route)
 	sim = RopeSim.new()
 	sim.pos = Vector2(0,START_Y)
 	sim.highest = START_Y
@@ -576,10 +705,13 @@ func start_run(endless: bool) -> void:
 	focus_cooldown = 0.0
 	focus_duration = model.slowmo_seconds()
 	focus_blend = 0.0
-	camera_y = 4.8
+	camera_y = START_CAMERA_Y
 	camera_x = 0
 	camera_dip = 0.0
 	_position_camera()
+	# The first frame shows a finished mountain: whatever of the view is not
+	# built yet (nothing, on a prepared world) is built now, not in sight.
+	world.complete_view(camera_y,camera_x,camera.size*.5+2)
 	state = "play"
 	ads.report_event("run_started_%s" % run_mode)
 	lobby_location = selected_location
@@ -596,6 +728,7 @@ func start_run(endless: bool) -> void:
 	hud.show_play()
 	if is_instance_valid(world): world.visible = true
 	if is_instance_valid(explorer): explorer.visible = true
+	_play_level_intro()
 	if "aim" not in model.profile["learned_controls"]:
 		toast("Коснись где удобно, потяни как стик и отпусти" if hud.touch_controls_hint else "Прицелься мышью и отпусти ЛКМ",4,"controls")
 	save_snapshot()
@@ -736,6 +869,7 @@ func resume_run() -> void:
 	camera_x = float(snapshot.get("camera_x",sim.pos.x))
 	camera_dip = maxf(0,float(snapshot.get("camera_dip",0.0)))
 	_position_camera()
+	world.complete_view(camera_y,camera_x,camera.size*.5+2)
 	state = "revive" if bool(snapshot.get("awaiting_revive",false)) else "play"
 	_reset_input()
 	if state=="revive":
@@ -2166,6 +2300,7 @@ func _process(delta: float) -> void:
 	elapsed += delta
 	_update_music()
 	if not AssetWarmup.done(): AssetWarmup.poll()
+	_update_prepared_world()
 	if profile_save_pending:
 		profile_save_timer -= delta
 		if profile_save_timer<=0.0:

@@ -160,6 +160,22 @@ func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 		ledges.append({"left":last.x-1.6,"right":last.x+1.6,"top":summit-.4})
 		summit_added = true
 
+# The row loop of generate_to in steps of at most `budget` rows toward the
+# same target, and nothing else: no summit, no loot resolution. A final
+# generate_to with that target then leaves exactly the layout one call would.
+# True while rows remain.
+func generate_rows(height: float, is_finite: bool, summit_height: float, budget: int) -> bool:
+	finite = is_finite
+	summit = summit_height
+	var planned_height: float = ceil(height/CHUNK_HEIGHT)*CHUNK_HEIGHT+6
+	var rows_built := 0
+	while main_point(row).y<planned_height and (not finite or main_point(row).y<summit-.8):
+		if rows_built>=budget: return true
+		_generate_row(row)
+		row += 1
+		rows_built += 1
+	return false
+
 func _generate_row(index: int) -> void:
 	var random := rng(index,3)
 	var point := main_point(index)

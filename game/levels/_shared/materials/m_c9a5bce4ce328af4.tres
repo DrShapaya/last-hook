@@ -1,0 +1,14 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_8a20f306fd0eac6e.gdshader" id="1_321w1"]
+[ext_resource type="Texture2D" path="res://assets/sprites/vegetation/vine_green_2.png" id="2_f03bc"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_321w1")
+shader_parameter/albedo_tex = ExtResource("2_f03bc")
+shader_parameter/tint = null
+shader_parameter/hanging = 0.0
+shader_parameter/sway = 0.04
+shader_parameter/wind = null
+shader_parameter/contact = null

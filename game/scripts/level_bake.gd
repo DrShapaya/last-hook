@@ -1,0 +1,80 @@
+class_name LevelBake
+extends Resource
+
+# A finite level made in advance (tools/bake_levels.gd): the route layout as
+# data and the static scenery of every section as ready scenes.
+#
+#   res://levels/<level id>_r<route>/layout.res          layout state (this)
+#   res://levels/<level id>_r<route>/<quality>/chunk_N.scn  rock, decor and
+#                                                          landmarks of a section
+#
+# The layout is the level's design: the bake writes it from the generator
+# once and keeps it afterwards, so it can be tuned by hand (set `edited`).
+# Sections are always rebuilt from it. Grips, finds, ledges, obstacles and
+# hazards stay live objects and are built from the layout at run time.
+
+const FORMAT := 1
+const ROOT := "res://levels"
+const QUALITIES := ["high","balanced","battery"]
+# Layout members that are run-time tools rather than level data.
+const SKIP := ["generation_row_budget","relief_noise","grain_noise","loot_plan"]
+
+@export var format := FORMAT
+@export var location := 0
+@export var route := -1
+@export var generation_version := 0
+@export var seed_value := 0
+@export var height := 0.0
+# True once the layout was changed by hand: the generator no longer has to
+# reproduce it.
+@export var edited := false
+@export var layout_data: Dictionary = {}
+# Highest section with scenery, per quality.
+@export var chunk_count := 0
+
+static func directory(level_location: int, level_route: int) -> String:
+	return ROOT.path_join("%s_r%d" % [LevelCatalog.level(level_location)["id"],level_route])
+
+static func layout_path(level_location: int, level_route: int) -> String:
+	return directory(level_location,level_route).path_join("layout.res")
+
+static func chunk_path(level_location: int, level_route: int, quality: String, key: int) -> String:
+	return directory(level_location,level_route).path_join(quality).path_join("chunk_%d.scn" % key)
+
+# The bake for a level, or null when there is none or it no longer fits the
+# generator version a new attempt would use.
+static func find(level_location: int, level_route: int, version: int) -> LevelBake:
+	if level_route<0: return null
+	var path := layout_path(level_location,level_route)
+	if not ResourceLoader.exists(path): return null
+	var bake := load(path) as LevelBake
+	if bake==null or bake.format!=FORMAT or bake.generation_version!=version: return null
+	return bake
+
+# Every script member of the layout that describes the level.
+static func capture(layout: MountainLayout) -> Dictionary:
+	var result := {}
+	for property in layout.get_property_list():
+		if not (int(property["usage"]) & PROPERTY_USAGE_SCRIPT_VARIABLE): continue
+		var key: String = property["name"]
+		if key in SKIP: continue
+		var value = layout.get(key)
+		if value is Object: continue
+		result[key] = value.duplicate(true) if (value is Array or value is Dictionary) else value
+	return result
+
+# Writes the captured state into a layout made by setup(). Arrays and
+# dictionaries are refilled in place: the world and its hazards keep
+# references to them. Values are copied, so a run never alters the bake.
+static func apply(layout: MountainLayout, data: Dictionary) -> void:
+	for key in data:
+		var value = data[key]
+		var current = layout.get(key)
+		# A member still holding a script constant is read-only: replace it.
+		if current is Array and not (current as Array).is_read_only():
+			(current as Array).assign((value as Array).duplicate(true))
+		elif current is Dictionary and not (current as Dictionary).is_read_only():
+			(current as Dictionary).clear()
+			(current as Dictionary).merge((value as Dictionary).duplicate(true))
+		else:
+			layout.set(key,value.duplicate(true) if (value is Array or value is Dictionary) else value)

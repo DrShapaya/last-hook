@@ -66,12 +66,15 @@ func _surface_z(point: Vector2) -> float:
 # Hazards stream with the chunks: built near the view, freed far from it.
 # `limit` caps how many are built in this call (streaming builds one per
 # frame); returns true while some in range are still waiting.
-func build_near(center_y: float, limit: int = -1) -> bool:
+# `reach` limits building to hazards that close to the view (the rest stay
+# pending).
+func build_near(center_y: float, limit: int = -1, reach: float = 40.0) -> bool:
 	for id in built.keys():
 		if absf(hazard_y(layout.hazards[id],layout.ledges)-center_y)<=48: continue
 		(built[id]["node"] as Node3D).queue_free()
 		built.erase(id)
 	var count := 0
+	var pending := false
 	for hazard in layout.hazards:
 		var id: int = hazard["id"]
 		if built.has(id):
@@ -80,7 +83,11 @@ func build_near(center_y: float, limit: int = -1) -> bool:
 			if str(hazard["def"])=="sand_bridge" and not is_instance_valid(built[id]["parts"].get("slab")):
 				_build(hazard,built[id])
 			continue
-		if absf(hazard_y(hazard,layout.ledges)-center_y)>40: continue
+		var distance := absf(hazard_y(hazard,layout.ledges)-center_y)
+		if distance>40: continue
+		if distance>reach:
+			pending = true
+			continue
 		if limit>=0 and count>=limit: return true
 		count += 1
 		var node := Node3D.new()
@@ -88,7 +95,7 @@ func build_near(center_y: float, limit: int = -1) -> bool:
 		world.add_child(node)
 		built[id] = {"node":node,"parts":{}}
 		_build(hazard,built[id])
-	return false
+	return pending
 
 func _material(shader_code: String, key: String) -> ShaderMaterial:
 	var material := ShaderMaterial.new()

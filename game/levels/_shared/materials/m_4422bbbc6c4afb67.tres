@@ -1,0 +1,13 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_b051dc0badb35292.gdshader" id="1_g5l2t"]
+[ext_resource type="Texture2D" path="res://assets/sprites/flags/cloth_plain.png" id="2_tr63y"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_g5l2t")
+shader_parameter/mask = ExtResource("2_tr63y")
+shader_parameter/cloth_color = Color(0.30980393, 0.62352943, 0.83137256, 1)
+shader_parameter/trim_color = Color(0.9529412, 0.9254902, 0.8509804, 1)
+shader_parameter/hang = 0.0
+shader_parameter/wind = null

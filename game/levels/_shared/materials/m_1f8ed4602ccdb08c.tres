@@ -1,0 +1,11 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_cc989092315899d5.gdshader" id="1_ipr1g"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_ipr1g")
+shader_parameter/tint = Color(0.92, 0.78, 0.52, 0.8)
+shader_parameter/strength = 0.35
+shader_parameter/speed = 1.6
+shader_parameter/seed = null

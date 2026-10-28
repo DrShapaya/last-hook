@@ -174,6 +174,61 @@ func run_tests() -> void:
 	check(test_world.rope_blocked(Vector2(-3,10),Vector2(3,10)),"rope intersection uses the same solid obstacles as the hook")
 	test_world.free()
 	first.free()
+	# The lobby prepares the next attempt a few route rows per frame; it must
+	# be the very world one generate_to builds.
+	var sliced_same := true
+	for location in range(3):
+		var height := float(LevelCatalog.level(location)["height_units"])
+		for route in [-1,0]:
+			var seed_value := int(LevelCatalog.route(location,route)["seed"]) if route>=0 else 4321
+			var whole := MountainWorld.new()
+			whole.visuals_enabled = false
+			root.add_child(whole)
+			whole.setup(seed_value,location,0,false,route)
+			whole.generate_to(height+6,true,height)
+			var sliced := MountainWorld.new()
+			sliced.visuals_enabled = false
+			root.add_child(sliced)
+			sliced.setup(seed_value,location,0,false,route)
+			while sliced.generate_rows(height+6,true,height,1): pass
+			sliced.generate_to(height+6,true,height)
+			sliced_same = sliced_same and str(signature(whole))==str(signature(sliced)) and str(whole.ledges)==str(sliced.ledges) and whole.main_route==sliced.main_route
+			whole.free()
+			sliced.free()
+	check(sliced_same,"generating the route a row at a time gives exactly the one-pass world")
+	# Finite levels ship made in advance. Each route has its bake for the
+	# current generator, every preset has the scenery of every section, and an
+	# untouched layout is still exactly what the generator makes.
+	var bakes_ok := true
+	var bake_problems: Array[String] = []
+	for location in range(3):
+		var height := float(LevelCatalog.level(location)["height_units"])
+		for route in range(LevelCatalog.routes(location).size()):
+			var level := LevelBake.find(location,route,MountainWorld.generation_version_for(location))
+			if level==null:
+				bake_problems.append("%d:%d missing or stale" % [location,route])
+				continue
+			for quality in LevelBake.QUALITIES:
+				for key in range(level.chunk_count):
+					if not ResourceLoader.exists(LevelBake.chunk_path(location,route,quality,key)): bake_problems.append("%d:%d %s chunk %d" % [location,route,quality,key])
+			var baked := MountainWorld.new()
+			baked.visuals_enabled = false
+			root.add_child(baked)
+			baked.setup(level.seed_value,location,0,false,route)
+			baked.load_bake(level)
+			if not level.edited:
+				var fresh := MountainWorld.new()
+				fresh.visuals_enabled = false
+				root.add_child(fresh)
+				fresh.setup(level.seed_value,location,0,false,route)
+				fresh.generate_to(height+6,true,height)
+				# Compared by value: a saved dictionary keeps its keys sorted.
+				if signature(fresh)!=signature(baked) or fresh.ledges!=baked.ledges or fresh.layout.hazards!=baked.layout.hazards or fresh.main_route!=baked.main_route or fresh.layout.summit_added!=baked.layout.summit_added:
+					bake_problems.append("%d:%d differs from the generator: rebake with --regenerate" % [location,route])
+				fresh.free()
+			baked.free()
+	bakes_ok = bake_problems.is_empty()
+	check(bakes_ok,"every route ships made in advance and matches its generator %s" % str(bake_problems.slice(0,4)))
 	var directory := OS.get_environment("LASTHOOK_SAVE_DIR")
 	DirAccess.make_dir_recursive_absolute(directory)
 	var report := FileAccess.open(directory.path_join("generation-test-report.json"),FileAccess.WRITE)

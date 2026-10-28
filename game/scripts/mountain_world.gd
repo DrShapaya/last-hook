@@ -25,6 +25,9 @@ var seed_value := 0
 var location := 0
 var generation_version := GENERATION_VERSION
 var generated_height := 0.0
+# The level made in advance this world runs on (see LevelBake), or null when
+# its layout comes from the generator.
+var bake: LevelBake
 var ghost_texture: ImageTexture
 var sky_backdrop: ProceduralSkyBackdrop
 var far_layers: Array[Node3D] = []
@@ -62,6 +65,11 @@ var build_job_cancelled := false
 var band_job_token := RefCounted.new()
 const NO_BAND := -1000000
 var build_deadline := 0
+# Set while complete_view finishes a paused job in one go.
+var build_rush := false
+# Off for a world prepared out of sight: no section of it is due on screen,
+# so every job keeps to its slice.
+var build_urgency := true
 var hazards_pending := false
 # Resumes a paused section job; emitted once per streaming update. A world
 # freed mid-job simply never resumes it.
@@ -161,6 +169,40 @@ func generate_to(height: float, finite: bool, summit: float = 120) -> void:
 		var key := int(floor(summit/24))
 		if chunks.has(key): _release_chunk(key)
 	if visuals_enabled: update_visibility(camera_center.y,camera_center.x,visual_build_budget)
+
+# Takes a finite level made in advance instead of generating it: the layout
+# as stored, and from then on each section's scenery from its baked scene.
+# Call after setup with the same location and route; ends where a full
+# generate_to would.
+func load_bake(level: LevelBake) -> void:
+	bake = level
+	LevelBake.apply(layout,level.layout_data)
+	route_edges = layout.edges
+	generated_height = maxf(generated_height,minf(level.height+6,layout.summit+6))
+	stream_pending = true
+	stream_dirty = true
+	if visuals_enabled: update_visibility(camera_center.y,camera_center.x,visual_build_budget)
+
+func _baked_chunk_path(key: int) -> String:
+	if bake==null: return ""
+	var path := LevelBake.chunk_path(bake.location,bake.route,visual_quality,key)
+	return path if ResourceLoader.exists(path) else ""
+
+# Puts a section's baked scenery under its node. The rock takes the world's shared material of its act.
+func _attach_baked(key: int, chunk: Node3D, scene: PackedScene) -> void:
+	var scenery := scene.instantiate()
+	chunk.add_child(scenery)
+	if visuals is MassifVisuals:
+		var rock := scenery.get_node_or_null("Скальный массив_%d" % key) as MeshInstance3D
+		if rock!=null: rock.material_override = (visuals as MassifVisuals).rock_material_at(key*24.0+12.0)
+
+# Layout rows toward generate_to's target, `budget` at a time, without
+# streaming anything; finish with generate_to. False for generators that
+# cannot be split (they do everything in generate_to). True while rows remain.
+func generate_rows(height: float, finite: bool, summit: float, budget: int) -> bool:
+	if layout is LegacyMountainLayout: return false
+	var target := minf(height,summit+6) if finite else height
+	return layout.generate_rows(target,finite,summit,budget)
 
 func add_anchor(point: Vector2, kind: int, _bush: bool = false, dimensions: Vector2 = Vector2(1.8,.65)) -> void:
 	var id := layout._add_anchor(point,kind,dimensions)
@@ -297,7 +339,7 @@ func debug_state(point: Vector2, time: float = 0.0) -> Dictionary:
 		"profile":layout.profile_id_at(point.y),"variant":act.get("variant",0),"hazards":hazards.debug_near(point,time)}
 
 func build_anchor(object: Dictionary, chunk: Node3D) -> void:
-	visuals.build_anchor(object,chunk)
+	await visuals.build_anchor(object,chunk)
 	# Every root carries its clock, whatever its lifetime: the timer is the
 	# root's mechanic, so it must never break without a visible countdown.
 	if GripSpec.timed(object) and is_instance_valid(object.get("visual")):
@@ -584,6 +626,8 @@ func _build_find(find: Dictionary, parent: Node3D) -> void:
 	# Finds stand well in front of deep stone, so the hero never passes behind
 	# them; the pedestal reaches back to the wall through the same mount.
 	var mount := visuals.mount_find(find)
+	# A streamed section takes a find in three short steps.
+	if not await build_pause(parent): return
 	var wall_z := mount.wall_z()
 	holder.position = mount.holder_position()
 	holder.scale = Vector3.ONE*FIND_SCALE
@@ -591,6 +635,9 @@ func _build_find(find: Dictionary, parent: Node3D) -> void:
 	find["mount"] = mount
 	# Contact offsets are in holder space; the holder is uniformly scaled.
 	var treasure := LootVisuals.build(self,find,holder,visual_quality,(wall_z-holder.position.z)/holder.scale.x)
+	if not await build_pause(parent):
+		find["visual"] = null
+		return
 	var price := LootVisuals.price_tag(self,treasure,find["item"],visual_quality!="battery")
 	price.visible = show_loot_prices
 	find["price_visual"] = price
@@ -678,13 +725,7 @@ func update_visibility(center_y: float, center_x: float = 0, build_budget: int =
 	stream_dirty = false
 	var far_pending := _update_far_layers(build_budget<0)
 	var first := maxi(0,int(floor((center_y-32)/24)))
-	var ready_chunk := int(floor((layout.main_point(layout.row).y-2)/24))-1
-	# The massif of a chunk reads the objects of its neighbours, so a chunk is
-	# built only once the generator has passed it.
-	var legacy := layout is LegacyMountainLayout
-	if legacy: ready_chunk = int(floor((generated_height-2)/24))-1
-	if layout.finite and (layout.summit_added or (not legacy and layout.main_point(layout.row).y>=layout.summit-.8)):
-		ready_chunk = int(floor(layout.summit/24))
+	var ready_chunk := _ready_chunk()
 	var last := mini(ready_chunk,int(floor((center_y+32)/24)))
 	for key in chunks.keys():
 		if key<first or key>last: _release_chunk(key)
@@ -692,8 +733,9 @@ func update_visibility(center_y: float, center_x: float = 0, build_budget: int =
 	for key in range(first,last+1):
 		if not chunks.has(key): missing_keys.append(key)
 	# Building the closest section first keeps the current view populated while
-	# spreading the expensive mesh/decor work over later frames.
-	var band_to_warm := _band_to_warm(center_y,ready_chunk) if build_budget>=0 else NO_BAND
+	# spreading the expensive mesh/decor work over later frames. Its own rock
+	# bands come before it, and both before bands only farther sections need.
+	var band_to_warm := _band_to_warm(center_y,ready_chunk,missing_keys) if build_budget>=0 else NO_BAND
 	if band_to_warm!=NO_BAND and build_job_parent_id==0: _start_band_job(band_to_warm)
 	var effective_budget := MAX_CHUNK_BUILDS_PER_UPDATE if build_budget<0 else maxi(0,build_budget)
 	if build_budget<0: effective_budget = missing_keys.size()
@@ -722,12 +764,45 @@ func update_visibility(center_y: float, center_x: float = 0, build_budget: int =
 	stream_pending = not missing_keys.is_empty() or far_pending or build_job_parent_id!=0 or hazards_pending or band_to_warm!=NO_BAND
 	_update_dynamic_visibility(center_y)
 
+# A section is complete once built and not still streaming in.
+func chunk_complete(key: int) -> bool:
+	return chunks.has(key) and key!=build_job_key
+
+# The highest section the generator has passed: a massif reads the objects
+# of its neighbours, so a section is built only once they exist.
+func _ready_chunk() -> int:
+	var ready_chunk := int(floor((layout.main_point(layout.row).y-2)/24))-1
+	var legacy := layout is LegacyMountainLayout
+	if legacy: ready_chunk = int(floor((generated_height-2)/24))-1
+	if layout.finite and (layout.summit_added or (not legacy and layout.main_point(layout.row).y>=layout.summit-.8)):
+		ready_chunk = int(floor(layout.summit/24))
+	return ready_chunk
+
+# Everything inside the view, built now: a paused job is finished in one go,
+# missing sections and nearby hazards are built directly. Streaming then
+# carries on with what lies beyond. On a prepared world this costs nothing.
+func complete_view(center_y: float, center_x: float, half_height: float) -> void:
+	if not visuals_enabled: return
+	camera_center = Vector2(center_x,center_y)
+	if build_job_parent_id!=0:
+		build_rush = true
+		build_tick.emit()
+		build_rush = false
+	var first := maxi(0,int(floor((center_y-half_height)/24)))
+	var last := mini(_ready_chunk(),int(floor((center_y+half_height)/24)))
+	for key in range(first,last+1):
+		if not chunks.has(key): _build_chunk(key)
+	if hazard_visuals!=null: hazards_pending = hazard_visuals.build_near(center_y,-1,half_height+4)
+	stream_dirty = true
+
 func _build_chunk(key: int) -> void:
 	var chunk := Node3D.new()
 	chunk.name = "Участок_%d" % key
 	add_child(chunk)
 	chunks[key] = chunk
-	visuals.build_chunk(key,chunk)
+	var baked := _baked_chunk_path(key)
+	if baked.is_empty(): visuals.build_chunk(key,chunk)
+	else: _attach_baked(key,chunk,load(baked) as PackedScene)
 	_build_chunk_objects(key,chunk)
 
 func _start_chunk_job(key: int) -> void:
@@ -743,11 +818,21 @@ func _start_chunk_job(key: int) -> void:
 
 # The closest rock band that sections or hazards in reach will read and that
 # is not generated yet; NO_BAND when all are ready.
-func _band_to_warm(center_y: float, ready_chunk: int) -> int:
+func _band_to_warm(center_y: float, ready_chunk: int, missing_keys: Array[int] = []) -> int:
 	if not visuals is MassifVisuals: return NO_BAND
 	var massif := visuals as MassifVisuals
+	if not missing_keys.is_empty():
+		var closest: int = missing_keys[0]
+		for key in missing_keys:
+			if absf(key*24+12-center_y)<absf(closest*24+12-center_y): closest = key
+		# Masses reach past their band, so queries at a section's edges read
+		# two bands either side.
+		for band in [closest,closest-1,closest+1,closest+2,closest-2]:
+			if band>=-1 and band<=ready_chunk+2 and not massif.band_ready(band): return band
+		# The closest section can be built now; farther bands wait for it.
+		return NO_BAND
 	var low := maxi(-1,int(floor((center_y-40)/24))-1)
-	var high := mini(int(floor((center_y+40)/24))+1,ready_chunk+1)
+	var high := mini(int(floor((center_y+40)/24))+2,ready_chunk+2)
 	var best := NO_BAND
 	for band in range(low,high+1):
 		if massif.band_ready(band): continue
@@ -769,7 +854,19 @@ func _run_band_job(band: int) -> void:
 	stream_dirty = true
 
 func _run_chunk_job(key: int, chunk: Node3D) -> void:
-	await visuals.build_chunk(key,chunk)
+	var baked := _baked_chunk_path(key)
+	if baked.is_empty(): await visuals.build_chunk(key,chunk)
+	else:
+		# The scene file is read on a worker thread; the job waits for it
+		# frame by frame and only instances it here.
+		ResourceLoader.load_threaded_request(baked)
+		while ResourceLoader.load_threaded_get_status(baked)==ResourceLoader.THREAD_LOAD_IN_PROGRESS and not build_rush:
+			build_deadline = 0
+			if not await build_pause(chunk): break
+		var scene := ResourceLoader.load_threaded_get(baked) as PackedScene
+		if not build_job_cancelled and is_instance_valid(chunk):
+			if scene!=null: _attach_baked(key,chunk,scene)
+			else: await visuals.build_chunk(key,chunk)
 	if not build_job_cancelled: await _build_chunk_objects(key,chunk)
 	build_job_key = -1
 	build_job_parent_id = 0
@@ -778,6 +875,7 @@ func _run_chunk_job(key: int, chunk: Node3D) -> void:
 	stream_dirty = true
 
 func _build_slice() -> int:
+	if not build_urgency: return BUILD_SLICE_USEC
 	# A band feeds the sections next to it, so it is due one band earlier.
 	var urgent := BUILD_URGENT_DISTANCE
 	var low := build_job_key*24.0
@@ -797,7 +895,7 @@ func build_pause(owner) -> bool:
 	if not is_instance_valid(owner): return false
 	if owner.get_instance_id()!=build_job_parent_id: return true
 	if build_job_cancelled: return false
-	if Time.get_ticks_usec()<build_deadline: return true
+	if build_rush or Time.get_ticks_usec()<build_deadline: return true
 	await build_tick
 	if build_job_cancelled: return false
 	build_deadline = Time.get_ticks_usec()+_build_slice()
@@ -807,7 +905,7 @@ func _build_chunk_objects(key: int, chunk: Node3D) -> void:
 	for object in nearby_anchors(key*24,(key+1)*24-.001):
 		if int(floor(object["pos"].y/24))!=key: continue
 		if not await build_pause(chunk): return
-		build_anchor(object,chunk)
+		await build_anchor(object,chunk)
 	for object in obstacles:
 		if int(floor(object["pos"].y/24))!=key: continue
 		if not await build_pause(chunk): return
@@ -819,7 +917,7 @@ func _build_chunk_objects(key: int, chunk: Node3D) -> void:
 	for find in finds:
 		if int(floor(find["pos"].y/24))!=key: continue
 		if not await build_pause(chunk): return
-		_build_find(find,chunk)
+		await _build_find(find,chunk)
 	if layout.summit_added and int(floor(layout.summit/24))==key:
 		var p: Vector2 = anchors[main_route[-1]]["pos"]
 		# The summit flag: a tall mast with the expedition's hook on its cloth.

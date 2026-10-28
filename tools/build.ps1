@@ -56,6 +56,10 @@ function Invoke-TaskGodot([string[]]$TaskArguments, [string]$TaskLog) {
     if ((Get-Content -Raw -LiteralPath $TaskLog) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw "Godot logged an error. See $TaskLog" }
 }
 
+# Finite levels ship made in advance (res://levels). Their stored layouts are
+# kept; the section scenery is rebuilt from them so it always matches the code.
+Invoke-TaskGodot @('--headless','--script','res://tools/bake_levels.gd') (Join-Path $taskArtifacts 'build-bake.log')
+
 if (-not $SkipTests) {
 Invoke-TaskGodot @('--headless','--editor','--import','--quit') (Join-Path $taskArtifacts 'build-import.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_rules.gd') (Join-Path $taskArtifacts 'build-rules.log')

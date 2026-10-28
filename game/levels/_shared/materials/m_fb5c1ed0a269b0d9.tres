@@ -1,0 +1,14 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_8a20f306fd0eac6e.gdshader" id="1_21s55"]
+[ext_resource type="Texture2D" path="res://assets/sprites/vegetation/snow_plant_3.png" id="2_ye3na"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_21s55")
+shader_parameter/albedo_tex = ExtResource("2_ye3na")
+shader_parameter/tint = null
+shader_parameter/hanging = 0.0
+shader_parameter/sway = 0.03
+shader_parameter/wind = null
+shader_parameter/contact = null

@@ -1,0 +1,13 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_b051dc0badb35292.gdshader" id="1_jh16l"]
+[ext_resource type="Texture2D" path="res://assets/sprites/flags/cloth_peak.png" id="2_p3wyb"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_jh16l")
+shader_parameter/mask = ExtResource("2_p3wyb")
+shader_parameter/cloth_color = Color(0.8509804, 0.28235295, 0.22745098, 1)
+shader_parameter/trim_color = Color(0.9019608, 0.7372549, 0.29803923, 1)
+shader_parameter/hang = 1.0
+shader_parameter/wind = null

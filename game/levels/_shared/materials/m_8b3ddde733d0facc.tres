@@ -1,0 +1,13 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_b051dc0badb35292.gdshader" id="1_l08h5"]
+[ext_resource type="Texture2D" path="res://assets/sprites/flags/cloth_sun.png" id="2_4yrug"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_l08h5")
+shader_parameter/mask = ExtResource("2_4yrug")
+shader_parameter/cloth_color = Color(0.8980392, 0.4509804, 0.22745098, 1)
+shader_parameter/trim_color = Color(0.9529412, 0.9254902, 0.8509804, 1)
+shader_parameter/hang = 0.0
+shader_parameter/wind = null

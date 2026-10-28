@@ -51,6 +51,7 @@ var pause_button: Button
 var aim_overlay: AimOverlay
 var base_theme: Theme
 var body_font: Font
+var level_intro: Control
 var heading_font: FontVariation
 var backdrop: LobbyView.Backdrop
 var layout_mode := "modal"
@@ -244,6 +245,61 @@ class ItemButton extends Control:
 		shield.append(shield[0])
 		draw_polyline(shield,tint,2,true)
 		draw_polyline(PackedVector2Array([Vector2(-5,0),Vector2(-1,4),Vector2(6,-5)]),tint,2.6,true)
+
+# Level start: the menu slate covers the screen with the place's name, then
+# opens as an iris round the climber. Purely a picture: the mountain is
+# already built and input goes straight through.
+class LevelIntro extends Control:
+	const DURATION := .66
+	var iris := ColorRect.new()
+	var iris_material := ShaderMaterial.new()
+	var title := Label.new()
+	var subtitle := Label.new()
+	var focus := Vector2.ZERO
+	func setup(origin: Vector2, heading: String, note: String, heading_font: Font, note_font: Font, ui_scale: float) -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		focus = origin
+		iris.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		iris.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		iris_material.shader = preload("res://shaders/level_intro.gdshader")
+		iris_material.set_shader_parameter("tint",MenuSurface.SLATE)
+		iris_material.set_shader_parameter("rim",GOLD)
+		iris.material = iris_material
+		add_child(iris)
+		for pair in [[title,heading,heading_font,34,GOLD],[subtitle,note,note_font,17,MUTED]]:
+			var line: Label = pair[0]
+			line.text = pair[1]
+			line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			if pair[2]!=null: line.add_theme_font_override("font",pair[2])
+			line.add_theme_font_size_override("font_size",roundi(int(pair[3])*ui_scale))
+			line.add_theme_color_override("font_color",pair[4])
+			add_child(line)
+		_set_open(0.0)
+		var tween := create_tween()
+		# A beat on the name, the iris opens from the climber, the name lifts
+		# away as it goes.
+		tween.tween_method(_set_open,0.0,1.0,DURATION-.1).set_delay(.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tween.parallel().tween_property(title,"modulate:a",0.0,.26).set_delay(.22)
+		tween.parallel().tween_property(subtitle,"modulate:a",0.0,.22).set_delay(.22)
+		tween.tween_callback(queue_free)
+	func _set_open(amount: float) -> void:
+		var area := get_viewport_rect().size
+		var far := 0.0
+		for corner in [Vector2.ZERO,Vector2(area.x,0),Vector2(0,area.y),area]: far = maxf(far,focus.distance_to(corner))
+		iris_material.set_shader_parameter("size",area)
+		iris_material.set_shader_parameter("center",focus)
+		# Closed means covered: the edge starts a full feather inside the centre.
+		var feather := lerpf(10.0,46.0,amount)
+		iris_material.set_shader_parameter("radius",lerpf(-feather*1.5,far+feather*1.5,amount))
+		iris_material.set_shader_parameter("feather",feather)
+		iris_material.set_shader_parameter("rim_strength",sin(clampf(amount,0,1)*PI)*.9)
+		var middle := area.y*.42
+		title.position = Vector2(0,middle-title.get_combined_minimum_size().y-amount*28.0)
+		title.size.x = area.x
+		subtitle.position = Vector2(0,middle+4-amount*28.0)
+		subtitle.size.x = area.x
 
 # Beacon: soft pulsing rings on the two valid exits it found.
 class BeaconMarks extends Control:
@@ -663,6 +719,7 @@ func toggle_notifications() -> void:
 
 func clear() -> void:
 	layout_mode = "modal"
+	if is_instance_valid(level_intro): level_intro.queue_free()
 	fit_viewport()
 	for child in content.get_children():
 		content.remove_child(child)
@@ -745,6 +802,16 @@ func cutout_bottom(x_from: float, x_to: float) -> float:
 func play_top(x_from: float, x_to: float, edge: float) -> float:
 	var banner := screen_to_design(game.ads.play_banner_height())
 	return maxf(edge+cutout_bottom(x_from,x_to),banner+(edge*.5 if banner>0.0 else 0.0))
+
+# The level-start transition over a freshly shown play screen; the HUD
+# itself fades in behind the opening iris.
+func play_intro(origin: Vector2, heading: String, note: String) -> void:
+	if is_instance_valid(level_intro): level_intro.queue_free()
+	level_intro = LevelIntro.new()
+	add_child(level_intro)
+	level_intro.setup(origin,heading,note,heading_font,body_font,root.scale.x)
+	content.modulate.a = 0.0
+	create_tween().tween_property(content,"modulate:a",1.0,.3).set_delay(.26)
 
 func show_play() -> void:
 	game.ads.set_main_menu(false)

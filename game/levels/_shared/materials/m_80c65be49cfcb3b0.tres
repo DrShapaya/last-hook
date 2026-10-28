@@ -1,0 +1,13 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_b051dc0badb35292.gdshader" id="1_pplty"]
+[ext_resource type="Texture2D" path="res://assets/sprites/flags/cloth_chevron.png" id="2_iroqt"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_pplty")
+shader_parameter/mask = ExtResource("2_iroqt")
+shader_parameter/cloth_color = Color(0.90588236, 0.69411767, 0.22745098, 1)
+shader_parameter/trim_color = Color(0.5568628, 0.18431373, 0.14117648, 1)
+shader_parameter/hang = 0.0
+shader_parameter/wind = null

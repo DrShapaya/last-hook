@@ -313,6 +313,7 @@ const ROUND_FAMILIES := ["bough","wet_slab","clear_ice","salt_glass","cloud_glas
 
 func build_anchor(object: Dictionary, parent: Node3D) -> void:
 	var mount := mount_at(object["pos"],object["dimensions"],object,GRIP_STANDOFF)
+	if not await pause(parent): return
 	build_grip(object,parent,mount)
 
 # The outcrop reaches below its hitbox; where the face round it stands

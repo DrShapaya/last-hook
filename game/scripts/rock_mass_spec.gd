@@ -51,6 +51,8 @@ var dome := 0.0
 var slope := Vector2.ZERO
 var z_limit := INF
 var bounds := Rect2()
+# bounds a hair wider: the silhouette test of a surface query.
+var query_bounds := Rect2()
 var front_z := 0.0
 # Inward edge normals and offsets of the silhouette: signed distance.
 var edge_normals := PackedVector2Array()
@@ -170,6 +172,7 @@ func build(widths: Vector3, lifts: Vector3, peaks: int, cap_rise: float, random:
 	for point in cap_points: front_z = maxf(front_z,point.z)
 	bounds = Rect2(outer_contour[0],Vector2.ZERO)
 	for point in outer_contour: bounds = bounds.expand(point)
+	query_bounds = bounds.grow(.01)
 	return true
 
 func _sculpt(flat: PackedVector2Array, inner_center: Vector2, random: RandomNumberGenerator) -> void:
@@ -237,7 +240,7 @@ func inside(point: Vector2) -> float:
 
 # Front surface of this mass at a point, or {} outside its silhouette.
 func surface_at(point: Vector2) -> Dictionary:
-	if not bounds.grow(.01).has_point(point) or inside(point)<-.0001: return {}
+	if not query_bounds.has_point(point) or inside(point)<-.0001: return {}
 	if _face_grid.is_empty(): _build_face_grid()
 	# Candidates in ascending face order: the first face holding the point
 	# wins, exactly as a walk over all faces.

@@ -505,7 +505,9 @@ func _link_neighbors(list: Array) -> void:
 
 func _masses_near(point: Vector2) -> Array:
 	var band := int(floor(point.y/BAND))
-	for neighbour in [band-1,band,band+1]: front_band(neighbour)
+	_refresh_masses()
+	if not (band_masses.has(band) and band_masses.has(band-1) and band_masses.has(band+1)):
+		for neighbour in [band-1,band,band+1]: front_band(neighbour)
 	return mass_bins.get(int(floor(point.y/BIN)),[])
 
 # --- Surface query ----------------------------------------------------------------
@@ -696,15 +698,47 @@ func _decor_blocked(point: Vector2, reach: float = 0.0) -> bool:
 		# hookable platforms.
 		var grip_clearance := maxf(2.0,maxf(grip_size.x,grip_size.y)*.5+.82)
 		if grip["pos"].distance_to(point)<grip_clearance+reach: return true
-	for obstacle in layout.obstacles:
-		if obstacle["pos"].distance_to(point)<1.15+maxf(obstacle["dimensions"].x,obstacle["dimensions"].y)*.5+reach: return true
-	for find in layout.finds:
-		if find["pos"].distance_to(point)<.8+reach: return true
-	for ledge in layout.ledges:
-		# The platform's supports reach well under its deck.
-		var below := float(ledge["top"])-point.y
-		if point.x>float(ledge["left"])-.5 and point.x<float(ledge["right"])+.5 and below>-.9-reach and below<1.6+reach: return true
+	# Obstacles, finds and ledges come from height bins (see _blocker_bins):
+	# each stands in every bin its own clearance reaches.
+	var bins := _blocker_bins()
+	var span := maxf(reach,0.0)
+	for bin in range(int(floor((point.y-span)/BLOCKER_BIN)),int(floor((point.y+span)/BLOCKER_BIN))+1):
+		for entry: Array in bins.get(bin,[]):
+			var object: Dictionary = entry[1]
+			match int(entry[0]):
+				0:
+					if object["pos"].distance_to(point)<1.15+maxf(object["dimensions"].x,object["dimensions"].y)*.5+reach: return true
+				1:
+					if object["pos"].distance_to(point)<.8+reach: return true
+				_:
+					# The platform's supports reach well under its deck.
+					var below := float(object["top"])-point.y
+					if point.x>float(object["left"])-.5 and point.x<float(object["right"])+.5 and below>-.9-reach and below<1.6+reach: return true
 	return false
+
+const BLOCKER_BIN := 4.0
+var blocker_bins: Dictionary = {}
+var blocker_signature := Vector4i(-1,-1,-1,-1)
+
+# [kind, object] by height bin: obstacles (0), finds (1) and ledges (2),
+# each in the bins its clearance covers at zero reach. Rebuilt when objects
+# are added; their positions never change.
+func _blocker_bins() -> Dictionary:
+	var signature := _layout_signature()
+	if signature==blocker_signature: return blocker_bins
+	blocker_signature = signature
+	blocker_bins = {}
+	for obstacle in layout.obstacles:
+		var extent: float = 1.15+maxf(obstacle["dimensions"].x,obstacle["dimensions"].y)*.5
+		_bin_blocker(0,obstacle,obstacle["pos"].y-extent,obstacle["pos"].y+extent)
+	for find in layout.finds: _bin_blocker(1,find,find["pos"].y-.8,find["pos"].y+.8)
+	for ledge in layout.ledges: _bin_blocker(2,ledge,float(ledge["top"])-1.6,float(ledge["top"])+.9)
+	return blocker_bins
+
+func _bin_blocker(kind: int, object: Dictionary, low: float, high: float) -> void:
+	for bin in range(int(floor(low/BLOCKER_BIN)),int(floor(high/BLOCKER_BIN))+1):
+		if not blocker_bins.has(bin): blocker_bins[bin] = []
+		blocker_bins[bin].append([kind,object])
 
 func _decor_route_clear(point: Vector2, radius: float) -> bool:
 	# Keep the line of throws and swings readable: no tall decor on the spine.

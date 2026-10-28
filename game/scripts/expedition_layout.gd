@@ -52,9 +52,15 @@ func setup(world_seed: int, biome: int) -> void:
 
 func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 	super.generate_to(height,is_finite,summit_height)
-	if not economy_loot: return
 	var complete := finite and (summit_added or main_point(row).y>=summit-.8)
+	_rows_done(complete)
+	if not economy_loot: return
 	loot_plan.resolve_until(INF if complete else float(row-3))
+
+# Called once rows are laid and before the remaining loot is placed; a
+# subclass can add grips whose rewards join the same economy.
+func _rows_done(_complete: bool) -> void:
+	pass
 
 # Main-path finds of the base generator become role requests in v15.
 func _add_find(point: Vector2, zone: int, rare: bool) -> void:

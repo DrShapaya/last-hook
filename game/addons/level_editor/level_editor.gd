@@ -351,6 +351,12 @@ func _process(_delta: float) -> void:
 func _load_notes() -> void:
 	var path := "user://bake_report_%s.txt" % level_directory.get_file()
 	notes.text = FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) and source!=null and str(source.brief.get("generator",""))=="masks" else "—"
+	# The automatic designer's verdict on this design.
+	var verdict: Dictionary = source.brief.get("score",{}) if source!=null else {}
+	if not verdict.is_empty():
+		var metrics: Dictionary = verdict.get("metrics",{})
+		notes.text = "Оценка %.2f: пологих перелётов %d%%, средний перелёт %.1f, опор на 10 ед. %.1f, развилок %d, неба %d%%\n%s" % [float(verdict["score"]),
+			roundi(float(metrics.get("level_hops",0))*100),float(metrics.get("mean_hop",0)),float(metrics.get("grips_per_10",0)),int(metrics.get("splits",0)),roundi(float(metrics.get("sky",0))*100),notes.text]
 
 # Baked scenes changed on disk: drop the cached copies before showing them.
 func _reload_scenes() -> void:

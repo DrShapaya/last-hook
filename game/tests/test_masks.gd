@@ -107,6 +107,7 @@ func run_tests() -> void:
 	baked.load_bake(level)
 	check(is_equal_approx(baked.layout.outer_edge(30.0,1),layout.outer_edge(30.0,1)) and baked.layout.main_route==layout.main_route,"a mask level loads from its bake without masks")
 	designer_tests()
+	split_tests()
 	print("MASKS_TESTS ",checks," checks, ",failures.size()," failures")
 	quit(0 if failures.is_empty() else 1)
 
@@ -136,3 +137,45 @@ func designer_tests() -> void:
 	check(again.masks["silhouette"].get_data()==source.masks["silhouette"].get_data() and again.masks["route"].get_data()==source.masks["route"].get_data(),"the same design seed gives the same masks")
 	var other := LevelDesigner.new(1,0,778).build()
 	check(other.masks["silhouette"].get_data()!=source.masks["silhouette"].get_data(),"another design seed gives another mountain")
+
+# Splits: the designer plans one per act; the generator builds each as a
+# second way on its own ridge that rejoins the main route, out of any
+# rope's reach in its middle; no filler grips crowd the face.
+func split_tests() -> void:
+	var designer := LevelDesigner.new(0,0,int(LevelCatalog.route(0,0)["seed"])*31+4)
+	var source := designer.build()
+	check(designer.splits.size()==3 and source.brief["splits"].size()==3,"the designer plans a split in every act")
+	var world := MountainWorld.new()
+	world.visuals_enabled = false
+	root.add_child(world)
+	world.setup(int(source.brief["seeds"]["route"]),0,0,false,0,true)
+	var layout := world.layout as MaskLayout
+	layout.use_source(source)
+	world.generate_to(designer.height+6,true,designer.height)
+	check(layout.splits_built.size()==3,"every planned split is built %s" % str(layout.mask_notes.slice(0,2)))
+	var isolated := true
+	var far_grips := 0
+	for split in layout.splits_built:
+		var rows: Array = []
+		var inside := false
+		for id in layout.main_route:
+			if id==split["entry"]: inside = true
+			elif id==split["exit"]: inside = false
+			elif inside: rows.append(id)
+		var axis: float = (layout.anchors[split["entry"]]["pos"].x+layout.anchors[split["exit"]]["pos"].x)*.5
+		for grip_id in split["grips"]:
+			var grip: Vector2 = layout.anchors[grip_id]["pos"]
+			if absf(grip.x-axis)<MaskLayout.ISOLATION+2.4: continue
+			far_grips += 1
+			for row_id in rows:
+				if layout.anchors[row_id]["pos"].distance_to(grip)<MaskLayout.ISOLATION: isolated = false
+	check(far_grips>=6 and isolated,"the far part of every split is out of any rope's reach of the main route (%d far grips)" % far_grips)
+	var filler := 0
+	for anchor in layout.anchors:
+		if str(anchor.get("role",""))=="auxiliary" and not anchor.has("split") and not anchor.get("reserve",false): filler += 1
+	check(filler<=6,"a drawn level has no filler grips across the face (%d left)" % filler)
+	var verdict := LevelScore.evaluate(layout,source,designer.sections)
+	check(verdict["usable"] and float(verdict["score"])>0.5,"the level scores as usable %s" % str(verdict["metrics"]))
+	var path := []
+	path.append_array(layout.main_route)
+	check(path.size()>10,"the main route stays whole beside its splits")

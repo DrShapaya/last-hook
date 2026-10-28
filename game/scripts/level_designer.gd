@@ -15,15 +15,21 @@ extends RefCounted
 #   combo (climax)   a traverse across the mountain, islands, or a chimney:
 #                    a crevice of sky beside the route with a wall across;
 #   exit             a neck that leads into the next act.
-# No two neighbouring sections share a landform. Widths and sway blend across
+# No two neighbouring sections share a landform.
+#
+# Each act also splits in two from its fork beat to the end of its combo:
+# the main route keeps to one ridge, a second way climbs another ridge across
+# open sky — a "ledge" of long, gentle hops zigzagging across the face or a
+# steep "ridge" — and rejoins at the top. The ridges stand far enough apart
+# that no rope crosses between them. Widths and sway blend across
 # section borders, edges carry noise, the top narrows to a peak.
 #
 # The result is a LevelSource with "generator": "masks"; MaskLayout builds
 # the level from it.
 
 const SECTION_HALF := {"wall":8.5,"islands":4.6,"overhang":6.5,"arch":9.5,"split":9.0,"terrace":10.0,"traverse":6.0,"chimney":7.5,"neck":4.8,"base":13.0}
-const CORRIDOR_HALF := {"traverse":2.5,"neck":2.5}
-const CORRIDOR_DEFAULT := 2.7
+const CORRIDOR_HALF := {"traverse":3.0,"neck":2.5}
+const CORRIDOR_DEFAULT := 3.0
 const MAX_CENTER := 8.5
 const BEAT_FORMS := {
 	"start":["wall"],"intro":["wall"],"teach":["wall","islands","overhang"],"fork":["arch","split"],
@@ -37,6 +43,16 @@ var random := RandomNumberGenerator.new()
 var noise := FastNoiseLite.new()
 # Sections bottom-up: {form, beat, act, y0, y1, center0, center1, half, corridor, bias, features}
 var sections: Array = []
+# Splits bottom-up: {y0, y1, side, main_x, path: PackedVector2Array, style}
+var splits: Array = []
+const SPLIT_GAP := 14.0
+# Stone kept beside the route corridor: forks lean up to 2 units out of it.
+const ROUTE_ROCK := 2.6
+# Zigzag width of the main route by landform (1 = the generator's): wide
+# swings and near-level hops instead of a tight ladder. Every hop stays in
+# base-kit reach (MaskLayout clamps it).
+const SWAY := {"base":1.0,"wall":1.3,"islands":1.2,"overhang":1.25,"arch":1.3,"split":1.25,"terrace":1.2,"traverse":1.5,"chimney":1.15,"neck":1.0}
+const SPLIT_RAMP := 4.0
 
 func _init(level_location: int, level_route: int, design_seed: int) -> void:
 	location = level_location
@@ -120,6 +136,51 @@ func plan() -> void:
 		sections.append(section)
 		center = finish
 		previous_form = form
+	_plan_splits(spans)
+
+func _plan_splits(spans: Array) -> void:
+	splits.clear()
+	var acts := {}
+	for entry in spans:
+		if str(entry[0]) in ["fork","rest","combo"]:
+			var act := int(entry[3])
+			var range_y: Vector2 = acts.get(act,Vector2(INF,-INF))
+			acts[act] = Vector2(minf(range_y.x,float(entry[1])),maxf(range_y.y,float(entry[2])))
+	var style := "ledge" if random.randf()<.5 else "ridge"
+	for act in acts:
+		var y0: float = acts[act].x
+		var y1: float = acts[act].y
+		if y1-y0<14.0 or y1>height-4.0: continue
+		var center := corridor_center(y0)
+		# The second way goes to the roomier side; the main route leans away.
+		var side := -signf(center) if absf(center)>1.5 else (-1.0 if random.randf()<.5 else 1.0)
+		var main_x := clampf(center-side*2.5,-6.0,6.0)
+		if side>0: main_x = minf(main_x,15.0-SPLIT_GAP)
+		else: main_x = maxf(main_x,-15.0+SPLIT_GAP)
+		var far_x := main_x+side*SPLIT_GAP
+		var length := y1-y0
+		var path: Array = []
+		path.append(Vector2(main_x+side*4.2,y0+2.0))
+		if style=="ledge":
+			# Long, gentle hops: out across the face, then side to side up the
+			# far ridge's ledges, then back across.
+			path.append(Vector2(far_x,y0+length*.28))
+			path.append(Vector2(far_x-side*1.9,y0+length*.48))
+			path.append(Vector2(far_x+side*1.4,y0+length*.66))
+			path.append(Vector2(far_x-side*.6,y1-3.2))
+		else:
+			# A steep ridge: one traverse out, straight up, one back.
+			path.append(Vector2(far_x,y0+3.5))
+			path.append(Vector2(far_x+side*.4,y1-4.0))
+		path.append(Vector2(main_x+side*4.2,y1-1.0))
+		splits.append({"y0":y0,"y1":y1,"side":side,"main_x":main_x,"far_x":far_x,"path":path,"style":style})
+		style = "ridge" if style=="ledge" else "ledge"
+
+# The split around a height, or {} outside every split.
+func split_at(y: float) -> Dictionary:
+	for split in splits:
+		if y>=float(split["y0"])-1.0 and y<=float(split["y1"])+1.0: return split
+	return {}
 
 # Local shapes of a section: islands, windows, overhangs, shelves, blocks.
 # Each is [kind, centre, radii] in world units; "add" joins the mass, "cut"
@@ -171,7 +232,14 @@ func _section_at(y: float) -> int:
 func corridor_center(y: float) -> float:
 	var section: Dictionary = sections[_section_at(y)]
 	var t := clampf((y-float(section["y0"]))/maxf(.1,float(section["y1"])-float(section["y0"])),0,1)
-	return lerpf(float(section["center0"]),float(section["center1"]),smoothstep(0.0,1.0,t))
+	var center := lerpf(float(section["center0"]),float(section["center1"]),smoothstep(0.0,1.0,t))
+	# Within a split the main route keeps to its own ridge.
+	for split in splits:
+		var y0: float = split["y0"]
+		var y1: float = split["y1"]
+		var lean := smoothstep(y0-SPLIT_RAMP,y0,y)*(1.0-smoothstep(y1,y1+SPLIT_RAMP,y))
+		if lean>0: center = lerpf(center,float(split["main_x"]),lean)
+	return center
 
 # A section property eased across the border with its neighbours over a few
 # units, so widths and offsets never step.
@@ -190,6 +258,8 @@ func _blend(y: float, key: String) -> float:
 func inside(point: Vector2) -> float:
 	var top := height+1.5
 	if point.y>top+.5 or point.y< -2.0: return -10.0
+	var split := split_at(point.y)
+	if not split.is_empty(): return _split_inside(point,split,top)
 	var half := _blend(point.y,"half")
 	# The top narrows to a peak over its last 14 units.
 	if point.y>top-14.0: half = lerpf(half,1.2,smoothstep(top-14.0,top,point.y))
@@ -198,7 +268,7 @@ func inside(point: Vector2) -> float:
 	if point.y>top: amount = minf(amount,top+.5-point.y)
 	# The route always runs on stone: the corridor and a margin beside it
 	# stay inside the mountain whatever the noise and the cuts do.
-	var route_rock := _blend(point.y,"corridor")+1.8-absf(point.x-corridor_center(point.y))
+	var route_rock := _blend(point.y,"corridor")+ROUTE_ROCK-absf(point.x-corridor_center(point.y))
 	if point.y<=top: amount = maxf(amount,route_rock)
 	var index := _section_at(point.y)
 	var features: Array = []
@@ -215,6 +285,24 @@ func inside(point: Vector2) -> float:
 				var span := float(feature[2].y)-absf(point.y-float(feature[1].y))
 				if span>0: amount = minf(amount,-minf(gap,span))
 	return maxf(amount,route_rock) if point.y<=top else amount
+
+# Within a split: a narrow main ridge round the route and a second ridge
+# along the other way's line, with open sky between them.
+func _split_inside(point: Vector2, split: Dictionary, top: float) -> float:
+	var axis := corridor_center(point.y)
+	var main := 5.2+noise.get_noise_2d(point.x,point.y)*1.2-absf(point.x-axis)
+	var route_rock := _blend(point.y,"corridor")+ROUTE_ROCK-absf(point.x-axis)
+	var path: Array = split["path"]
+	var band := -INF
+	var width := 2.3 if str(split["style"])=="ledge" else 2.8
+	for k in range(1,path.size()):
+		var near := Geometry2D.get_closest_point_to_segment(point,path[k-1],path[k])
+		band = maxf(band,width+noise.get_noise_2d(point.x*1.6,point.y*1.6+90.0)*.9-near.distance_to(point))
+	var amount := maxf(maxf(main,route_rock),band)
+	# Blend with the ordinary mountain over the split's first and last units.
+	var y0: float = split["y0"]
+	var y1: float = split["y1"]
+	return amount if point.y<=top else minf(amount,top+.5-point.y)
 
 # Inside amount of an ellipse in units (approximate, positive inside).
 static func _ellipse(point: Vector2, center: Vector2, radii: Vector2) -> float:
@@ -258,6 +346,27 @@ func build(source_name: String = "") -> LevelSource:
 	source.masks["route"] = _paint(source,func(point: Vector2) -> float:
 		var half := _blend(point.y,"corridor")
 		return clampf((half-absf(point.x-corridor_center(point.y)))*2.0+.5,0,1) if point.y<=height+1.0 else 0.0)
+	source.masks["branch"] = _paint(source,func(point: Vector2) -> float:
+		var best := 0.0
+		for split in splits:
+			var path: Array = split["path"]
+			for k in range(1,path.size()):
+				var near := Geometry2D.get_closest_point_to_segment(point,path[k-1],path[k])
+				best = maxf(best,clampf((1.2-near.distance_to(point))*2.0+.5,0,1))
+		return best)
+	var specs: Array = []
+	for split in splits:
+		var line: Array = []
+		for point in split["path"]: line.append([snappedf(point.x,.01),snappedf(point.y,.01)])
+		specs.append({"style":split["style"],"path":line,"from":snappedf(float(split["y0"]),.1),"to":snappedf(float(split["y1"]),.1)})
+	source.brief["splits"] = specs
+	var pace: Array = []
+	for section in sections:
+		var sway: float = SWAY.get(section["form"],1.0)
+		# On the main ridge of a split the route keeps a steadier rhythm.
+		if not split_at((float(section["y0"])+float(section["y1"]))*.5).is_empty(): sway = 1.1
+		pace.append({"from":snappedf(float(section["y0"]),.01),"to":snappedf(float(section["y1"]),.01),"sway":sway})
+	source.brief["pace"] = pace
 	source.masks["rest"] = _paint_features(source,"rest")
 	source.masks["solid"] = _paint_features(source,"solid")
 	return source
@@ -275,6 +384,8 @@ func _paint_features(source: LevelSource, kind: String) -> Image:
 	for section in sections:
 		for feature in section["features"]:
 			if feature[0]!=kind: continue
+			# A split owns its stretch of mountain: no section pieces there.
+			if not split_at(float(feature[1].y)).is_empty(): continue
 			var center: Vector2 = feature[1]
 			var radii: Vector2 = feature[2]
 			var low := source.to_pixel(center+Vector2(-radii.x,radii.y)).floor()

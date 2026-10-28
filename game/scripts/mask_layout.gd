@@ -31,6 +31,9 @@ var pinned_rows: Dictionary = {}
 # What the masks asked for and could not get, for the editor and the bake log.
 var mask_notes: Array = []
 var masks_finished := false
+# Filler grips in columns across the face (the expedition generator's); off
+# for drawn levels unless the brief asks for them.
+var filler_grips := false
 
 var _inside := PackedFloat32Array()
 var _corridor := PackedVector2Array()
@@ -40,6 +43,7 @@ var _height := 0
 
 func use_source(level: LevelSource) -> void:
 	source = level
+	filler_grips = bool(source.brief.get("filler_grips",false))
 	_width = source.size().x
 	_height = source.size().y
 	_inside = _signed_distance(_mask_bytes("silhouette"))
@@ -305,7 +309,7 @@ func _plan_act(act: int) -> void:
 			"flip", "same":
 				if template[2]=="flip": direction = -direction
 				if remaining<=5 and absf(base-target.x)>3.0 and signf(target.x-base)!=direction: direction = -direction
-				dx = float(template[0])*direction*sway
+				dx = float(template[0])*direction*_sway_at(y,sway)
 				if absf(base+dx-corridor.x)>half and absf(base-dx-corridor.x)<absf(base+dx-corridor.x):
 					direction = -direction
 					dx = -dx
@@ -350,6 +354,13 @@ func _plan_act(act: int) -> void:
 		for row in range(entry_row,entry_row+4): reserved_spots[row] = reserved_spots.get(row,[])+[spot]
 	act_plans.append(plan)
 
+# Width of the zigzag at a height: the brief's `pace` (from the designer:
+# wide swings on walls, near-level hops on traverses) or the route's own.
+func _sway_at(y: float, fallback: float) -> float:
+	for entry in source.brief.get("pace",[]):
+		if y>=float(entry["from"]) and y<float(entry["to"]): return clampf(float(entry["sway"]),.8,1.6)
+	return fallback
+
 # A pin of a route grip type (stone, spring) takes the nearest ordinary row
 # within 1.6 units of height when both neighbours stay within reach; other
 # pins are added as extra grips once the route exists.
@@ -383,6 +394,10 @@ func crowded(point: Vector2) -> bool:
 # clamps them to the outer edge; on a painted mountain a column can fall in
 # a gap or window. Such a spot slides towards the corridor onto stone.
 func auxiliary_point(index: int, column: int, point: Vector2, random: RandomNumberGenerator) -> Vector2:
+	# A drawn level has no filler columns: every side grip belongs to a
+	# branch, a fork or a split path. Returning the row's own point makes the
+	# generator skip the column.
+	if source!=null and not filler_grips: return point
 	var candidate := super.auxiliary_point(index,column,point,random)
 	if _inside.is_empty() or inside_distance(candidate)>=EDGE_CLEAR: return candidate
 	var center := corridor_at(candidate.y).x
@@ -418,6 +433,172 @@ func _components_empty(layer: String) -> bool:
 				_solid_painted = 1
 				break
 	return _solid_painted==0
+
+# --- Split paths --------------------------------------------------------------------
+#
+# A split is a second way up, chosen at a main grip and rejoining the main
+# route rows later. The brief gives its line (`splits`: path, style) on a
+# ridge of its own; grips go along that line at the style's hop length, each
+# within base-kit reach of the last and on painted stone. No grip of the
+# split comes within ISOLATION of the main route between its ends, so once
+# on one way the player stays on it: even the longest rope (8.8) cannot
+# cross.
+
+const ISOLATION := 9.4
+const HOPS := {"ledge":[4.2,.35,0.0],"ridge":[3.4,.25,.9]}  # length, length jitter, side swing
+
+var splits_built: Array = []
+# Why split spots were turned down, by reason (for tools and the editor).
+var split_rejects: Dictionary = {}
+var splits_done := false
+
+func _rows_done(complete: bool) -> void:
+	if source==null or not complete or splits_done: return
+	splits_done = true
+	for index in range(source.brief.get("splits",[]).size()): _build_split(index,source.brief["splits"][index])
+
+func _build_split(index: int, spec: Dictionary) -> void:
+	var path := PackedVector2Array()
+	for point in spec.get("path",[]): path.append(Vector2(point[0],point[1]))
+	if path.size()<2: return
+	var style := str(spec.get("style","ledge"))
+	var hop: Array = HOPS.get(style,HOPS["ledge"])
+	# The main grips it leaves from and returns to.
+	var entry_row := -1
+	var exit_row := -1
+	for row in range(main_route.size()):
+		var at: Vector2 = anchors[main_route[row]]["pos"]
+		if at.y<path[0].y and at.distance_to(path[0])<=REACH and (entry_row<0 or at.y>anchors[main_route[entry_row]]["pos"].y): entry_row = row
+		if at.y>=path[-1].y and at.distance_to(path[-1])<=REACH and exit_row<0: exit_row = row
+	if entry_row<0 or exit_row<=entry_row+2:
+		mask_notes.append("Развилка %d: нет опоры основного пути у её начала или конца" % (index+1))
+		return
+	var entry: Vector2 = anchors[main_route[entry_row]]["pos"]
+	var exit: Vector2 = anchors[main_route[exit_row]]["pos"]
+	var line := PackedVector2Array([entry])
+	line.append_array(path)
+	line.append(exit)
+	var random := rng(index,733)
+	var points := PackedVector2Array()
+	var previous := entry
+	var distance := 0.0
+	var total := _line_length(line)
+	var swing := 1.0
+	# Strict isolation holds where the line is far across from the main
+	# route; near the split's ends the two ways still meet.
+	var main_axis := (entry.x+exit.x)*.5
+	while true:
+		var step := float(hop[0])+random.randf_range(-float(hop[1]),float(hop[1]))
+		distance += step
+		if distance>=total-step*.6: break
+		var along := _along(line,distance)
+		var point: Vector2 = along[0]+(along[1] as Vector2).orthogonal()*float(hop[2])*swing
+		swing = -swing
+		var strict := absf(float(along[0].x)-main_axis)>=ISOLATION+2.4
+		split_rejects.clear()
+		var placed := _place_split_grip(point,previous,entry_row,exit_row,strict)
+		if not placed.is_finite():
+			mask_notes.append("Развилка %d: не нашлось места для опоры у x %.1f, %d м (от x %.1f, %d м; %s)" % [index+1,point.x,roundi(point.y*10),previous.x,roundi(previous.y*10),str(split_rejects)])
+			return
+		points.append(placed)
+		previous = placed
+		distance = _project(line,placed)
+	# Short closing hops while the main grip is still out of reach.
+	var closing := 0
+	while (previous.distance_to(exit)>REACH-.2 or not transition_clear(previous,exit)) and closing<3:
+		closing += 1
+		var toward := previous+(exit-previous).limit_length(REACH-.6)
+		var placed := _place_split_grip(toward,previous,entry_row,exit_row,false)
+		if not placed.is_finite(): break
+		points.append(placed)
+		previous = placed
+	if previous.distance_to(exit)>REACH or not transition_clear(previous,exit) or points.size()<2:
+		mask_notes.append("Развилка %d не возвращается на основной путь: от x %.1f, %d м до опоры x %.1f, %d м (%.1f)" % [index+1,previous.x,roundi(previous.y*10),exit.x,roundi(exit.y*10),previous.distance_to(exit)])
+		return
+	# Built only when complete: grips, links, rewards.
+	var ids: Array[int] = []
+	var from_id: int = main_route[entry_row]
+	for point in points:
+		var id := _add_anchor(point,GripSpec.STONE,Vector2(random.randf_range(1.5,1.9),random.randf_range(.55,.7)))
+		anchors[id]["role"] = "auxiliary"
+		anchors[id]["split"] = index
+		anchors[id]["permanent"] = false
+		_add_edge(Vector2i(from_id,id))
+		from_id = id
+		ids.append(id)
+	_add_edge(Vector2i(from_id,main_route[exit_row]))
+	if economy_loot:
+		# Coins along every hop; a treasure where the far side turns back.
+		for k in range(points.size()):
+			var to: Vector2 = points[k+1] if k+1<points.size() else exit
+			loot_plan.request(entry_row,points[k]+Vector2(0,-1.2),"trail",to+Vector2(0,-1.2),{"count":3})
+		var far := 0
+		for k in range(points.size()):
+			if absf(points[k].x-entry.x)>absf(points[far].x-entry.x): far = k
+		loot_plan.request(entry_row,points[far]+Vector2(.25,-2.05),"route_treasure" if style=="ledge" else "route_cache")
+	splits_built.append({"entry":main_route[entry_row],"exit":main_route[exit_row],"grips":ids,"style":style})
+
+# A split grip near `point`: on stone, within reach of the previous grip,
+# clear of other grips, and in the middle of the split (`strict`) beyond any
+# rope's reach of the main route between the split's ends. Near its ends the
+# two ways still meet. Nearest fitting spot first; INF when none.
+func _place_split_grip(point: Vector2, previous: Vector2, entry_row: int, exit_row: int, strict: bool) -> Vector2:
+	var candidates: Array[Vector2] = [point]
+	for ring in range(1,7):
+		for step in range(12): candidates.append(point+Vector2.from_angle(TAU*step/12.0)*ring*.35)
+	for candidate in candidates:
+		if inside_distance(candidate)<EDGE_CLEAR:
+			_reject("sky")
+			continue
+		if candidate.distance_to(previous)>REACH-.1 or candidate.distance_to(previous)<2.2:
+			_reject("reach")
+			continue
+		if not transition_clear(previous,candidate):
+			_reject("blocked")
+			continue
+		if crowded(candidate):
+			_reject("crowded")
+			continue
+		var isolated := true
+		if strict:
+			for row in range(entry_row+1,exit_row):
+				if anchors[main_route[row]]["pos"].distance_to(candidate)<ISOLATION: isolated = false
+		if isolated: return candidate
+		_reject("isolation")
+	return Vector2.INF
+
+func _reject(reason: String) -> void:
+	split_rejects[reason] = int(split_rejects.get(reason,0))+1
+
+static func _line_length(line: PackedVector2Array) -> float:
+	var total := 0.0
+	for k in range(1,line.size()): total += line[k-1].distance_to(line[k])
+	return total
+
+# Point and direction at an arc length along the line.
+static func _along(line: PackedVector2Array, distance: float) -> Array:
+	var left := distance
+	for k in range(1,line.size()):
+		var segment := line[k-1].distance_to(line[k])
+		if left<=segment or k==line.size()-1:
+			var direction := (line[k]-line[k-1]).normalized()
+			return [line[k-1]+direction*minf(left,segment),direction]
+		left -= segment
+	return [line[-1],Vector2.UP]
+
+# Arc length of the line's point nearest to `point`.
+static func _project(line: PackedVector2Array, point: Vector2) -> float:
+	var best := INF
+	var result := 0.0
+	var walked := 0.0
+	for k in range(1,line.size()):
+		var near := Geometry2D.get_closest_point_to_segment(point,line[k-1],line[k])
+		var gap := near.distance_to(point)
+		if gap<best:
+			best = gap
+			result = walked+line[k-1].distance_to(near)
+		walked += line[k-1].distance_to(line[k])
+	return result
 
 # --- After the route ----------------------------------------------------------------
 

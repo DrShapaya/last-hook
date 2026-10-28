@@ -18,12 +18,13 @@ static func touch_throw(game, target: Vector2) -> void:
 	game.pointer_move(end)
 	game.pointer_up(end)
 
-# Climbs the main route from its first grip; returns how many grips were
-# reached. `log` collects where it stopped.
-static func climb_route(game, count: int, log: Array = []) -> int:
+# Climbs a route (grip ids; the main route by default) from its first grip;
+# returns how many grips were reached. `log` collects where it stopped.
+static func climb_route(game, count: int, log: Array = [], route: Array = []) -> int:
+	var path: Array = route if not route.is_empty() else game.world.main_route
 	var reached := 1
-	for route_index in range(1,count):
-		var target_id: int = game.world.main_route[route_index]
+	for route_index in range(1,mini(count,path.size())):
+		var target_id: int = path[route_index]
 		var target: Vector2 = game.world.anchor_by_id(target_id)["pos"]
 		var fired := false
 		for frame in range(1200):
@@ -66,20 +67,38 @@ static func climb_route(game, count: int, log: Array = []) -> int:
 			return reached
 	return reached
 
+# The main route with every split taken instead of its main stretch.
+static func route_through_splits(world) -> Array:
+	var layout = world.layout
+	if not layout is MaskLayout: return world.main_route.duplicate()
+	var result: Array = []
+	var skip_until := -1
+	for row in range(world.main_route.size()):
+		var id: int = world.main_route[row]
+		if skip_until>=0 and id!=skip_until: continue
+		skip_until = -1
+		result.append(id)
+		for split in (layout as MaskLayout).splits_built:
+			if int(split["entry"])==id:
+				result.append_array(split["grips"])
+				skip_until = int(split["exit"])
+	return result
+
 # A whole run of the current level from the start platform: true when the
 # summit is reached and settled.
-static func climb_to_summit(game, log: Array = []) -> bool:
+static func climb_to_summit(game, log: Array = [], route: Array = []) -> bool:
 	game.fire_hook(game.direction_to_target(game.world.anchors[0]["pos"]))
 	for frame in range(120):
 		game._physics_process(1.0/120)
 		game._move_camera(1.0/120)
 		if game.sim.attached: break
-	var reached := climb_route(game,game.world.main_route.size(),log)
+	var path: Array = route if not route.is_empty() else game.world.main_route
+	var reached := climb_route(game,path.size(),log,path)
 	for frame in range(1800):
 		if game.state!="play": break
 		game.reel = 1
 		game.pump = signf(game.sim.vel.x) if absf(game.sim.vel.x)>.1 else 1.0
 		game._physics_process(1.0/120)
 		game._move_camera(1.0/120)
-	log.append("reached %d/%d route grips" % [reached,game.world.main_route.size()])
+	log.append("reached %d/%d route grips" % [reached,path.size()])
 	return game.state=="result" and bool(game.settlement.get("success",false))

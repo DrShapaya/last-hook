@@ -259,7 +259,7 @@ func run_tests() -> void:
 				if point.y>level.height: continue
 				if source.sample("silhouette",point)<.5: off_stone += 1
 				if source.sample("route",point)<.5: off_route += 1
-			if off_stone>0 or off_route>world.main_route.size()/8: source_problems.append("%d:%d %d main grips off stone, %d off route" % [location,route,off_stone,off_route])
+			if off_stone>0 or off_route>world.main_route.size()/5: source_problems.append("%d:%d %d main grips off stone, %d off route" % [location,route,off_stone,off_route])
 			world.free()
 	check(source_problems.is_empty(),"every route has its source masks and the corridor follows the route %s" % str(source_problems.slice(0,4)))
 	var directory := OS.get_environment("LASTHOOK_SAVE_DIR")

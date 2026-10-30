@@ -20,12 +20,21 @@ func controls_inside(node: Node, area: Rect2) -> bool:
 		if not controls_inside(child,area): return false
 	return true
 
+# The part of a control a scrolling page lets through.
+func shown_rect(control: Control) -> Rect2:
+	var rect := control.get_global_rect()
+	var parent := control.get_parent()
+	while parent is Control:
+		if parent.clip_contents: rect = rect.intersection(parent.get_global_rect())
+		parent = parent.get_parent()
+	return rect
+
 func buttons_do_not_overlap(node: Node) -> bool:
 	var buttons: Array[Button] = []
 	for child in node.find_children("*","Button",true,false): buttons.append(child)
 	for i in range(buttons.size()):
 		for j in range(i+1,buttons.size()):
-			if buttons[i].get_global_rect().grow(-1).intersects(buttons[j].get_global_rect().grow(-1)):
+			if shown_rect(buttons[i]).grow(-1).intersects(shown_rect(buttons[j]).grow(-1)):
 				return false
 	return true
 
@@ -113,13 +122,29 @@ func run_tests() -> void:
 			validate_navigation(game,dimensions)
 			if tab=="settings":
 				game.hud.touch_controls_hint = true
+				for section in SettingsPage.SECTIONS:
+					game.hud.settings_section = section
+					game.hud.show_menu()
+					await process_frame
+					validate_screen(game,area,"settings %s at %s" % [section,dimensions])
+				game.hud.settings_section = "controls"
 				game.hud.show_menu()
 				await process_frame
-				validate_screen(game,area,"four touch instructions at %s" % dimensions)
 				var has_delay := false
-				for label in game.hud.content.find_children("*","Label",true,false):
-					if "0,28" in label.text: has_delay = true
+				for slider in game.get_tree().get_nodes_in_group("menu_slider"):
+					if slider.is_visible_in_tree() and is_equal_approx(slider.value,.28): has_delay = true
 				check(has_delay,"touch settings expose the vertical hold delay at %s" % dimensions)
+				game.set_setting("text_scale",130)
+				for section in SettingsPage.SECTIONS:
+					game.hud.settings_section = section
+					game.hud.show_menu()
+					await process_frame
+					validate_screen(game,area,"large text in %s at %s" % [section,dimensions])
+				game.set_setting("text_scale",100)
+				await process_frame
+				game.hud.settings_section = "graphics"
+				game.hud.show_menu()
+				await process_frame
 				game.hud.touch_controls_hint = false
 		game.hud.select_menu("expedition")
 		await process_frame
@@ -186,21 +211,16 @@ func run_tests() -> void:
 		if node.text=="После попытки": all_disabled = all_disabled and node.disabled
 	check(all_disabled and game.model.profile["active"]==snapshot,"menu navigation cannot spend gold or discard a saved climb")
 	game.hud.select_menu("settings")
-	var was_enabled: bool = game.model.profile["sound"]
-	# The second switch is "Звук" (the first is "Музыка").
-	var switches: Array = []
-	for node in game.hud.content.find_children("*","Button",true,false):
-		if node.text in ["Вкл","Выкл"] and node.is_visible_in_tree(): switches.append(node)
-	await touch_tap(switches[1])
+	game.set_setting("sfx_volume",40)
 	# Settings writes are coalesced for a short debounce window.
 	await create_timer(.25).timeout
 	var reloaded := GameModel.new(game.model.save_path)
-	check(game.model.profile["sound"]!=was_enabled and reloaded.profile["sound"]==game.model.profile["sound"],"sound setting persists across reload")
+	check(int(reloaded.profile["settings"]["sfx_volume"])==40,"sound setting persists across reload")
 	game.hud.select_menu("settings")
-	await touch_tap(find_button(game.hud.content,"Высокая"))
-	check(game.model.profile["graphics_quality"]=="high" and game.sun_light.shadow_enabled,"high graphics preset applies shadows and persists")
 	await touch_tap(find_button(game.hud.content,"Экономия"))
 	check(game.model.profile["graphics_quality"]=="battery" and Engine.max_fps==0 and not game.sun_light.shadow_enabled,"battery graphics preset keeps the display refresh target and disables shadows")
+	await touch_tap(find_button(game.hud.content,"Высокая"))
+	check(game.model.profile["graphics_quality"]=="high" and game.sun_light.shadow_enabled,"high graphics preset applies shadows and persists")
 	var vibration_before: bool = game.model.profile["vibration"]
 	game.hud.toggle_vibration()
 	check(game.model.profile["vibration"]!=vibration_before,"vibration setting toggles")

@@ -38,6 +38,10 @@ var hazards: ActHazards
 var hazard_visuals: HazardVisuals
 var show_loot_prices := true
 var visual_quality := "balanced"
+# Loot glints and halos: "full", "reduced" or "off". Sky detail follows the
+# decor unless a setting chose its own.
+var effects_quality := "full"
+var sky_quality := ""
 # Runtime worlds build at most one visual chunk per visibility update. Tests and
 # offline tools keep the default synchronous behaviour so their scene queries
 # remain deterministic.
@@ -132,15 +136,30 @@ func set_visual_quality(quality: String) -> void:
 	var selected := quality if quality in ["high","balanced","battery"] else "balanced"
 	var changed := selected!=visual_quality
 	visual_quality = selected
-	if is_instance_valid(sky_backdrop): sky_backdrop.set_quality(visual_quality)
+	if is_instance_valid(sky_backdrop): sky_backdrop.set_quality(_sky_detail())
 	if visuals!=null and visuals.has_method("set_quality"):
 		visuals.set_quality(visual_quality)
 	# Decor density, loot glints and shadow casters are baked per chunk.
-	if changed and visuals_enabled and not chunks.is_empty():
-		for key in chunks.keys(): _release_chunk(key)
-		stream_pending = true
-		stream_dirty = true
-		update_visibility(camera_center.y,camera_center.x,visual_build_budget)
+	if changed: _rebuild_chunks()
+
+func set_effects_quality(value: String) -> void:
+	if value==effects_quality: return
+	effects_quality = value
+	_rebuild_chunks()
+
+func set_sky_quality(value: String) -> void:
+	sky_quality = value
+	if is_instance_valid(sky_backdrop): sky_backdrop.set_quality(_sky_detail())
+
+func _sky_detail() -> String:
+	return sky_quality if not sky_quality.is_empty() else visual_quality
+
+func _rebuild_chunks() -> void:
+	if not visuals_enabled or chunks.is_empty(): return
+	for key in chunks.keys(): _release_chunk(key)
+	stream_pending = true
+	stream_dirty = true
+	update_visibility(camera_center.y,camera_center.x,visual_build_budget)
 
 func seeded_rng(index: int, stream: int) -> RandomNumberGenerator:
 	return layout.rng(index,stream)
@@ -362,8 +381,8 @@ func update_anchor_load(id: int, rope: Vector2, velocity: Vector2) -> void:
 			var pull := clampf(rope.normalized().x,-1,1) if rope.length_squared()>.01 else 0.0
 			var charge := GripSpec.spring_load(object,velocity)
 			# The stone block leans and settles a little; it never squashes flat.
-			bend.rotation.z = lerpf(bend.rotation.z,-pull*.07,.25)
-			bend.scale.y = lerpf(bend.scale.y,1.0-.06*charge,.25)
+			bend.rotation.z = lerpf(bend.rotation.z,-pull*.12,.25)
+			bend.scale.y = lerpf(bend.scale.y,1.0-.14*charge,.25)
 	for exit_id in GripSpec.choice_exits(object): _highlight_exit(int(exit_id),true)
 
 func release_anchor_load(id: int) -> void:
@@ -528,8 +547,9 @@ func hit_object(from: Vector2, to: Vector2, object: Dictionary, grip: float) -> 
 		if cache.is_empty() or cache["pos"]!=center or cache["scale"]!=scale_value or cache["source"]!=object["polygon"]:
 			var polygon := PackedVector2Array()
 			var radius := 0.0
+			var tilt := GripSpec.plate_tilt(object)
 			for p in object["polygon"]:
-				polygon.append(p*scale_value+center)
+				polygon.append((p*scale_value).rotated(tilt)+center)
 				radius = maxf(radius,(p*scale_value).length())
 			cache = {"pos":center,"scale":scale_value,"source":object["polygon"],"polygon":polygon,"radius":radius+.001}
 			object["_hit"] = cache
@@ -687,7 +707,7 @@ func _build_sky() -> void:
 	sky_backdrop = ProceduralSkyBackdrop.new()
 	add_child(sky_backdrop)
 	sky_backdrop.setup(seed_value, false, location)
-	sky_backdrop.set_quality(visual_quality)
+	sky_backdrop.set_quality(_sky_detail())
 	sky_backdrop.set_view(camera_center)
 
 func _release_chunk(key: int) -> void:
@@ -1037,6 +1057,49 @@ func _crumble(object: Dictionary) -> void:
 				tween.tween_property(chip,"position",chip.position+Vector3((index-1.5)*.35,-1.4,0),.36).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 				tween.tween_property(chip,"scale",Vector3.ZERO,.36)
 				tween.chain().tween_callback(chip.queue_free)
+
+# Ice shavings falling from the hook while it runs down a plate.
+const ICE_SHAVING_SECONDS := .07
+var ice_shaving_clock := 0.0
+
+func ice_scrape(contact: Vector2, delta: float) -> void:
+	ice_shaving_clock -= delta
+	if ice_shaving_clock>0 or not visuals_enabled: return
+	ice_shaving_clock = ICE_SHAVING_SECONDS
+	var color := profile_at(contact.y).material_color(GripSpec.ICE).lightened(.3)
+	var chip := box("Ледяная крошка",Vector3(contact.x,contact.y,HERO_PLANE_Z),Vector3(.13,.13,.08),mat("ice_shaving_%s" % color.to_html(),color))
+	var tween := create_tween().set_parallel(true)
+	tween.tween_property(chip,"position",chip.position+Vector3(0,-1.0,0),.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tween.tween_property(chip,"scale",Vector3.ZERO,.34)
+	tween.chain().tween_callback(chip.queue_free)
+
+# The throw of a spring: sparks of its paint leave the grip along the exit, and
+# a shorter spray falls away behind the hero.
+const HERO_PLANE_Z := 3.2
+
+func spring_burst(id: int, hero: Vector2) -> void:
+	var object := anchor_by_id(id)
+	if object.is_empty() or not visuals_enabled: return
+	var exit := GripSpec.exit_direction(object)
+	var across := exit.orthogonal()
+	var p: Vector2 = object["pos"]
+	var mount: SurfaceMount = object.get("mount")
+	var z := mount.holder_position().z+.5 if mount!=null else 2.5
+	var color := profile_at(p.y).paint_color(GripSpec.SPRING)
+	var spark := mat("throw_spark_%s" % color.to_html(),color)
+	var burst := Node3D.new()
+	burst.name = "Вспышка броска"
+	add_child(burst)
+	var tween := create_tween().set_parallel(true)
+	for index in range(14):
+		var from_grip := index<8
+		var spread := (index%4-1.5)*(.42 if from_grip else .3)
+		var origin := Vector3(p.x,p.y,z) if from_grip else Vector3(hero.x,hero.y,HERO_PLANE_Z)
+		var flight := exit*(2.4+(index%3)*.7)+across*spread if from_grip else -exit*(1.1+(index%3)*.4)+across*spread
+		var chip := box("Искра броска",origin,Vector3(.2,.2,.12),spark,burst)
+		tween.tween_property(chip,"position",origin+Vector3(flight.x,flight.y,0),.42).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tween.tween_property(chip,"scale",Vector3.ZERO,.42).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tween.chain().tween_callback(burst.queue_free)
 
 # --- Act hazards (v14) ------------------------------------------------------------
 

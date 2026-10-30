@@ -120,6 +120,7 @@ func run_tests() -> void:
 	game.set_process(false)
 	game.set_physics_process(false)
 	game.model.profile = GameModel.fresh_profile()
+	game.model.set_level(GameModel.SLOWMO,3)
 	game.start_run(false)
 	var expected := Vector2(.6,.8)
 	for origin in [Vector2(80,240),Vector2(400,650),Vector2(25,30),Vector2(440,800)]:
@@ -278,6 +279,7 @@ func run_tests() -> void:
 	game.pointer_down(Vector2(300,400))
 	var space := InputEventKey.new()
 	space.keycode = KEY_SPACE
+	space.physical_keycode = KEY_SPACE
 	space.pressed = true
 	game._unhandled_input(space)
 	game.pointer_up(Vector2(300,400))

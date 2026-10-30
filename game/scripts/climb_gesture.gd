@@ -20,6 +20,9 @@ var vertical_since := -1.0
 var horizontal_direction := 0
 var horizontal_since := -1.0
 var last_time := 0.0
+# Player settings: how long a vertical hold takes and how short the stick is.
+var hold_seconds := VERTICAL_HOLD_SECONDS
+var sensitivity := 1.0
 
 func begin(point: Vector2, time: float, scale: float) -> void:
 	origin = point/maxf(.1,scale)
@@ -51,7 +54,7 @@ func sample(time: float) -> Dictionary:
 	elif vertical_direction!=direction:
 		vertical_direction = direction
 		vertical_since = last_time
-	var progress := clampf((last_time-vertical_since)/VERTICAL_HOLD_SECONDS,0,1) if vertical_direction!=0 else 0.0
+	var progress := clampf((last_time-vertical_since)/hold_seconds,0,1) if vertical_direction!=0 else 0.0
 	var side := int(signf(offset.x))
 	var side_slope := VERTICAL_EXIT_SLOPE if horizontal_direction==side and side!=0 else VERTICAL_ENTER_SLOPE
 	var horizontal := absf(offset.x)>=VERTICAL_MIN_DISTANCE and absf(offset.y)<=absf(offset.x)*side_slope
@@ -61,13 +64,13 @@ func sample(time: float) -> Dictionary:
 	elif horizontal_direction!=side:
 		horizontal_direction = side
 		horizontal_since = last_time
-	var walk_progress := clampf((last_time-horizontal_since)/VERTICAL_HOLD_SECONDS,0,1) if horizontal_direction!=0 else 0.0
+	var walk_progress := clampf((last_time-horizontal_since)/hold_seconds,0,1) if horizontal_direction!=0 else 0.0
 	return {
-		"pump":0.0 if vertical_direction!=0 else axis(offset.x,STICK_RADIUS),
-		"reel":axis(-offset.y,REEL_EXTENT) if progress>=1 else 0.0,
+		"pump":0.0 if vertical_direction!=0 else axis(offset.x,STICK_RADIUS/sensitivity),
+		"reel":axis(-offset.y,REEL_EXTENT/sensitivity) if progress>=1 else 0.0,
 		"vertical_direction":vertical_direction,
 		"vertical_progress":progress,
-		"walk":axis(offset.x,STICK_RADIUS) if walk_progress>=1 else 0.0,
+		"walk":axis(offset.x,STICK_RADIUS/sensitivity) if walk_progress>=1 else 0.0,
 		"horizontal_direction":horizontal_direction,
 		"walk_progress":walk_progress
 	}

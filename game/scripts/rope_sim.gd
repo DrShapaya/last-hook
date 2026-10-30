@@ -3,7 +3,6 @@ extends RefCounted
 
 const MIN_LENGTH := 2.0
 const MAX_SPEED := 18.0
-const SWING_FORCE := 11.5
 const AIR_DRAG := .42
 const TANGENTIAL_DRAG := .16
 const MAX_REEL_SPEED := 4.5
@@ -16,7 +15,9 @@ var attached := false
 var length := 4.0
 var target_length := 4.0
 var maximum_length := 5.5
-var adjust_speed := 3.0
+var swing_force := 11.5
+var reel_in_speed := 3.0
+var reel_out_speed := 3.0
 var reel_velocity := 0.0
 var fall_speed_limit := 8.0
 var flight_peak := 1.1
@@ -90,15 +91,15 @@ func tick(dt: float, pump: float, reel: float) -> void:
 	if attached:
 		var radial := (pos-effective_anchor()).normalized()
 		var tangent := Vector2(-radial.y,radial.x)
-		var force := Vector2(pump_input*SWING_FORCE, 0)
+		var force := Vector2(pump_input*swing_force, 0)
 		# Only the component along the orbit can change the swing. A small
 		# velocity drag keeps repeated corrections smooth instead of twitchy.
 		acceleration += force - radial * force.dot(radial)
 		acceleration -= tangent * vel.dot(tangent) * TANGENTIAL_DRAG
 		if absf(reel)>.001:
-			request_length(target_length-reel*adjust_speed*dt)
+			request_length(target_length-reel*(reel_in_speed if reel>0 else reel_out_speed)*dt)
 		var error := target_length-length
-		var desired_speed := signf(error)*minf(adjust_speed,sqrt(2*REEL_ACCELERATION*absf(error)))
+		var desired_speed := signf(error)*minf(reel_in_speed if error<0 else reel_out_speed,sqrt(2*REEL_ACCELERATION*absf(error)))
 		reel_velocity = move_toward(reel_velocity,desired_speed,REEL_ACCELERATION*dt)
 		var advance := reel_velocity*dt
 		if advance*error>0 and absf(advance)>=absf(error):

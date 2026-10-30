@@ -34,6 +34,23 @@ func _draw() -> void:
 	draw_set_transform(size*.5,0,Vector2.ONE*minf(size.x,size.y)/32)
 	var soft := Color(tint,.18)
 	match kind:
+		30: # Swing: a pendulum between two arrows.
+			draw_arc(Vector2(0,-11),15,.5,PI-.5,18,tint,2.2,true)
+			stroke([Vector2(0,-11),Vector2(5,3)],2.2)
+			draw_circle(Vector2(5,3),3.2,tint)
+		31,32: # Rope with an arrow up (in) or down (out).
+			var way := -1.0 if kind==31 else 1.0
+			plate(Rect2(-11,-8,10,16),soft,3)
+			for y in [-7,-3,1,5]: stroke([Vector2(-11,y),Vector2(-1,y+2)],1.6)
+			stroke([Vector2(7,-way*9),Vector2(7,way*9)],2.4)
+			stroke([Vector2(2,way*4),Vector2(7,way*10),Vector2(12,way*4)],2.4)
+		33: # A sight.
+			draw_arc(Vector2.ZERO,9,0,TAU,24,tint,2.2,true)
+			draw_circle(Vector2.ZERO,2.4,tint)
+			for side in [Vector2.UP,Vector2.DOWN,Vector2.LEFT,Vector2.RIGHT]: stroke([side*6,side*13],2.2)
+		34: # A clock face: the rest between two uses.
+			draw_arc(Vector2.ZERO,11,0,TAU,26,tint,2.2,true)
+			stroke([Vector2(0,-7),Vector2.ZERO,Vector2(5,3)],2.2)
 		0: # Rope spool, separate from the hook.
 			plate(Rect2(-7,-8,14,16),soft,3)
 			for y in [-7,-3,1,5]: stroke([Vector2(-7,y),Vector2(7,y+3)],1.7)

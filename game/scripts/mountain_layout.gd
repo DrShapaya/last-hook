@@ -357,8 +357,11 @@ func auxiliary_exit(point: Vector2) -> Vector2:
 	return Vector2(-signf(point.x)*.5,1).normalized()
 
 # The spring's throw neither rises into rock nor points at the fall zone.
+func spring_lane() -> float:
+	return GripSpec.SPRING_LANE
+
 func spring_lane_clear(point: Vector2, direction: Vector2, extra: Dictionary = {}) -> bool:
-	return direction.y>.2 and not outside(point+direction*GripSpec.SPRING_LANE,0) and transition_clear(point,point+direction*GripSpec.SPRING_LANE,extra)
+	return direction.y>.2 and not outside(point+direction*spring_lane(),0) and transition_clear(point,point+direction*spring_lane(),extra)
 
 func _main_created(_index: int, _id: int) -> void:
 	pass
@@ -379,7 +382,7 @@ func _reserved(point: Vector2, index: int) -> bool:
 static func base_kit() -> Dictionary:
 	if _base_kit.is_empty():
 		var balance: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://data/balance.json"))
-		_base_kit = {"rope":float(balance["rope_lengths"][0]),"throw":float(balance["throw_speeds"][0]),"gravity":float(balance["gravity"])}
+		_base_kit = {"rope":float(balance["upgrades"]["rope"]["values"][0]),"throw":float(balance["upgrades"]["throw"]["values"][0]),"gravity":float(balance["gravity"])}
 	return _base_kit
 
 # Time to leave a grip for a target with the base kit: at most half a swing

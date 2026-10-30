@@ -25,7 +25,7 @@ func step(game, frames: int = 1) -> void:
 # A seed may carry its location (v14: ice lives in the third expedition).
 func new_run(game, seed_number: int, hook_level: int = 1, location: int = 0, version: int = 0) -> void:
 	game.model.profile = GameModel.fresh_profile()
-	game.model.set_level(GameModel.HOOKS,hook_level)
+	game.model.set_levels({GameModel.RADIUS:5 if hook_level%2==0 else 1,GameModel.DOUBLE:2 if hook_level>=3 else 1})
 	game.selected_location = location
 	game.start_run(false)
 	game.run_seed = seed_number
@@ -33,9 +33,9 @@ func new_run(game, seed_number: int, hook_level: int = 1, location: int = 0, ver
 	game._configure_rope()
 
 # Test fixture: hang still under a grip, as after a catch, without flying there.
-func hang_from(game, id: int) -> void:
+func hang_from(game, id: int, along: Vector2 = Vector2.ZERO) -> void:
 	var grip: Dictionary = game.world.anchor_by_id(id)
-	var contact: Vector2 = game.world.anchor_surface_point(grip,grip["pos"]+Vector2(0,-1),Vector2.UP)
+	var contact: Vector2 = game.world.anchor_surface_point(grip,grip["pos"]+Vector2(0,-1)+along,Vector2.UP)
 	game.sim.pos = contact+Vector2(0,-2.8)
 	game.sim.vel = Vector2.ZERO
 	game.sim.attach(contact,game.model.shot_range())
@@ -146,13 +146,30 @@ func run_tests() -> void:
 	check(spring_id>=0,"the test seed has a spring on its main path")
 	var spring: Dictionary = game.world.anchor_by_id(spring_id)
 	hang_from(game,spring_id)
-	var loaded: Vector2 = GripSpec.exit_direction(spring)*4.0
-	game.sim.vel = loaded
+	game.sim.vel = Vector2.ZERO
+	game.hud.update_play()
+	var arrow: Vector2 = game.hud.aim_overlay.throw_direction
+	check(arrow.dot(Vector2(GripSpec.exit_direction(spring).x,-GripSpec.exit_direction(spring).y))>.99,"while the spring is held the HUD arrow shows its throw on screen")
+	var start_pos: Vector2 = game.sim.pos
 	game.release_hook()
 	var thrown: Vector2 = game.sim.vel
 	game.release_hook()
-	check(absf(thrown.length()-4.0*(1+GripSpec.SPRING_BONUS))<.01 and game.sim.vel==thrown,"a loaded spring throws once with its bounded bonus (%.2f m/s)" % thrown.length())
+	check(thrown.dot(GripSpec.exit_direction(spring))>=GripSpec.SPRING_THROW and game.sim.vel==thrown,"a spring throws a still hero once (%.2f m/s)" % thrown.length())
+	check(game.world.find_child("Вспышка броска",true,false)!=null,"the throw bursts visibly from the spring")
+	var travel := 0.0
+	for frame in range(120):
+		step(game)
+		travel = maxf(travel,(game.sim.pos-start_pos).dot(GripSpec.exit_direction(spring)))
+	check(travel>=3.0,"a spring carries a still hero a long way along its exit (%.2f)" % travel)
 	check(game.world.layout.spring_lane_clear(spring["pos"],GripSpec.exit_direction(spring)),"the spring's throw lane is clear of rock and points away from the fall zone")
+	new_run(game,58273)
+	spring = game.world.anchor_by_id(spring_id)
+	hang_from(game,spring_id)
+	game.sim.vel = Vector2.ZERO
+	game.release_hook(false,"hazard")
+	check(game.sim.vel==Vector2.ZERO and spring["broken"],"a forced release consumes the spring without a throw")
+	game.hud.update_play()
+	check(game.hud.aim_overlay.throw_direction==Vector2.ZERO,"the HUD arrow goes away with the grip")
 	new_run(game,58273)
 	hang_from(game,game.world.main_route[spring_row-1])
 	var spring_route: Array = [game.world.main_route[spring_row-1],spring_id,game.world.main_route[spring_row+1]]
@@ -194,9 +211,9 @@ func run_tests() -> void:
 	check(not ice_branch.is_empty(),"an ice detour exists in the first seeds")
 	new_run(game,ice_branch["seed"],1,0,13)
 	var ice: Dictionary = game.world.anchor_by_id(ice_branch["anchor"])
-	hang_from(game,ice_branch["anchor"])
+	hang_from(game,ice_branch["anchor"],-GripSpec.slide_direction(ice)*.7)
 	var first_contact: Vector2 = game.sim.anchor
-	step(game,96)
+	step(game,int(GripSpec.seconds_to_slip(ice,first_contact)*.8*120))
 	var slid: Vector2 = game.sim.anchor
 	var carried: Vector2 = game.anchor_slide_velocity
 	var outline: PackedVector2Array = game.world.anchor_outline(ice)
@@ -204,7 +221,20 @@ func run_tests() -> void:
 	check(slid.distance_to(first_contact)>.3 and on_stone and carried.length()>.3,"held ice slides the hook %.2f m over its stone and builds slide speed %.2f m/s" % [slid.distance_to(first_contact),carried.length()])
 	var before: Vector2 = game.sim.vel
 	game.release_hook()
-	check(game.sim.vel.distance_to(before+carried)<.01,"releasing ice carries the slide into the flight")
+	check(game.sim.vel.distance_to((before+carried*GripSpec.ICE_CARRY)*game.model.impulse_factor())<.05,"releasing ice carries the slide into the flight")
+	new_run(game,ice_branch["seed"],1,0,13)
+	ice = game.world.anchor_by_id(ice_branch["anchor"])
+	hang_from(game,ice_branch["anchor"],-GripSpec.slide_direction(ice)*.7)
+	game.hud.update_play()
+	check(game.hud.aim_overlay.throw_direction.dot(Vector2(GripSpec.slide_direction(ice).x,-GripSpec.slide_direction(ice).y))>.99,"while the plate is held the HUD arrow shows the way the hook slides")
+	var slip_after: float = GripSpec.seconds_to_slip(ice,game.anchor_contact)
+	var slip_speed := Vector2.ZERO
+	for frame in range(int(slip_after*120)+12):
+		if not game.sim.attached: break
+		slip_speed = game.anchor_slide_velocity
+		step(game)
+	check(not game.sim.attached and game.last_release_reason=="ice_slip" and absf(game.anchor_time-slip_after)<.03 and ice["broken"],"held to the end, the hook slips off the plate after %.2f s" % slip_after)
+	check(slip_speed.length()>.5 and game.sim.vel.dot(GripSpec.slide_direction(ice))>0,"the hero leaves the plate with the speed of the slide")
 	for hook_level in [1,2]:
 		new_run(game,ice_branch["seed"],hook_level,0,13)
 		hang_from(game,ice_branch["entry"])

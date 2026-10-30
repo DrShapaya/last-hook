@@ -58,6 +58,12 @@ var layout_mode := "modal"
 var menu_tab := "expedition"
 # Equipment tab: "upgrades" (buy levels) or "supplies" (run profiles, items).
 var equipment_view := "upgrades"
+# Settings subsection: graphics, controls, keys, accessibility or about.
+var settings_section := "graphics"
+var about_version := ""
+# Accessibility settings read while building text.
+var text_scale := 1.0
+var bold_outline := false
 const MENU_TABS := ["equipment","expedition","settings"]
 # Direction of the last menu change (-1 back, 1 forward, 0 none): the next
 # LobbyView slides its body in from that side and moves the tab marker.
@@ -66,7 +72,9 @@ var menu_previous_tab := "expedition"
 # Which control should take keyboard/controller focus after a swipe or key:
 # "tab", "start" or "".
 var menu_focus := ""
-var upgrade_flash := -1
+var upgrade_flash := ""
+# The equipment category on show.
+var equipment_category := "movement"
 var last_swipe_msec := -100000
 var result_data: Dictionary = {}
 var revive_reason := "Падение"
@@ -83,8 +91,6 @@ var touch_controls_hint := OS.has_feature("mobile")
 var strong_font: FontVariation
 var hud_chips: Array[PanelContainer] = []
 var toast_chip: Panel
-const INK := MenuSurface.INK
-const GOLD := MenuSurface.HOLD
 const WHITE := MenuSurface.STONE
 const MUTED := Color("c9d2d8")
 const CYAN := MenuSurface.CRYSTAL_LIGHT
@@ -111,7 +117,7 @@ class SlowmoIndicator extends Control:
 		var digits := number_font if number_font!=null else font
 		var active := remaining>0
 		PlayGauges.slab(self,Rect2(Vector2.ZERO,size-Vector2(0,3)),Color("141d24f2") if active else Color("24323dd8"),MenuSurface.SLATE_LIP,3,8)
-		var accent := GOLD if active else MUTED
+		var accent := MenuSurface.HOLD if active else MUTED
 		# Hourglass mark.
 		var mark := Vector2(18,size.y*.5-2)
 		draw_colored_polygon(PackedVector2Array([mark+Vector2(-6,-9),mark+Vector2(6,-9),mark+Vector2(0,0)]),Color(accent,.9))
@@ -200,13 +206,13 @@ class ItemButton extends Control:
 		if armed:
 			for dash in range(8):
 				var from := time*2.4+dash*TAU/8
-				draw_arc(center,radius-2,from,from+TAU/14,8,GOLD,3,true)
+				draw_arc(center,radius-2,from,from+TAU/14,8,MenuSurface.HOLD,3,true)
 		elif running>0:
-			draw_arc(center,radius-2,0,TAU,48,Color(GOLD,.22),3,true)
-			draw_arc(center,radius-2,-PI*.5,-PI*.5+TAU*running,48,GOLD,3.5,true)
+			draw_arc(center,radius-2,0,TAU,48,Color(MenuSurface.HOLD,.22),3,true)
+			draw_arc(center,radius-2,-PI*.5,-PI*.5+TAU*running,48,MenuSurface.HOLD,3.5,true)
 		else:
-			draw_arc(center,radius-2,0,TAU,48,Color(MUTED,.22) if dim else Color(GOLD,.75),2,true)
-		var tint := GOLD if live else Color(WHITE,.35) if dim else WHITE
+			draw_arc(center,radius-2,0,TAU,48,Color(MUTED,.22) if dim else Color(MenuSurface.HOLD,.75),2,true)
+		var tint := MenuSurface.HOLD if live else Color(WHITE,.35) if dim else WHITE
 		draw_set_transform(center,0,Vector2.ONE*radius/26.0)
 		match id:
 			"beacon": _beacon(tint)
@@ -215,7 +221,7 @@ class ItemButton extends Control:
 			_: _strap(tint)
 		draw_set_transform(Vector2.ZERO)
 		var note := "использован" if used else "ждёт полёта" if armed else "авто" if passive else title
-		var color := Color(MUTED,.7) if used else GOLD if armed else WHITE
+		var color := Color(MUTED,.7) if used else MenuSurface.HOLD if armed else WHITE
 		draw_string(font,Vector2(1,CIRCLE+18),note,HORIZONTAL_ALIGNMENT_CENTER,size.x,12,Color(MenuSurface.SLATE_LIP,.85))
 		draw_string(font,Vector2(0,CIRCLE+17),note,HORIZONTAL_ALIGNMENT_CENTER,size.x,12,color)
 	# Lantern with rays: it lights up the exits.
@@ -264,10 +270,10 @@ class LevelIntro extends Control:
 		iris.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		iris_material.shader = preload("res://shaders/level_intro.gdshader")
 		iris_material.set_shader_parameter("tint",MenuSurface.SLATE)
-		iris_material.set_shader_parameter("rim",GOLD)
+		iris_material.set_shader_parameter("rim",MenuSurface.HOLD)
 		iris.material = iris_material
 		add_child(iris)
-		for pair in [[title,heading,heading_font,34,GOLD],[subtitle,note,note_font,17,MUTED]]:
+		for pair in [[title,heading,heading_font,34,MenuSurface.HOLD],[subtitle,note,note_font,17,MUTED]]:
 			var line: Label = pair[0]
 			line.text = pair[1]
 			line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -325,7 +331,10 @@ class AimOverlay extends Control:
 	var vertical_progress := 0.0
 	var walk_direction := 0
 	var walk_progress := 0.0
-	var aim_color := GOLD
+	var aim_color := MenuSurface.HOLD
+	# Screen direction of the held spring's throw, zero on any other grip.
+	var throw_direction := Vector2.ZERO
+	var throw_color := Color.WHITE
 	var trajectory := PackedVector2Array()
 	var branches: Array[Dictionary] = []
 	var animation := 0.0
@@ -338,6 +347,20 @@ class AimOverlay extends Control:
 			draw_trajectory(trajectory,target,aim_color)
 		if control_active:
 			draw_controls()
+		if throw_direction!=Vector2.ZERO:
+			draw_throw()
+
+	# Three chevrons running out of the hero along the throw.
+	func draw_throw() -> void:
+			var u := ui_scale
+			var across := throw_direction.orthogonal()
+			for index in range(3):
+				var run := fposmod(animation*1.6+index/3.0,1.0)
+				var tip := origin+throw_direction*(44+run*54)*u
+				var shape := PackedVector2Array([tip-throw_direction*12*u+across*13*u,tip,tip-throw_direction*12*u-across*13*u])
+				var fade := sin(run*PI)
+				draw_polyline(shape,Color("121b22",.45*fade),9*u,true)
+				draw_polyline(shape,Color(throw_color,fade),5*u,true)
 
 	func draw_trajectory(points: PackedVector2Array, contact: Vector2, color: Color) -> void:
 			var distance := 0.0
@@ -361,7 +384,7 @@ class AimOverlay extends Control:
 			# rim with a soft dark edge so it still reads on sunlit limestone,
 			# direction cues and a glossy thumb. The touch origin and travel stay
 			# exactly as before.
-			var color := CYAN if (vertical_progress>=1 if control_attached else walk_progress>=1) else GOLD
+			var color := CYAN if (vertical_progress>=1 if control_attached else walk_progress>=1) else MenuSurface.HOLD
 			var u := ui_scale
 			var radius := 48*u
 			var knob := control_origin+(control_target-control_origin).limit_length(ClimbGesture.STICK_RADIUS*u)*(48/ClimbGesture.STICK_RADIUS)
@@ -598,8 +621,12 @@ func label(parent: Node, text: String, size: int = 17, color: Color = WHITE) -> 
 	node.text = text
 	if body_font!=null:
 		node.add_theme_font_override("font",body_font)
-	node.add_theme_font_size_override("font_size",size)
+	node.add_theme_font_size_override("font_size",roundi(size*text_scale))
 	node.add_theme_color_override("font_color",color)
+	# High contrast: light text over the mountain gets a dark rim.
+	if bold_outline and color.get_luminance()>.5:
+		node.add_theme_color_override("font_outline_color",MenuSurface.SLATE_LIP)
+		node.add_theme_constant_override("outline_size",4)
 	node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(node)
 	return node
@@ -694,16 +721,15 @@ func step_menu(direction: int, focus: String = "tab") -> bool:
 	select_menu(MENU_TABS[index])
 	return true
 
-func toggle_sound() -> void:
-	game.model.profile["sound"] = not game.model.profile.get("sound",true)
-	game.request_profile_save()
-	if not game.model.profile["sound"]: game.audio.stop()
+func effects_reduced() -> bool:
+	return bool(game.model.profile["settings"]["reduce_effects"])
 
-func toggle_music() -> void:
-	game.set_music_enabled(not bool(game.model.profile.get("music",true)))
+# Kept pages hold old fonts and colours: everything is built again.
+func rebuild_all_pages() -> void:
+	if layout_mode=="menu" and is_instance_valid(lobby_view): lobby_view.rebuild.call_deferred()
 
 func toggle_loot_prices() -> void:
-	set_loot_prices("near" if str(game.model.profile.get("loot_prices","near"))=="always" else "always")
+	set_loot_prices("near" if str(game.model.profile.get("loot_prices","always"))=="always" else "always")
 
 func set_loot_prices(mode: String) -> void:
 	game.model.profile["loot_prices"] = mode
@@ -910,7 +936,7 @@ func show_play() -> void:
 	danger_column.add_child(danger_timer)
 	goal_label = label(chip(notes,MenuSurface.SLATE),"",14,WHITE)
 	contract_label = null
-	aim_label = label(chip(notes,MenuSurface.SLATE),"",14,GOLD)
+	aim_label = label(chip(notes,MenuSurface.SLATE),"",14,MenuSurface.HOLD)
 	aim_label.add_theme_font_override("font",strong_font)
 	for holder in notes.get_children():
 		holder.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
@@ -1190,8 +1216,8 @@ func update_play() -> void:
 			seen_focus_serial = game.focus_serial
 			if game.focus_active():
 				pulse(slowmo_indicator,.14)
-				slowmo_vignette.flash = 1.0
-	slowmo_vignette.visible = layout_mode=="play"
+				if not effects_reduced(): slowmo_vignette.flash = 1.0
+	slowmo_vignette.visible = layout_mode=="play" and not effects_reduced()
 	if slowmo_vignette.visible:
 		slowmo_vignette.strength = game.focus_visual()
 		slowmo_vignette.time = game.elapsed
@@ -1208,7 +1234,7 @@ func update_play() -> void:
 		pulse(height_plate,.12)
 	record_label.text = "Новый рекорд!" if record_broken else "Рекорд %d м" % int(record_at_start)
 	# A theme override notifies and re-lays out the label: set it only on change.
-	var record_color := GOLD if record_broken else MUTED
+	var record_color := MenuSurface.HOLD if record_broken else MUTED
 	if record_label.get_theme_color("font_color")!=record_color: record_label.add_theme_color_override("font_color",record_color)
 	var remaining: float = game.sim.pos.y-game.screen_bottom_y()
 	var danger: bool = game.sim.launched and remaining<4
@@ -1219,7 +1245,7 @@ func update_play() -> void:
 	climb_bar.visible = game.run_mode=="summit"
 	var reached_zone := clampi(int(maxf(0,game.sim.highest-game.START_Y)/20),0,5)
 	if last_zone>=0 and reached_zone>last_zone:
-		climb_bar.flash = 1.0
+		climb_bar.flash = 0.0 if effects_reduced() else 1.0
 		climb_bar.flash_at = float(reached_zone)/climb_bar.zones
 		pulse(height_plate)
 	last_zone = reached_zone
@@ -1241,17 +1267,28 @@ func update_play() -> void:
 	# Rope length lives in the side gauge and the aim in the arc itself; the
 	# chip speaks only when a grip behaves unusually.
 	var reel := 0
+	var throw_direction := Vector2.ZERO
 	if game.sim.attached:
 		var parts: Array[String] = []
 		var current: Dictionary = game.world.anchor_by_id(game.anchor_id)
 		if not current.is_empty():
 			if not current.get("permanent",true): parts.append("Опора исчезнет при отпускании")
-			if GripSpec.kind_of(current)==GripSpec.SPRING: parts.append("отпусти по стрелке — ветка подбросит")
+			if GripSpec.kind_of(current)==GripSpec.SPRING:
+				parts.append("отпусти — подбросит по стрелке")
+				var throw_exit := GripSpec.exit_direction(current)
+				throw_direction = Vector2(throw_exit.x,-throw_exit.y)
+				aim_overlay.throw_color = game.world.profile_at(current["pos"].y).paint_color(GripSpec.SPRING)
+			elif GripSpec.plate(current):
+				var slide := GripSpec.slide_direction(current)
+				throw_direction = Vector2(slide.x,-slide.y)
+				aim_overlay.throw_color = game.world.profile_at(current["pos"].y).paint_color(GripSpec.ICE)
 		if game.pressed and game.touch_gesture and aim_overlay.vertical_direction!=0 and aim_overlay.vertical_progress>=1:
 			reel = aim_overlay.vertical_direction
 		aim_label.text = " · ".join(parts)
 		if reel==0 and absf(game.sim.target_length-game.sim.length)>.02:
 			reel = 1 if game.sim.target_length<game.sim.length else -1
+	aim_overlay.throw_direction = throw_direction
+	if throw_direction!=Vector2.ZERO: aim_overlay.animation = game.animation_time
 	rope_gauge.active = game.sim.attached
 	danger_edge.strength = clampf(game.camera_dip/.6,0,1)
 	danger_edge.edge_y = content_point(game.camera.unproject_position(Vector3(game.sim.pos.x,game.screen_bottom_y(),0))).y
@@ -1259,7 +1296,7 @@ func update_play() -> void:
 	rope_gauge.ratio = game.sim.length/maxf(.1,game.model.shot_range())
 	rope_gauge.meters = roundi(game.sim.length*10)
 	rope_gauge.direction = reel
-	aim_overlay.aim_color = GOLD
+	aim_overlay.aim_color = MenuSurface.HOLD
 	if aim_overlay.active:
 		# The forecast sweeps up to 240 steps per hook. Rebuild it about 20 times
 		# a second as the hero moves, and at once only for a real turn of aim:
@@ -1278,7 +1315,7 @@ func update_play() -> void:
 			var points := PackedVector2Array()
 			for sample in branch["points"]: points.append(game.camera.unproject_position(Vector3(sample.x,sample.y,0)))
 			var hit: Dictionary = branch["collision"]
-			var color := GOLD if hit.is_empty() else CORAL if hit.get("blocked",false) or not branch["reachable"] else Color("8ae0ac")
+			var color := MenuSurface.HOLD if hit.is_empty() else CORAL if hit.get("blocked",false) or not branch["reachable"] else Color("8ae0ac")
 			var contact: Vector2 = branch["contact"]
 			aim_overlay.branches.append({"points":points,"target":game.camera.unproject_position(Vector3(contact.x,contact.y,0)),"color":color})
 		aim_overlay.animation = game.animation_time
@@ -1305,7 +1342,7 @@ func update_play() -> void:
 			danger_label.text = "Корень сломается через %.1f с" % GripSpec.seconds_left(grip,game.anchor_time)
 			danger_timer.value = GripSpec.seconds_left(grip,game.anchor_time)/GripSpec.ROOT_SECONDS
 		elif not grip.is_empty() and GripSpec.kind_of(grip)==GripSpec.ICE:
-			danger_label.text = "Лёд скользит — готовь следующий бросок"
+			danger_label.text = "Лёд: сорвёшься через %s с" % GripSpec.timer_text(maxf(0,GripSpec.seconds_to_slip(grip,game.anchor_contact)-game.anchor_time)) if GripSpec.plate(grip) else "Лёд скользит — готовь следующий бросок"
 		elif not grip.is_empty() and GripSpec.fork(grip):
 			danger_label.text = "Развилка: в обход — сокровища, прямо — быстрее"
 		elif not grip.is_empty() and not GripSpec.choice_exits(grip).is_empty():
@@ -1349,17 +1386,28 @@ func contract_text() -> String:
 func tutorial_hint() -> String:
 	var learned: Array = game.model.profile["learned_controls"]
 	var mobile := touch_controls_hint
+	if bool(game.model.profile["settings"]["persistent_hints"]) and learned.size()>=4: return _reminder_hint(mobile)
 	if "aim" not in learned:
 		return "Коснись где удобно, потяни как стик и отпусти" if mobile else "Зажми ЛКМ, прицелься в выступ и отпусти"
 	if not game.sim.attached:
 		return ("Потяни от места касания и отпусти" if mobile else "В полёте прицелься и поймай следующую опору") if game.catches<2 else ""
 	if "swing" not in learned:
-		return "Удерживай палец и веди влево/вправо: раскачайся" if mobile else "A / D: раскачайся в такт движению"
+		return "Удерживай палец и веди влево/вправо: раскачайся" if mobile else "%s / %s: раскачайся в такт движению" % [_key("swing_left"),_key("swing_right")]
 	if "rope" not in learned:
-		return "Держи строго вверх / вниз: после паузы канат движется" if mobile else "W / S или колесо: измени длину каната"
+		return "Держи строго вверх / вниз: после паузы канат движется" if mobile else "%s / %s или колесо: измени длину каната" % [_key("rope_up"),_key("rope_down")]
 	if "release" not in learned:
-		return "Отпусти палец — отцепись. Затем снова прицелься" if mobile else "Пробел: отпусти канат на взлёте и целься снова"
+		return "Отпусти палец — отцепись. Затем снова прицелься" if mobile else "%s: отпусти канат на взлёте и целься снова" % _key("release")
 	return ""
+
+# Once everything is learned, the same chip keeps a one-line reminder.
+func _reminder_hint(mobile: bool) -> String:
+	if not game.sim.attached:
+		return "Потяни от места касания и отпусти" if mobile else "Зажми ЛКМ, прицелься и отпусти"
+	if mobile: return "Влево/вправо: раскачка · вверх/вниз: длина · отпусти: отцепись"
+	return "%s / %s: раскачка · %s / %s: длина · %s: отцепись" % [_key("swing_left"),_key("swing_right"),_key("rope_up"),_key("rope_down"),_key("release")]
+
+func _key(action_name: String) -> String:
+	return KeyBindings.short_text(game.model.profile["settings"]["key_bindings"],action_name)
 
 # The pause button, a little larger than drawn so a hurried second finger
 # still finds it.
@@ -1391,12 +1439,12 @@ func set_toast(text: String) -> void:
 func show_workshop() -> void:
 	show_menu()
 
-func _buy_upgrade(kind: int) -> void:
+func _buy_upgrade(kind: String) -> void:
 	var level_before: int = game.model.level(kind)
 	var message: String = game.model.purchase(kind)
 	# The rebuilt row celebrates a real level change only.
-	upgrade_flash = kind if game.model.level(kind)>level_before else -1
-	if kind==2:
+	upgrade_flash = kind if game.model.level(kind)>level_before else ""
+	if kind in [GameModel.RADIUS,GameModel.DOUBLE]:
 		# The climber is only built when hooks change, never on a section switch.
 		if game.state=="menu": game.ensure_menu_explorer()
 		if is_instance_valid(game.explorer): game.explorer.set_hook_configuration(game.model.hook_tips(),game.model.hook_count())

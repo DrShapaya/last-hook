@@ -34,7 +34,7 @@ func text_fit_tests(game) -> void:
 		await process_frame
 		var gauge_left: float = game.hud.rope_gauge.get_global_rect().position.x
 		var notes: Node = game.hud.aim_label.get_parent().get_parent()
-		var fits: bool = not spring.is_empty() and game.hud.aim_label.text.contains("ветка подбросит")
+		var fits: bool = not spring.is_empty() and game.hud.aim_label.text.contains("подбросит по стрелке")
 		var widest := 0.0
 		for holder in notes.get_children():
 			if holder is Control and holder.visible:
@@ -116,7 +116,7 @@ func run_tests() -> void:
 		check(game.bolt_active,"a real pointer gesture fires after the resize: %s" % dimensions)
 		game.sim.attached = true
 		game.sim.anchor = game.sim.pos+Vector2(1,3)
-		game.model.set_level(GameModel.HOOKS,4)
+		game.model.set_levels({GameModel.RADIUS:5,GameModel.DOUBLE:2})
 		game._process(.016)
 		check(game.explorer.bolt.visible and game.explorer.tip_count==3 and game.explorer.hook_count==2,"attached rope keeps the two triple hooks visible: %s" % dimensions)
 		var ends := mesh_ends(game.explorer.rope)
@@ -124,7 +124,7 @@ func run_tests() -> void:
 		game.bolt_active = true
 		game.sim.attached = false
 		game.bolt_pos = game.sim.pos+Vector2(1,3)
-		game.model.set_level(GameModel.HOOKS,1)
+		game.model.set_levels({GameModel.RADIUS:1,GameModel.DOUBLE:1})
 		game._process(.016)
 		check(game.explorer.bolt.visible and game.explorer.tip_count==1,"the flying hook displays exactly the purchased tip count: %s" % dimensions)
 		game.state = "pause"

@@ -102,7 +102,7 @@ func run_tests() -> void:
 	# Stage four launches two slightly fanned lines. The first valid contact
 	# wins; the other line must wind back without creating a second attachment.
 	game.model.profile = GameModel.fresh_profile()
-	game.model.set_level(GameModel.HOOKS,4)
+	game.model.set_levels({GameModel.RADIUS:5,GameModel.DOUBLE:2})
 	game.start_run(false)
 	clear_shot(game)
 	var dual_target := Vector2(4,22)
@@ -143,7 +143,7 @@ func run_tests() -> void:
 	var slid: Vector2 = game.world.anchor_surface_point(grip,grip["pos"]+Vector2(0,-1.2-grip["dimensions"].y))
 	check(Geometry2D.is_point_in_polygon(slid,outline) or slid.y>=grip["pos"].y-grip["dimensions"].y,"a slipping hook stops at the grip's lower edge")
 	clear_shot(game)
-	game.model.set_level(GameModel.HOOKS,1)
+	game.model.set_levels({GameModel.RADIUS:1,GameModel.DOUBLE:1})
 	game.fire_hook(Vector2.RIGHT)
 	game._update_bolt(.8)
 	check(not game.bolt_active and game.bolt_returning and game.bolt_pos.distance_to(game.sim.pos)<=5.501,"a miss stops at the live rope limit and begins winding back")

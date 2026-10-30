@@ -175,13 +175,13 @@ func _ready() -> void:
 	if DisplayServer.get_name()!="headless": AssetWarmup.start()
 	model = GameModel.new()
 	_configure_movement()
-	_apply_graphics_quality(str(model.profile.get("graphics_quality","balanced")),false)
+	_apply_graphics_quality(str(model.profile.get("graphics_quality","high")),false)
 	selected_location = int(model.profile.get("selected_location",0))
 	if not model.profile["active"].is_empty():
 		selected_location = int(model.profile["active"].get("location",0))
 	lobby_location = selected_location
 	_setup_lighting()
-	_apply_graphics_quality(str(model.profile.get("graphics_quality","balanced")),false)
+	_apply_graphics_quality(str(model.profile.get("graphics_quality","high")),false)
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	camera_base_size = clampf(float(model.camera_setting("base_size",24.0)),8.0,60.0)
@@ -190,17 +190,23 @@ func _ready() -> void:
 	camera.far = 120
 	add_child(camera)
 	camera.current = true
+	_setup_audio_buses()
 	audio = AudioStreamPlayer.new()
 	audio.volume_db = -18
+	audio.bus = "SFX"
 	add_child(audio)
 	focus_audio = AudioStreamPlayer.new()
 	focus_audio.volume_db = -20
+	focus_audio.bus = "SFX"
 	add_child(focus_audio)
 	music = MusicPlayer.new()
 	add_child(music)
-	music.enabled = bool(model.profile.get("music",true))
+	music.enabled = int(_settings()["music_volume"])>0
+	apply_audio()
+	_apply_input()
 	hud = GameHud.new()
 	add_child(hud)
+	_apply_accessibility()
 	hud.setup(self)
 	if model.save_blocked:
 		toast(model.save_error,6.0,"save")
@@ -231,7 +237,7 @@ func _ready() -> void:
 		preview = true
 		model.profile = GameModel.fresh_profile()
 		if not capture_quality.is_empty(): _apply_graphics_quality(capture_quality,false)
-		model.set_level(GameModel.HOOKS,capture_tips)
+		model.set_levels({GameModel.RADIUS:5 if capture_tips%2==0 else 1,GameModel.DOUBLE:2 if capture_tips>=3 else 1})
 		selected_location = capture_location
 		lobby_location = capture_location
 		if capture_screen in ["play","rope","inventory","equipment","flight","slowmo"]:
@@ -286,7 +292,7 @@ func _ready() -> void:
 			state = "result"
 			model.profile["gold"] = 4540
 			model.profile["reached_zones"] = 6
-			model.set_levels([3,2,2,3,2,2,3,1])
+			model.set_levels({GameModel.ROPE:3,GameModel.IMPULSE:2,GameModel.RADIUS:5,GameModel.BAG:3,GameModel.MAGNET:2,GameModel.RECOVERY:2,GameModel.THROW:3})
 			hud.show_result({"success":true,"highest":1200,"height":540,"loot":900,"carried":900,"finish":1300,"contract":250,"contract_done":true,"coins":312,"recovery":100,
 				"sets":[{"id":"forest_relic","name":"Метки старого лесника","parts":3,"completed":true}],"landmarks":["ridge_flag"],"materials":{"silk":1},"tokens":2,"spent":["beacon"],
 				"total":2990,"diamonds":20,"zone_bonus":1800,"first":true,"seconds":214,"shots":51,"catches":43})
@@ -311,18 +317,20 @@ func _ready() -> void:
 			model.set_level(GameModel.BAG,5)
 			for tier in range(6): model.bag.append({"id":-tier-1,"tier":tier,"value":int(model.balance["loot_values"][tier]*(1.8 if tier%2==1 else 1.0))})
 			pause_run()
-		elif capture_screen in ["workshop","settings","supplies"]:
+		elif capture_screen in ["workshop","supplies"] or capture_screen.begins_with("settings"):
 			model.profile["gold"] = 640
 			model.profile["reached_zones"] = 4
 			model.profile["reached_acts"] = 2
-			model.set_levels([3,2,2,3,2,2,3,1])
+			model.set_levels({GameModel.ROPE:3,GameModel.IMPULSE:2,GameModel.RADIUS:5,GameModel.BAG:3,GameModel.MAGNET:2,GameModel.RECOVERY:2,GameModel.THROW:3})
 			model.profile["material_wallet"] = {"fiber":3,"silk":1}
 			model.profile["consumable_stock"] = {"beacon":1,"glide":2}
 			model.profile["active_loadout"] = ["beacon","glide"]
 			model.profile["set_parts"] = {"forest_relic":2}
 			hud.equipment_view = "supplies" if capture_screen=="supplies" else "upgrades"
 			show_workshop()
-			if capture_screen=="settings": hud.select_menu("settings")
+			if capture_screen.begins_with("settings"):
+				hud.settings_section = capture_screen.trim_prefix("settings_") if capture_screen!="settings" else "graphics"
+				hud.select_menu("settings")
 		elif capture_screen=="terrain":
 			start_run(false)
 			_create_world(58273,0,126)
@@ -454,7 +462,7 @@ func _apply_shadow_preset(preset: String) -> void:
 			sun_light.directional_shadow_max_distance = 46
 			RenderingServer.directional_shadow_atlas_set_size(4096,true)
 			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_LOW)
-		"battery":
+		"off":
 			sun_light.shadow_enabled = false
 			sun_light.shadow_opacity = .28
 			# Without shadows, unshadowed illumination covers all surfaces; keep exposure natural.
@@ -473,33 +481,75 @@ func _apply_shadow_preset(preset: String) -> void:
 			RenderingServer.directional_shadow_atlas_set_size(2048,true)
 			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_LOW)
 
-func _apply_graphics_quality(quality: String, save: bool = true) -> void:
-	var selected := quality if quality in ["high","balanced","battery"] else "balanced"
-	if not is_instance_valid(sun_light):
-		# _ready calls this before lighting exists; the final values are applied
-		# again by the next menu change or when the scene is ready.
-		if model!=null: model.profile["graphics_quality"] = selected
-		return
-	# Presets change the render workload, never the frame pacing: every preset
-	# follows the display's refresh rate (60/90/120 Hz) under VSync. A 60 fps
-	# cap on a 90/120 Hz screen alternates frame lengths and makes motion
-	# flicker like a strobe.
-	Engine.max_fps = 0
-	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
-	_apply_shadow_preset(selected)
-	# Glow is a chain of full-screen blur passes; its faint bloom is not worth
-	# the fill rate on the battery preset.
-	if scene_environment!=null: scene_environment.glow_enabled = selected!="battery"
-	if is_instance_valid(world): world.set_visual_quality(selected)
-	if is_instance_valid(explorer): explorer.set_visual_quality(selected)
-	if model!=null:
-		model.profile["graphics_quality"] = selected
-		if save and not preview: request_profile_save()
+func _settings() -> Dictionary:
+	return model.profile["settings"]
 
-# The settings switch updates itself in place; nothing else on the menu
-# depends on the preset, so the page is not rebuilt.
-func set_graphics_quality(quality: String) -> void:
-	_apply_graphics_quality(quality)
+# A preset name fills the graphics settings; "custom" keeps them as they are.
+func _apply_graphics_quality(quality: String, save: bool = true) -> void:
+	if GameSettings.PRESETS.has(quality):
+		GameSettings.apply_preset(_settings(),quality)
+		model.profile["graphics_quality"] = quality
+	_apply_graphics()
+	if save and not preview: request_profile_save()
+
+func _apply_graphics() -> void:
+	# _ready calls this before lighting exists; it runs again once it does.
+	if not is_instance_valid(sun_light): return
+	var settings := _settings()
+	# The workload changes freely, the frame pacing only on request: VSync
+	# follows the display's refresh rate (60/90/120 Hz), and a 60 fps cap on a
+	# 90/120 Hz screen alternates frame lengths and flickers like a strobe.
+	Engine.max_fps = int(settings["fps_limit"])
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
+	_apply_shadow_preset(str(settings["shadows"]))
+	# Glow is a chain of full-screen blur passes.
+	if scene_environment!=null: scene_environment.glow_enabled = bool(settings["glow"])
+	get_viewport().scaling_3d_scale = float(settings["render_scale"])
+	if is_instance_valid(world): _world_graphics(world)
+	if is_instance_valid(explorer): _explorer_graphics()
+
+func _apply_accessibility() -> void:
+	var settings := _settings()
+	MenuSurface.apply_palette(str(settings["color_scheme"]),bool(settings["high_contrast"]))
+	hud.text_scale = int(settings["text_scale"])*.01
+	hud.bold_outline = bool(settings["high_contrast"])
+
+func _apply_input() -> void:
+	var settings := _settings()
+	KeyBindings.apply(settings["key_bindings"])
+	climb_gesture.hold_seconds = float(settings["hold_seconds"])
+	climb_gesture.sensitivity = int(settings["sensitivity"])*.01
+
+func _world_graphics(target: MountainWorld) -> void:
+	var settings := _settings()
+	target.set_sky_quality(str(settings["sky"]))
+	target.set_effects_quality(str(settings["particles"]))
+	target.set_visual_quality(str(settings["decor"]))
+
+func _explorer_graphics() -> void:
+	explorer.set_visual_quality("battery" if str(_settings()["shadows"])=="off" else "high")
+	explorer.effects_quality = str(_settings()["particles"])
+
+func set_graphics_preset(preset: String) -> void:
+	_apply_graphics_quality(preset)
+
+# One setting from the menu: stored, applied, saved. The controls update
+# themselves in place, so no page is rebuilt.
+func set_setting(key: String, value: Variant) -> void:
+	_settings()[key] = value
+	model.profile["settings"] = GameSettings.sanitize(_settings())
+	if key in GameSettings.PRESETS["high"]:
+		model.profile["graphics_quality"] = GameSettings.detect_preset(_settings())
+	apply_setting(key)
+	request_profile_save()
+
+func apply_setting(key: String) -> void:
+	if key in GameSettings.PRESETS["high"] or key=="fps_limit": _apply_graphics()
+	elif key in GameSettings.VOLUME_KEYS: apply_audio()
+	elif key in ["hold_seconds","sensitivity","key_bindings"]: _apply_input()
+	elif key in ["text_scale","high_contrast","color_scheme"]:
+		_apply_accessibility()
+		hud.rebuild_all_pages()
 
 func _create_world(seed_number: int, location_number: int, height: float, saved_version: int = 0, menu_preview: bool = false, visual_budget: int = -1, route: int = -1) -> void:
 	if is_instance_valid(world):
@@ -520,7 +570,7 @@ func _create_world(seed_number: int, location_number: int, height: float, saved_
 	# A baked level is set up exactly as it was baked: its seed and generator.
 	if level!=null: world.setup(level.seed_value,location_number,saved_version,false,route,level.generator=="masks")
 	else: world.setup(seed_number,location_number,saved_version,run_mode=="practice",route)
-	world.set_visual_quality(str(model.profile.get("graphics_quality","balanced")))
+	_world_graphics(world)
 	scene_environment.background_color = Color("88bfd9") if location_number==0 else Color("142438")
 	if level!=null: world.load_bake(level)
 	else: world.generate_to(height,run_mode in ["summit","practice"],summit_height)
@@ -531,6 +581,7 @@ func _attach_explorer() -> void:
 	explorer = ExplorerView.new()
 	add_child(explorer)
 	explorer.setup(world,model.hook_tips())
+	_explorer_graphics()
 	explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
 	explorer.set_walk_speed(WALK_SPEED)
 
@@ -548,7 +599,7 @@ func _run_world_key(location: int, endless: bool) -> Dictionary:
 	if not model.profile["locations"].has(location): return {}
 	if endless and not model.profile["summit_cleared"]: return {}
 	return {"location":location,"endless":endless,"route":-1 if endless else model.route_choice(location),
-		"quality":str(model.profile.get("graphics_quality","balanced")),"version":MountainWorld.generation_version_for(location)}
+		"quality":str(_settings()["decor"]),"effects":str(_settings()["particles"]),"sky":str(_settings()["sky"]),"scheme":str(_settings()["color_scheme"]),"version":MountainWorld.generation_version_for(location)}
 
 # The attempt the player would start next from the current screen.
 func _next_run_key() -> Dictionary:
@@ -590,7 +641,7 @@ func _update_prepared_world() -> void:
 		var level := _level_bake(location,route,MountainWorld.generation_version_for(location),height+6) if not endless else null
 		if level!=null: prepared_world.setup(level.seed_value,location,0,false,route,level.generator=="masks")
 		else: prepared_world.setup(prepared_seed,location,0,false,route)
-		prepared_world.set_visual_quality(key["quality"])
+		_world_graphics(prepared_world)
 		if level!=null:
 			# A level made in advance: its layout is read, not generated.
 			prepared_world.load_bake(level)
@@ -649,6 +700,7 @@ func ensure_menu_explorer() -> void:
 	explorer = ExplorerView.new()
 	add_child(explorer)
 	explorer.setup(world,model.hook_tips())
+	_explorer_graphics()
 	explorer.set_hook_configuration(model.hook_tips(),model.hook_count())
 	explorer.set_walk_speed(WALK_SPEED)
 	explorer.visible = false
@@ -744,7 +796,7 @@ func start_practice() -> void:
 	practice_return_model = model
 	model = GameModel.new(model.save_path.get_basename()+"-practice.json")
 	model.profile = GameModel.fresh_profile()
-	model.profile["sound"] = practice_return_model.profile.get("sound",true)
+	model.profile["settings"] = practice_return_model.profile["settings"].duplicate(true)
 	selected_location = 0
 	start_run(false)
 
@@ -772,10 +824,10 @@ func resume_run() -> void:
 	sim = RopeSim.new()
 	sim.pos = Vector2(snapshot["x"],snapshot["y"])
 	sim.vel = Vector2(snapshot["vx"],snapshot["vy"])
-	sim.length = float(snapshot["length"])
 	_configure_rope()
+	sim.length = minf(float(snapshot["length"]),sim.maximum_length)
 	sim.target_length = clampf(float(snapshot.get("target_length",sim.length)),RopeSim.MIN_LENGTH,sim.maximum_length)
-	sim.reel_velocity = clampf(float(snapshot.get("reel_velocity",0)),-sim.adjust_speed,sim.adjust_speed)
+	sim.reel_velocity = clampf(float(snapshot.get("reel_velocity",0)),-sim.reel_in_speed,sim.reel_out_speed)
 	sim.highest = float(snapshot["highest"])
 	sim.flight_peak = float(snapshot["flight_peak"])
 	run_seconds = float(snapshot.get("run_seconds",0))
@@ -931,11 +983,13 @@ func _unhandled_input(event: InputEvent) -> void:
 				if hud.menu_tab!="expedition": go_back()
 			else:
 				pause_run() if state=="play" else unpause() if state=="pause" else show_menu()
-		elif event.keycode==KEY_SPACE and state=="play":
+		elif event.is_action_pressed("release") and state=="play":
 			if sim.attached: model.learn_control("release")
 			release_hook(pressed)
-		elif event.keycode in [KEY_1,KEY_2] and state=="play":
-			activate_item(0 if event.keycode==KEY_1 else 1)
+		elif event.is_action_pressed("item_1") and state=="play":
+			activate_item(0)
+		elif event.is_action_pressed("item_2") and state=="play":
+			activate_item(1)
 	if state != "play" or preview:
 		return
 	if event is InputEventScreenTouch:
@@ -952,9 +1006,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				pointer_up(event.position)
 		elif event.pressed and sim.attached:
 			if event.button_index==MOUSE_BUTTON_WHEEL_UP:
-				sim.request_length(sim.target_length-.4)
+				sim.request_length(sim.target_length-.4*climb_gesture.sensitivity)
 			elif event.button_index==MOUSE_BUTTON_WHEEL_DOWN:
-				sim.request_length(sim.target_length+.4)
+				sim.request_length(sim.target_length+.4*climb_gesture.sensitivity)
 	elif event is InputEventMouseMotion and not OS.has_feature("mobile") and primary_touch<0:
 		pointer_move(event.position)
 
@@ -993,7 +1047,7 @@ func pointer_move(point: Vector2, timestamp_msec: int = -1) -> void:
 		touch_controls = climb_gesture.move(point,gesture_last_msec*.001,_gesture_scale())
 		_update_touch_controls(gesture_last_msec)
 	elif sim.attached:
-		pump = ClimbGesture.axis(difference.x/_gesture_scale(),ClimbGesture.STICK_RADIUS)
+		pump = ClimbGesture.axis(difference.x/_gesture_scale(),ClimbGesture.STICK_RADIUS/climb_gesture.sensitivity)
 	_refresh_aim()
 
 func _update_touch_controls(timestamp_msec: int = -1) -> void:
@@ -1072,7 +1126,9 @@ func _configure_movement() -> void:
 func _configure_rope() -> void:
 	_configure_movement()
 	sim.maximum_length = model.rope_length()
-	sim.adjust_speed = float(model.balance["rope_adjust_speed_units"])*model.reel_speed_scale()
+	sim.reel_in_speed = model.reel_in_speed()
+	sim.reel_out_speed = model.reel_out_speed()
+	sim.swing_force = model.swing_force()
 	sim.fall_speed_limit = float(model.balance["fall_speed_limit_units"])
 	sim.gravity = float(model.balance["gravity"])
 
@@ -1157,7 +1213,7 @@ func walk_velocity(current: float, input: float, step: float) -> float:
 
 # The share of the hero's motion a throw inherits ("steady" throw keeps less).
 func throw_carry_velocity() -> Vector2:
-	return sim.vel*model.throw_carry()
+	return sim.vel
 
 func direction_to_target(target: Vector2) -> Vector2:
 	return HookFlight.aim_solution(sim.pos,target,model.throw_speed(),throw_carry_velocity())["direction"]
@@ -1257,7 +1313,7 @@ func zoom_view_offset() -> float:
 
 func set_camera_zoom(zoom: float) -> void:
 	model.profile["camera_zoom"] = model.snap_camera_zoom(zoom)
-	if not preview: request_profile_save()
+	request_profile_save()
 
 func request_profile_save() -> void:
 	if model==null or model.save_blocked:
@@ -1283,14 +1339,20 @@ func below_screen() -> bool:
 func release_hook(keep_primary: bool = false, reason: String = "manual") -> void:
 	if not sim.attached:
 		return
-	var factor := model.impulse_factor(sim.vel)
+	var factor := model.impulse_factor()
 	var point := world.anchor_by_id(anchor_id)
 	# The type's effect belongs to the attached -> acted transition, so it is
 	# applied once per catch: a spring adds its exit impulse, ice hands over
-	# the slide, other types keep the swing velocity exactly.
-	if GripSpec.act(point): sim.vel = GripSpec.release_velocity(point,sim.vel,anchor_slide_velocity)
+	# the slide, other types keep the swing velocity exactly. Only the player's
+	# own release and the slip off a plate carry it: a knock or a blocked rope
+	# grants no effect.
+	var thrown := false
+	if GripSpec.act(point) and reason in ["manual","ice_slip"]:
+		sim.vel = GripSpec.release_velocity(point,sim.vel,anchor_slide_velocity)
+		thrown = GripSpec.kind_of(point)==GripSpec.SPRING
 	anchor_slide_velocity = Vector2.ZERO
 	world.release_anchor_load(anchor_id)
+	if thrown: world.spring_burst(anchor_id,sim.pos)
 	last_anchor_id = anchor_id
 	world.consume_anchor(anchor_id)
 	if anchor_id==safe_anchor_id and not point.get("permanent",true):
@@ -1306,7 +1368,10 @@ func release_hook(keep_primary: bool = false, reason: String = "manual") -> void
 	last_release_reason = reason
 	if reason!="manual":
 		print("HOOK_RELEASE reason=%s keep_primary=%s position=%s" % [reason,keep_primary,sim.pos])
-	_sound(310,.07)
+	if thrown:
+		_hook_sound("spring")
+		if OS.has_feature("mobile") and model.profile.get("vibration",true) and not preview: Input.vibrate_handheld(40,.5)
+	else: _sound(310,.07)
 	if keep_primary:
 		_recenter_climb_control(true)
 		_refresh_aim()
@@ -1316,7 +1381,7 @@ func release_hook(keep_primary: bool = false, reason: String = "manual") -> void
 func _start_focus() -> void:
 	# A release inside the cooldown keeps full speed; nothing can refill or
 	# extend a running window.
-	if focus_cooldown>0.0 or focus_remaining>0.0: return
+	if focus_cooldown>0.0 or focus_remaining>0.0 or model.slowmo_seconds()<=0.0: return
 	focus_duration = model.slowmo_seconds()
 	focus_remaining = focus_duration
 	focus_serial += 1
@@ -1351,8 +1416,8 @@ func _physics_process(delta: float) -> void:
 		if focus_remaining<=delta: _end_focus()
 		else: focus_remaining -= delta
 	_update_item_effect(delta)
-	var keyboard_pump := float(Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT))-float(Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT))
-	var keyboard_reel := float(Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP))-float(Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN))
+	var keyboard_pump := Input.get_axis("swing_left","swing_right")
+	var keyboard_reel := Input.get_axis("rope_down","rope_up")
 	var previous := sim.pos
 	var previous_length := sim.length
 	var previous_highest := sim.highest
@@ -1372,6 +1437,11 @@ func _physics_process(delta: float) -> void:
 				var before_slide := sim.anchor
 				sim.anchor = world.anchor_contact_after(point,anchor_contact,anchor_time)
 				anchor_slide_velocity = (sim.anchor-before_slide)/step if step>0 else Vector2.ZERO
+				if anchor_time>=GripSpec.ICE_GRACE: world.ice_scrape(sim.anchor,delta)
+				if GripSpec.slipped(point,anchor_contact,anchor_time):
+					release_hook(true,"ice_slip")
+					_hook_sound("ice")
+					toast("Крюк сорвался со льда — цепляйся!",2.0,"release")
 	# Act hazards push an airborne hero, knock it off a grip or drop a bridge.
 	hazard_cooldown = maxf(0,hazard_cooldown-delta)
 	hazard_clock += step
@@ -2078,7 +2148,7 @@ func finish_run(success: bool) -> void:
 	settlement["zone_diamonds"] = zone_diamonds
 	if not preview:
 		model.profile["run_history"].append({"id":run_id,"seed":run_seed,"seconds":snappedf(run_seconds,.1),"height":settlement["highest"],"gold":int(settlement["total"])+zone_gold,"zone_bonus":zone_gold,"success":success,"shots":shots,"catches":catches,"reason":failure_reason,"levels":model.profile["upgrade_levels"].duplicate(),"choices":model.profile["upgrade_choices"].duplicate()})
-		model.profile["run_history"][-1].merge({"build":GameModel.BUILD_VERSION,"mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"diamond_reward":settlement["diamonds"],"coin_gold":settlement["coins"],"contract_gold":settlement["contract"],"items_spent":settlement["spent"],"zone_diamonds":zone_diamonds,"first_summit":settlement["first"]})
+		model.profile["run_history"][-1].merge({"build":GameModel.build_version(),"mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"diamond_reward":settlement["diamonds"],"coin_gold":settlement["coins"],"contract_gold":settlement["contract"],"items_spent":settlement["spent"],"zone_diamonds":zone_diamonds,"first_summit":settlement["first"]})
 		model.profile["run_history"] = model.profile["run_history"].slice(-30)
 		model.save()
 	hud.show_result(settlement)
@@ -2330,7 +2400,7 @@ func _process(delta: float) -> void:
 		# for them always. Only the labels change; pickup rules are untouched.
 		var aim_at := aim_point if pressed and not sim.attached and not bolt_active else Vector2.INF
 		var prices_playing := state=="play"
-		var prices_always := str(model.profile.get("loot_prices","near"))=="always"
+		var prices_always := str(model.profile.get("loot_prices","always"))=="always"
 		loot_price_refresh_timer -= delta
 		var price_input_changed := (prices_playing!=last_loot_price_playing
 			or prices_always!=last_loot_price_always
@@ -2379,10 +2449,27 @@ func _update_music() -> void:
 	music.play(MusicPlayer.track_for_location(location_id))
 	music.duck(state in ["pause","revive","result"])
 
-func set_music_enabled(on: bool) -> void:
-	model.profile["music"] = on
-	request_profile_save()
-	if music!=null: music.set_enabled(on)
+func _setup_audio_buses() -> void:
+	for bus_name in ["Music","SFX"]:
+		if AudioServer.get_bus_index(bus_name)>=0: continue
+		AudioServer.add_bus()
+		var index := AudioServer.bus_count-1
+		AudioServer.set_bus_name(index,bus_name)
+		AudioServer.set_bus_send(index,"Master")
+
+func _set_bus(bus_name: String, percent: int) -> void:
+	var index := AudioServer.get_bus_index(bus_name)
+	AudioServer.set_bus_mute(index,percent<=0)
+	if percent>0: AudioServer.set_bus_volume_db(index,linear_to_db(percent*.01))
+
+func apply_audio() -> void:
+	var settings := _settings()
+	_set_bus("Master",int(settings["master_volume"]))
+	_set_bus("Music",int(settings["music_volume"]))
+	_set_bus("SFX",int(settings["sfx_volume"]))
+	var playing := int(settings["music_volume"])>0
+	if music!=null and music.enabled!=playing: music.set_enabled(playing)
+	if int(settings["sfx_volume"])<=0 and is_instance_valid(audio): audio.stop()
 
 func _capture_frame() -> void:
 	await RenderingServer.frame_post_draw
@@ -2399,7 +2486,7 @@ func toast(text: String, duration: float = 2.5, context: String = "") -> void:
 		hud.set_toast(text)
 
 func _sound(frequency: float, duration: float) -> void:
-	if not model.profile.get("sound",true) or preview or DisplayServer.get_name()=="headless":
+	if int(_settings()["sfx_volume"])<=0 or preview or DisplayServer.get_name()=="headless":
 		return
 	var key := "tone_%s_%s" % [frequency,duration]
 	if sound_cache.has(key):
@@ -2423,7 +2510,7 @@ func _sound(frequency: float, duration: float) -> void:
 
 func _focus_sound(starting: bool) -> void:
 	# A soft falling "whoomp" when time slows and a short rise when it returns.
-	if not model.profile.get("sound",true) or preview or DisplayServer.get_name()=="headless" or not is_instance_valid(focus_audio): return
+	if int(_settings()["sfx_volume"])<=0 or preview or DisplayServer.get_name()=="headless" or not is_instance_valid(focus_audio): return
 	var key := "focus_%s" % starting
 	if sound_cache.has(key):
 		focus_audio.stream = sound_cache[key]
@@ -2489,7 +2576,7 @@ func _rock_knock() -> void:
 	audio.play()
 
 func _hook_sound(kind: String) -> void:
-	if not model.profile.get("sound",true) or preview or DisplayServer.get_name()=="headless": return
+	if int(_settings()["sfx_volume"])<=0 or preview or DisplayServer.get_name()=="headless": return
 	# The samples are fixed per kind (seeded noise): synthesise each once.
 	# Building ~4000 samples in script on every throw stalled the frame.
 	if kind=="rock":
@@ -2503,7 +2590,7 @@ func _hook_sound(kind: String) -> void:
 	var stream := AudioStreamWAV.new()
 	stream.format = AudioStreamWAV.FORMAT_16_BITS
 	stream.mix_rate = 22050
-	var duration := .16 if kind=="launch" else .20
+	var duration := .16 if kind=="launch" else .34 if kind=="spring" or kind=="ice" else .20
 	var count := int(duration*stream.mix_rate)
 	var data := PackedByteArray()
 	data.resize(count*2)
@@ -2517,6 +2604,10 @@ func _hook_sound(kind: String) -> void:
 		match kind:
 			"launch": sample = (rng.randf_range(-1,1)*.45+sin(TAU*(1150*t-2300*t*t))*.35)*envelope*sin(minf(1,phase*12)*PI*.5)
 			"catch": sample = (sin(TAU*840*t)+sin(TAU*1337*t)*.45+sin(TAU*2150*t)*.18)*exp(-t*26)*.55
+			# A deep twang that shoots upwards as the bough lets go.
+			# A dry scrape falling away as the hook drops off the plate.
+			"ice": sample = (rng.randf_range(-1,1)*.3+sin(TAU*(2400*t-2600*t*t))*.3)*envelope
+			"spring": sample = (sin(TAU*(170*t+1500*t*t))*.8+sin(TAU*(340*t+3000*t*t))*.3)*envelope*(.75+.25*sin(TAU*38*t))
 			_: sample = sin(TAU*(650*t-1100*t*t))*.4*envelope
 		data.encode_s16(index*2,int(clampf(sample,-1,1)*16000))
 	stream.data = data

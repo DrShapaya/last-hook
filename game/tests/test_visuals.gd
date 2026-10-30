@@ -19,6 +19,22 @@ func mesh_shadows(node: Node) -> bool:
 		if mesh.cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_OFF: return false
 	return true
 
+# Share of a paint strip's width that really carries paint.
+func painted_share(strip: MeshInstance3D) -> float:
+	var spans: Array = []
+	var faces := strip.mesh.get_faces()
+	for index in range(0,faces.size(),3):
+		var low := minf(faces[index].x,minf(faces[index+1].x,faces[index+2].x))
+		var high := maxf(faces[index].x,maxf(faces[index+1].x,faces[index+2].x))
+		spans.append(Vector2(low,high))
+	spans.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.x<b.x)
+	var painted := 0.0
+	var reach: float = spans[0].x
+	for span: Vector2 in spans:
+		painted += maxf(0,span.y-maxf(span.x,reach))
+		reach = maxf(reach,span.y)
+	return painted/(reach-float(spans[0].x))
+
 func check(condition: bool, message: String) -> void:
 	checks += 1
 	if not condition:
@@ -359,10 +375,10 @@ func run_tests() -> void:
 		var strip := holder.find_child("Полоса состояния",true,false) as MeshInstance3D
 		var box: AABB = strip.get_aabb()
 		var block := spec.bounds()
-		paint_on_top = paint_on_top and box.end.y>=block.end.y-.18 and box.size.y<=block.size.y*.36 and box.size.x>=spec.front_width*.36 and box.size.x<=spec.front_width*.72
+		paint_on_top = paint_on_top and box.end.y>=block.end.y-.18 and box.size.y<=block.size.y*.36 and box.size.x>=spec.front_width*.36 and box.size.x<=spec.front_width*(.9 if anchor["permanent"] else .72)
 	check(footing_ok,"each grip stands out of the face with no recess, seam, chips or tufts round it")
 	check(split>0 and split<a.nearby_anchors(20,70).size(),"some wide grips break into two stones, not all (%d)" % split)
-	check(paint_on_top,"the status paint is a short stroke across the crown of the boulder, not a plate over it")
+	check(paint_on_top,"the status paint is a stroke across the crown of the boulder, not a plate over it")
 	var lean := make_world(58273,"battery")
 	var lean_chunk := Node3D.new()
 	lean.add_child(lean_chunk)
@@ -543,6 +559,10 @@ func run_tests() -> void:
 	var sockets := true
 	var cues := {}
 	var fixed_ok := true
+	var contact_shadows := true
+	var lifetime_ok := true
+	var permanent_seen := false
+	var disposable_seen := false
 	var single_contact := true
 	var hosted := true
 	for anchor in a.nearby_anchors(4,118):
@@ -554,11 +574,27 @@ func run_tests() -> void:
 		single_contact = single_contact and is_equal_approx(holder.position.z,mount.wall_z()+MountainVisuals.GRIP_STANDOFF) and is_equal_approx(mount.wall_z(),massif.wall_depth(anchor["pos"]))
 		hosted = hosted and mount.host_mass>=0 and mount.surface_class!="" and mount.socket_center.is_equal_approx(Vector3(anchor["pos"].x,anchor["pos"].y,mount.wall_z()))
 		match GripSpec.kind_of(anchor):
-			GripSpec.SPRING: if holder.find_child("Изгиб",false,false)!=null and holder.find_child("Направление выхода",true,false)!=null: cues["spring"] = true
-			GripSpec.ICE: if holder.find_child("Борозда скольжения",true,false)!=null: cues["ice"] = true
+			GripSpec.SPRING:
+				var arrow := holder.find_child("Направление выхода",true,false) as MeshInstance3D
+				if holder.find_child("Изгиб",false,false)!=null and arrow!=null and arrow.mesh!=null and arrow.mesh.get_surface_count()>0 and arrow.get_aabb().size.length()>=.3: cues["spring"] = true
+			GripSpec.ICE: if holder.find_child("Борозда скольжения",true,false)!=null and is_equal_approx((holder.find_child("Наклон",false,false) as Node3D).rotation.z,GripSpec.plate_tilt(anchor)) and absf(GripSpec.plate_tilt(anchor))>.1: cues["ice"] = true
 			GripSpec.CRYSTAL: if holder.find_child("Кристалл",true,false)!=null: cues["crystal"] = true
 			GripSpec.ROOT: if holder.find_child("Трещина",true,false)!=null: cues["root"] = true
 		if anchor["permanent"]: fixed_ok = fixed_ok and holder.find_children("*крепление*","MeshInstance3D",true,false).size()+holder.find_children("Кольцо*","MeshInstance3D",true,false).size()>0
+		# One soft contact shadow instead of a cast shadow torn by the facets.
+		var body := holder.find_child("Каменный выступ",true,false) as MeshInstance3D
+		var contact := holder.find_child("Тень зацепа",false,false) as MeshInstance3D
+		contact_shadows = contact_shadows and contact!=null and body.cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_OFF and absf((contact.global_basis*Vector3.BACK).normalized().z-1.0)<.001
+		# Lifetime reads at a glance: a whole stroke or a broken one.
+		var paint_share := painted_share(holder.find_child("Полоса состояния",true,false) as MeshInstance3D)
+		if GripSpec.lifetime(anchor)=="permanent":
+			permanent_seen = true
+			lifetime_ok = lifetime_ok and paint_share>.97
+		elif GripSpec.lifetime(anchor)=="disposable":
+			disposable_seen = true
+			lifetime_ok = lifetime_ok and paint_share<.8
+	check(contact_shadows,"every grip lies on one soft contact shadow facing the camera and casts no torn shadow")
+	check(lifetime_ok and permanent_seen and disposable_seen,"permanent grips carry a whole stroke, disposable ones a broken stroke")
 	check(sockets and single_contact,"every grip stands at one contact depth from its SurfaceMount, with no socket recess")
 	check(hosted,"every grip is mounted on a host mass found by the surface query")
 	check(cues.size()==4 and fixed_ok,"type cues (bend, slide track, crystal, root) and permanent fixings are built: %s" % str(cues.keys()))

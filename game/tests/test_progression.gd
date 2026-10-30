@@ -47,8 +47,10 @@ func run_tests() -> void:
 	var migrated := GameModel.new(path)
 	# v3 -> v5 returns 27962; v5 -> v6 returns the cheaper five-level tracks
 	# (78435); the old coin still in the bag is banked once (+40).
-	check(migrated.profile["gold"]==1234+27962+78435+40,"maximum existing kit returns the complete net price reduction of both migrations")
-	check(migrated.profile["upgrade_levels"]==[5,5,4,5,5,5,5,1] and migrated.profile["diamonds"]==17 and migrated.hook_config()==4,"migration keeps every track at its new maximum and the final hook stage selected")
+	check(migrated.profile["gold"]==1234+27962+78435+40+3120,"maximum existing kit returns the net price reduction of every migration")
+	var top := GameModel.default_levels()
+	top.merge({GameModel.ROPE:5,GameModel.IMPULSE:5,GameModel.RADIUS:5,GameModel.DOUBLE:2,GameModel.BAG:5,GameModel.MAGNET:5,GameModel.RECOVERY:5,GameModel.THROW:5,GameModel.SLOWMO:3,GameModel.REEL_OUT:3,GameModel.SLOWMO_REST:3},true)
+	check(migrated.profile["upgrade_levels"]==top and migrated.profile["diamonds"]==17 and migrated.hook_count()==2,"migration keeps every track at its new maximum and the double hook selected")
 	var migrated_active: Dictionary = migrated.profile["active"]
 	check(migrated_active["id"]=="in-progress" and migrated_active["bag"].size()==1 and int(migrated_active["bag"][0]["id"])==23 and migrated_active["bag"][0]["family"]=="valuable" and migrated_active["picked"]==[23,24] and migrated_active["broken"]==[1,2] and int(migrated_active["seed"])==12345,"migration keeps the active run, its loot, spent grips and picked ids")
 	check(migrated.profile["coin_ledger"]["run"]=="in-progress" and migrated.profile["coin_ledger"]["ids"]==[24] and migrated.run_coins("in-progress")==40,"an old coin in the active bag moves to the ledger instead of the bag")
@@ -67,11 +69,27 @@ func run_tests() -> void:
 	old["active"] = {}
 	write_profile(path,old)
 	var middle := GameModel.new(path)
-	check(middle.profile["gold"]==1234+302 and middle.profile["upgrade_levels"]==old["levels"]+[1],"middle levels are kept; only cheaper steps are refunded and dearer ones create no debt")
+	check(middle.profile["gold"]==1234+302+288 and middle.level(GameModel.ROPE)==3 and middle.level(GameModel.THROW)==4 and middle.level(GameModel.MAGNET)==4,"middle levels are kept; only cheaper steps are refunded and dearer ones create no debt")
 	old["levels"] = [1,1,1,1,1,1,1]
 	write_profile(path,old)
 	var starter := GameModel.new(path)
 	check(starter.profile["gold"]==1234,"unbought equipment creates no migration windfall")
+	for fixture in [{"version":6,"gold":0,"upgrade_levels":[1,1,1,1,1,1,1,1]}]:
+		write_profile(path,fixture)
+		var moved := GameModel.new(path)
+		check(moved.level(GameModel.THROW)==1 and moved.level(GameModel.SLOWMO)==3 and moved.level(GameModel.REEL_OUT)==3 and moved.level(GameModel.SLOWMO_REST)==3,"free steps match the old feel")
+		check(moved.level(GameModel.ROPE)==1 and moved.level(GameModel.SWING)==1 and int(moved.profile["gold"])==0,"a fresh save owes and gets nothing")
+	write_profile(path,{"version":6,"gold":0,"upgrade_levels":[1,1,4,1,1,1,1,1],"upgrade_choices":{"hook":4}})
+	var hooks := GameModel.new(path)
+	check(hooks.level(GameModel.RADIUS)==5 and hooks.level(GameModel.DOUBLE)==2 and hooks.hook_count()==2,"two triple hooks stay")
+	write_profile(path,{"version":6,"gold":0,"upgrade_levels":[3,1,1,1,1,1,1,1]})
+	var refund := GameModel.new(path)
+	check(int(refund.profile["gold"])==70,"a rope paid 470 and now worth 400 returns 70")
+	refund.save()
+	check(int(GameModel.new(path).profile["gold"])==70,"the refund happens once")
+	for version in [1,3,4,5]:
+		write_profile(path,{"version":version,"gold":10,"levels":[2,2,2,2,2,2,2,1],"best":0.0})
+		check(int(GameModel.new(path).profile["version"])==GameModel.PROFILE_VERSION,"version %d walks the whole migration chain" % version)
 	starter.profile["gold"] = 100000
 	starter.profile["diamonds"] = 100
 	starter.profile["summit_cleared"] = true
@@ -89,27 +107,25 @@ func run_tests() -> void:
 	await process_frame
 	game.set_physics_process(false)
 	game.model.profile = GameModel.fresh_profile()
-	game.model.profile["gold"] = 3900
+	game.model.profile["gold"] = 2200
+	game.hud.equipment_category = "hook"
 	game.hud.select_menu("equipment")
-	for expected in [2,3,4]:
-		var tip_button: Button
-		var price := 500 if expected==2 else 1200 if expected==3 else 2200
-		for button in game.hud.content.find_children("*","Button",true,false):
-			# The price is a label inside the button and the row is named by its card.
-			if button.text=="Улучшить" and has_text(button.get_parent(),"Крюки") and has_text(button,str(price)): tip_button = button
-		check(tip_button!=null and not tip_button.disabled,"tip purchase has an enabled real menu button for %d tips" % expected)
-		if tip_button!=null: tip_button.pressed.emit()
-		game._process(.01)
-		var visible_tips := 0
-		for piece in game.explorer.prongs:
-			if piece.visible: visible_tips += 1
-		var expected_tips := 3 if expected in [2,4] else 1
-		var expected_count := 2 if expected>=3 else 1
-		check(game.model.level(2)==expected and visible_tips==expected_tips and game.model.hook_count()==expected_count,"actual menu purchase updates the saved hook configuration to stage %d" % expected)
+	await process_frame
+	var double_button: Button
+	for button in game.hud.content.find_children("*","Button",true,false):
+		# The price is a label inside the button and the row is named by its card.
+		if button.text=="Улучшить" and has_text(button.get_parent(),"Двойной крюк"): double_button = button
+	check(double_button!=null and not double_button.disabled,"the double hook has an enabled real menu button")
+	if double_button!=null: double_button.pressed.emit()
+	game._process(.01)
+	check(game.model.level(GameModel.DOUBLE)==2 and game.model.hook_count()==2,"a menu purchase updates the saved hook")
+	game.model.set_level(GameModel.RADIUS,3)
+	game.model.save()
 	game.model.load_profile()
 	game.start_run(false)
 	game._process(.01)
-	check(game.model.level(2)==4 and game.explorer.tip_count==3 and game.explorer.hook_count==2,"two triple hooks survive profile reload and a fresh run")
+	check(game.model.level(GameModel.DOUBLE)==2 and game.explorer.tip_count==3 and game.explorer.hook_count==2,"a wide double hook survives profile reload and a fresh run")
+	game.hud.equipment_category = "movement"
 	game.model.profile = GameModel.fresh_profile()
 	game.start_run(false)
 	game.world.obstacles.clear()
@@ -153,10 +169,12 @@ func run_tests() -> void:
 	check(has_label(game,"Новые зоны, уже на счету") and has_label(game,"+3"),"result displays the zone gold row and its diamond reward")
 	game.show_menu()
 	game.hud.touch_controls_hint = true
+	game.hud.settings_section = "controls"
 	game.hud.select_menu("settings")
 	check(has_label(game,"Отцепись"),"touch settings display the fourth control instruction")
 	game.model.profile["gold"] = 100000
 	game.model.set_level(GameModel.ROPE,2)
+	game.hud.equipment_category = "rope"
 	game.hud.select_menu("equipment")
 	var act_gate := false
 	for button in game.hud.content.find_children("*","Button",true,false):
@@ -164,7 +182,7 @@ func run_tests() -> void:
 	check(act_gate,"locked upgrade names the act it waits for")
 	var use_hint := false
 	for label in game.hud.content.find_children("Use","Label",true,false):
-		use_hint = use_hint or label.text=="Синяя трещина: выбор дальность/контроль"
+		use_hint = use_hint or label.text=="Внешние карнизы"
 	check(use_hint,"each upgrade row says where its next level helps")
 	game.queue_free()
 	await process_frame

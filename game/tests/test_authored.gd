@@ -80,7 +80,7 @@ func run_tests() -> void:
 	check(model.record(2,"summit")==640.0 and model.record(0,"endless")==300.0,"an old save rebuilds route records from its run history")
 	model.set_route_choice(2,7)
 	check(model.route_choice(2)==2,"a route choice is clamped to the routes there are")
-	check(model.profile.has("music") and bool(model.profile["music"]),"music is on by default")
+	check(int(model.profile["settings"]["music_volume"])==100,"music is on by default")
 	# --- Treasure sets ---------------------------------------------------------------
 	var leaks := false
 	var named := true

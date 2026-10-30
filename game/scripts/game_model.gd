@@ -1,34 +1,28 @@
 class_name GameModel
 extends RefCounted
 
-const UPGRADE_NAMES = ["Макс. длина каната", "Импульс", "Крюки", "Рюкзак", "Магнит", "Сохранение добычи", "Сила броска", "Замедление"]
-const UPGRADE_COUNT := 8
-const ROPE := 0
-const IMPULSE := 1
-const HOOKS := 2
-const BAG := 3
-const MAGNET := 4
-const RECOVERY := 5
-const THROW := 6
-# Release slow motion: four levels of decision time.
-const SLOWMO := 7
-const BUILD_VERSION := "0.15.6"
-const PROFILE_VERSION := 6
-const HOOK_NAMES = ["Одинарный", "Тройной", "2 одинарных", "2 тройных"]
+const THROW := "throw"
+const SWING := "swing"
+const IMPULSE := "impulse"
+const ROPE := "rope"
+const REEL_IN := "reel_in"
+const REEL_OUT := "reel_out"
+const ACCURACY := "accuracy"
+const RADIUS := "radius"
+const DOUBLE := "double"
+const BAG := "bag"
+const MAGNET := "magnet"
+const RECOVERY := "recovery"
+const SLOWMO := "slowmo"
+const SLOWMO_REST := "slowmo_rest"
+# Upgrades as the equipment screen shows them; values live in balance.json.
+const CATEGORIES := {"movement":[THROW,SWING,IMPULSE],"rope":[ROPE,REEL_IN,REEL_OUT],"hook":[ACCURACY,RADIUS,DOUBLE],"gather":[BAG,MAGNET],"survival":[RECOVERY,SLOWMO,SLOWMO_REST]}
+const CATEGORY_NAMES := {"movement":"Движение","rope":"Канат","hook":"Крюк","gather":"Сбор","survival":"Выживание"}
+const PROFILE_VERSION := 7
 const ZONE_NAMES = ["Лес", "Скалы", "Руины", "Лёд", "Вулкан", "Небеса"]
 const ZONE_HINTS = ["Освой раскачку", "Длинные перелёты", "Меняй направление", "Следи за скольжением", "Береги высоту", "Последний рывок"]
 const LOOT_NAMES = ItemCatalog.LEGACY_NAMES
 const MATERIAL_NAMES = ["Камень", "Корень", "Пружинящая ветка", "Лёд", "Кристалл"]
-# Specialisation tracks: the upgrade row they belong to.
-const SPEC_TRACKS := {"rope":ROPE,"impulse":IMPULSE,"throw":THROW,"magnet":MAGNET}
-# The preparation screen exposes coherent play styles instead of four tiny
-# switches whose effects are hard to compare. The underlying specialization
-# choices stay in the save for compatibility and are still used by gameplay.
-const PREP_PROFILES := {
-	"range":{"name":"Дальность","hint":"Канат +0,5 ед.; отпускание +6%; обычная скорость крюка.","choices":{"rope":"reach","impulse":"power","throw":"speed"}},
-	"control":{"name":"Контроль","hint":"Длина каната меняется в 1,6× быстрее; при падении без импульса; крюк наследует 60% скорости героя и летит на 5% медленнее.","choices":{"rope":"control","impulse":"control","throw":"steady"}},
-	"collector":{"name":"Сбор","hint":"Канат +0,5 ед.; при падении без импульса; обычная скорость крюка — проще забирать боковые находки.","choices":{"rope":"reach","impulse":"control","throw":"speed"}}
-}
 # Frozen economy of older profiles. Migration is computed from these, never
 # from the current balance.json, so a later price change cannot change what an
 # old save is refunded.
@@ -39,6 +33,20 @@ const V5_UPGRADE_PRICES = [90, 450, 1800, 5400, 9000]
 const V5_WEIGHTS = [1.0, 1.0, 0.9, 1.1, 0.75, 0.9, 1.0, 1.0]
 const V5_TIP_PRICES = [900, 1800, 3000]
 const V5_SLOWMO_SECONDS = [0.7, 0.85, 1.0, 1.15, 1.3, 1.5]
+# Version 6 had eight numbered tracks: 0 rope, 1 impulse, 2 hooks, 3 bag,
+# 4 magnet, 5 recovery, 6 throw, 7 slow motion.
+const V6_PRICES = [120, 350, 900, 1900]
+const V6_WEIGHTS = [1.0, 1.05, 1.0, 1.1, 0.9, 0.95, 1.0, 1.0]
+const V6_HOOK_PRICES = [500, 1200, 2200]
+const V6_ROPE = [5.5, 6.2, 7.0, 7.8, 8.8]
+const V6_IMPULSE = [1.0, 1.07, 1.14, 1.21, 1.28]
+const V6_MAGNET = [0.0, 0.9, 1.2, 1.5, 1.8]
+const V6_RECOVERY = [30, 40, 55, 70, 82]
+const V6_THROW = [16, 19, 23, 27, 31]
+const V6_SLOWMO = [0.7, 1.0, 1.35, 1.75]
+const V6_SWING := 11.5
+const V6_REEL := 2.4
+const V6_SLOWMO_REST := 1.2
 
 var balance: Dictionary
 var profile: Dictionary
@@ -59,10 +67,13 @@ func _init(path: String = "") -> void:
 	load_profile()
 
 static func default_choices() -> Dictionary:
-	var choices := {"hook":1}
-	for track in ItemCatalog.balance()["specializations"].keys():
-		choices[track] = str(ItemCatalog.balance()["specializations"][track]["default"])
-	return choices
+	return {"hook":1,"magnet":str(ItemCatalog.balance()["magnet_priority"]["default"])}
+
+static func default_levels() -> Dictionary:
+	var levels := {}
+	for keys in CATEGORIES.values():
+		for key in keys: levels[key] = 1
+	return levels
 
 static func fresh_profile() -> Dictionary:
 	var starter: Dictionary = ItemCatalog.balance().get("starter_stock",{}).duplicate()
@@ -70,16 +81,18 @@ static func fresh_profile() -> Dictionary:
 	for id in starter.keys():
 		if loadout.size()<int(ItemCatalog.balance().get("active_slots",2)): loadout.append(id)
 	while loadout.size()<int(ItemCatalog.balance().get("active_slots",2)): loadout.append("")
-	return {"version": PROFILE_VERSION, "gold": 0, "diamonds": 0, "upgrade_levels": [1, 1, 1, 1, 1, 1, 1, 1], "upgrade_choices": default_choices(),
-		"prep_profile": "range",
+	return {"version": PROFILE_VERSION, "gold": 0, "diamonds": 0, "upgrade_levels": default_levels(), "upgrade_choices": default_choices(),
 		"material_wallet": {}, "consumable_stock": starter, "active_loadout": loadout,
 		"coin_ledger": {"run":"","ids":[],"gold":0,"lifetime":0}, "unlocked_sets": [], "set_parts": {}, "landmarks": [],
 		"completed_contracts": [], "mastery_tokens": 0, "reached_acts": 1, "best": 0.0,
 		"endless_best": 0.0, "reached_zones": 1, "summit_cleared": false, "locations": [0],
 		"cleared_locations": [], "runs": 0, "wins": 0, "last_settled": "", "active": {},
-		"sound": true, "vibration": true, "notifications": true, "graphics_quality": "balanced",
+		"vibration": true, "notifications": true, "graphics_quality": "high", "loot_prices": "always",
 		"selected_location":0,"run_history":[],"learned_controls":[],"camera_zoom":1.0,
-		"records":{},"music":true,"route_choices":{}}
+		"records":{},"route_choices":{},"settings":GameSettings.defaults()}
+
+static func build_version() -> String:
+	return str(ProjectSettings.get_setting("application/config/version",""))
 
 # --- Save and migration -----------------------------------------------------------
 
@@ -98,7 +111,7 @@ func load_profile() -> void:
 			save_blocked = true
 			save_error = "Сохранение создано более новой версией игры"
 			return
-		if stored_version not in [1,2,3,4,5,6]:
+		if stored_version not in [1,2,3,4,5,6,7]:
 			continue
 		var defaults := fresh_profile()
 		var source_version := int(parsed["version"])
@@ -110,8 +123,10 @@ func load_profile() -> void:
 		profile["diamonds"] = maxi(0, int(profile["diamonds"]))
 		# Keys missing in an old save (stock, loadout, ledger...) keep their
 		# fresh defaults, so an old profile gets the same trial item.
-		if source_version<6:
-			_migrate_levels(parsed,source_version)
+		if source_version<7: _migrate_upgrades(parsed,source_version)
+		profile["settings"] = GameSettings.sanitize(profile["settings"])
+		if source_version<7: _migrate_settings(parsed)
+		if str(profile["loot_prices"]) not in ["near","always"]: profile["loot_prices"] = "always"
 		_sanitize_progress()
 		if not profile["learned_controls"] is Array: profile["learned_controls"] = []
 		profile["learned_controls"] = profile["learned_controls"].filter(func(action): return action in ["aim","swing","rope","release"])
@@ -143,36 +158,58 @@ func load_profile() -> void:
 		profile["version"] = PROFILE_VERSION
 		return
 
+# v7: the old on/off sound switches become volumes, and the old default
+# quality moves up once. "battery" was always a deliberate choice.
+func _migrate_settings(parsed: Dictionary) -> void:
+	if not bool(parsed.get("sound",true)): profile["settings"]["sfx_volume"] = 0
+	if not bool(parsed.get("music",true)): profile["settings"]["music_volume"] = 0
+	if str(profile["graphics_quality"])=="balanced": profile["graphics_quality"] = "high"
+	GameSettings.apply_preset(profile["settings"],str(profile["graphics_quality"]))
+
 static func v5_paid(kind: int, at_level: int) -> int:
 	var paid := 0
-	if kind==HOOKS:
+	if kind==2:
 		for step in range(mini(at_level-1,V5_TIP_PRICES.size())): paid += int(V5_TIP_PRICES[step])
 	else:
 		for step in range(mini(at_level-1,V5_UPGRADE_PRICES.size())): paid += roundi(float(V5_UPGRADE_PRICES[step])*float(V5_WEIGHTS[kind]))
 	return paid
 
+static func v6_max_level(kind: int) -> int:
+	return 4 if kind in [2,7] else 5
+
+static func v6_price(kind: int, current_level: int) -> int:
+	if current_level>=v6_max_level(kind): return 0
+	if kind==2: return int(V6_HOOK_PRICES[current_level-1])
+	return roundi(float(V6_PRICES[current_level-1])*float(V6_WEIGHTS[kind]))
+
+static func v6_paid(kind: int, at_level: int) -> int:
+	var paid := 0
+	for step in range(1,at_level): paid += v6_price(kind,step)
+	return paid
+
 # v1-v4 become v5 levels (with their own refund), then v5 levels become the
 # chat 4 tracks: standard tracks keep at most level 5, hooks keep their stage,
-# slow motion keeps the longest new window not above the bought one. The
+# slow motion keeps the longest window not above the bought one. The
 # difference between what was paid and what the new levels cost is returned
 # once; a level is never removed to create debt.
-func _migrate_levels(parsed: Dictionary, source_version: int) -> void:
+func _levels_to_v6(parsed: Dictionary, source_version: int) -> Array:
+	var track_count := V6_WEIGHTS.size()
 	var levels: Array = parsed.get("levels",[]).duplicate() if parsed.get("levels",[]) is Array else []
 	if levels.size()==6: levels.append(levels[0])
 	if levels.size()==7: levels.append(1)
-	if levels.size()!=UPGRADE_COUNT: levels = [1,1,1,1,1,1,1,1]
-	var old_hook_level := clampi(int(levels[HOOKS]),1,6)
+	if levels.size()!=track_count: levels = [1,1,1,1,1,1,1,1]
+	var old_hook_level := clampi(int(levels[2]),1,6)
 	if source_version<3:
-		levels[HOOKS] = 1 if old_hook_level==1 else 2 if old_hook_level<5 else 4
+		levels[2] = 1 if old_hook_level==1 else 2 if old_hook_level<5 else 4
 	elif source_version<5:
-		levels[HOOKS] = 4 if old_hook_level>=3 else old_hook_level
-	for kind in range(UPGRADE_COUNT):
-		levels[kind] = clampi(int(levels[kind]),1,4 if kind==HOOKS else 6)
+		levels[2] = 4 if old_hook_level>=3 else old_hook_level
+	for kind in range(track_count):
+		levels[kind] = clampi(int(levels[kind]),1,4 if kind==2 else 6)
 	if source_version<5:
-		for kind in range(UPGRADE_COUNT):
+		for kind in range(track_count):
 			var old_level := clampi(int(parsed.get("levels",[])[kind]) if parsed.get("levels",[]).size()>kind else 1,1,6)
 			var old_paid := 0
-			if kind==HOOKS:
+			if kind==2:
 				var old_prices: Array = V4_TIP_PRICES if source_version==4 else PREVIOUS_TIP_PRICES
 				for step in range(mini(old_level-1,old_prices.size())): old_paid += int(old_prices[step])
 			else:
@@ -181,28 +218,75 @@ func _migrate_levels(parsed: Dictionary, source_version: int) -> void:
 					old_paid += roundi(base_price*float(V5_WEIGHTS[kind]))
 			profile["gold"] += maxi(0,old_paid-v5_paid(kind,int(levels[kind])))
 	var upgraded: Array = []
-	for kind in range(UPGRADE_COUNT):
+	for kind in range(track_count):
 		var old := int(levels[kind])
-		var new_level := mini(old,max_level(kind))
-		if kind==SLOWMO:
+		var new_level := mini(old,v6_max_level(kind))
+		if kind==7:
 			new_level = 1
 			var seconds: float = float(V5_SLOWMO_SECONDS[clampi(old-1,0,V5_SLOWMO_SECONDS.size()-1)])
-			for index in range(balance["slowmo_seconds"].size()):
-				if float(balance["slowmo_seconds"][index])<=seconds+.0001: new_level = index+1
+			for index in range(V6_SLOWMO.size()):
+				if float(V6_SLOWMO[index])<=seconds+.0001: new_level = index+1
 		upgraded.append(new_level)
-	profile["upgrade_levels"] = upgraded
-	for kind in range(UPGRADE_COUNT):
-		var new_paid := 0
-		for step in range(upgraded[kind]-1): new_paid += price_at_level(kind,step+1)
-		profile["gold"] += maxi(0,v5_paid(kind,int(levels[kind]))-new_paid)
-	profile["upgrade_choices"] = default_choices()
-	profile["upgrade_choices"]["hook"] = upgraded[HOOKS]
+	for kind in range(track_count):
+		profile["gold"] += maxi(0,v5_paid(kind,int(levels[kind]))-v6_paid(kind,upgraded[kind]))
 	# Acts reached so far, read from the best height on the first expedition.
 	var best_units := float(parsed.get("best",0.0))/float(balance["meters_per_unit"])
 	var acts := 1
 	for span in LevelCatalog.act_spans(0,float(balance["locations"][0]["height_units"])):
 		if int(span["index"])>0 and float(span["y_start"])<=best_units: acts += 1
 	profile["reached_acts"] = acts
+	return upgraded
+
+# The best new level that is not stronger than the old value. Slow motion's
+# rest is the one track where less is better.
+func _level_for(key: String, old_value: float) -> int:
+	var values: Array = balance["upgrades"][key]["values"]
+	var result := 1
+	for index in range(values.size()):
+		var fits: bool = float(values[index])>=old_value-.0001 if key==SLOWMO_REST else float(values[index])<=old_value+.0001
+		if fits: result = index+1
+	return result
+
+func _paid(key: String, at_level: int) -> int:
+	var paid := 0
+	for step in range(1,at_level): paid += price_at_level(key,step)
+	return paid
+
+# v7: fourteen named tracks. Every track lands on the level closest to what
+# the player had without exceeding it; what the old track cost above the new
+# levels' price comes back once. The new tracks start where the old fixed
+# values were, for free.
+func _migrate_upgrades(parsed: Dictionary, source_version: int) -> void:
+	var old: Array = _levels_to_v6(parsed,source_version) if source_version<6 else []
+	if source_version==6:
+		var stored = parsed.get("upgrade_levels",[])
+		for kind in range(V6_WEIGHTS.size()):
+			old.append(clampi(int(stored[kind]) if stored is Array and stored.size()>kind else 1,1,v6_max_level(kind)))
+	var levels := default_levels()
+	levels[ROPE] = _level_for(ROPE,V6_ROPE[old[0]-1])
+	levels[IMPULSE] = _level_for(IMPULSE,V6_IMPULSE[old[1]-1])
+	levels[BAG] = old[3]
+	levels[MAGNET] = _level_for(MAGNET,V6_MAGNET[old[4]-1])
+	levels[RECOVERY] = _level_for(RECOVERY,V6_RECOVERY[old[5]-1])
+	levels[THROW] = _level_for(THROW,V6_THROW[old[6]-1])
+	levels[SLOWMO] = _level_for(SLOWMO,V6_SLOWMO[old[7]-1])
+	levels[RADIUS] = 5 if old[2]>=2 else 1
+	levels[DOUBLE] = 2 if old[2]>=3 else 1
+	levels[SWING] = _level_for(SWING,V6_SWING)
+	levels[REEL_IN] = _level_for(REEL_IN,V6_REEL)
+	levels[REEL_OUT] = _level_for(REEL_OUT,V6_REEL)
+	levels[SLOWMO_REST] = _level_for(SLOWMO_REST,V6_SLOWMO_REST)
+	profile["upgrade_levels"] = levels
+	var tracks := {0:[ROPE],1:[IMPULSE],2:[RADIUS,DOUBLE],3:[BAG],4:[MAGNET],5:[RECOVERY],6:[THROW],7:[SLOWMO]}
+	for kind in tracks.keys():
+		var new_paid := 0
+		for key in tracks[kind]: new_paid += _paid(key,int(levels[key]))
+		profile["gold"] += maxi(0,v6_paid(kind,old[kind])-new_paid)
+	var choices: Variant = parsed.get("upgrade_choices",{})
+	var old_choice: int = int(choices.get("hook",old[2])) if source_version==6 and choices is Dictionary else int(old[2])
+	profile["upgrade_choices"] = default_choices()
+	profile["upgrade_choices"]["hook"] = 2 if old_choice>=3 else 1
+	if choices is Dictionary and choices.has("magnet"): profile["upgrade_choices"]["magnet"] = str(choices["magnet"])
 
 # A coin found before chat 4 is still in an active bag: it is banked once,
 # through the ledger, and leaves the bag, so the settlement cannot pay it too.
@@ -219,31 +303,19 @@ func _migrate_active_coins() -> void:
 	active["bag"] = kept
 
 func _sanitize_progress() -> void:
-	if not profile["upgrade_levels"] is Array or profile["upgrade_levels"].size()!=UPGRADE_COUNT:
-		profile["upgrade_levels"] = [1,1,1,1,1,1,1,1]
-	for kind in range(UPGRADE_COUNT):
-		profile["upgrade_levels"][kind] = clampi(int(profile["upgrade_levels"][kind]),1,max_level(kind))
+	var stored_levels: Variant = profile["upgrade_levels"]
+	var levels := default_levels()
+	if stored_levels is Dictionary:
+		for key in levels.keys(): levels[key] = clampi(int(stored_levels.get(key,1)),1,max_level(key))
+	profile["upgrade_levels"] = levels
 	var choices: Dictionary = default_choices()
 	if profile["upgrade_choices"] is Dictionary:
 		for key in choices.keys():
 			if profile["upgrade_choices"].has(key): choices[key] = profile["upgrade_choices"][key]
-	choices["hook"] = clampi(int(choices["hook"]),1,level(HOOKS))
-	for track in balance["specializations"].keys():
-		if not balance["specializations"][track]["options"].has(str(choices[track])): choices[track] = balance["specializations"][track]["default"]
-		choices[track] = str(choices[track])
+	choices["hook"] = clampi(int(choices["hook"]),1,level(DOUBLE))
+	if not balance["magnet_priority"]["options"].has(str(choices["magnet"])): choices["magnet"] = default_choices()["magnet"]
+	choices["magnet"] = str(choices["magnet"])
 	profile["upgrade_choices"] = choices
-	var prep_profile := str(profile.get("prep_profile",""))
-	if not PREP_PROFILES.has(prep_profile):
-		prep_profile = "range"
-		for candidate in PREP_PROFILES.keys():
-			var candidate_choices: Dictionary = PREP_PROFILES[candidate]["choices"]
-			var matches := true
-			for track in candidate_choices.keys():
-				if str(choices.get(track,""))!=str(candidate_choices[track]): matches = false
-			if matches:
-				prep_profile = str(candidate)
-				break
-	profile["prep_profile"] = prep_profile
 	for key in ["material_wallet","consumable_stock","set_parts"]:
 		var source = profile[key]
 		var clean := {}
@@ -304,29 +376,32 @@ func save() -> bool:
 
 # --- Upgrade tracks -----------------------------------------------------------------
 
-func level(kind: int) -> int:
-	return int(profile["upgrade_levels"][kind])
+func upgrade(key: String) -> Dictionary:
+	return balance["upgrades"][key]
+
+func level(key: String) -> int:
+	return int(profile["upgrade_levels"][key])
 
 # Direct level change for tests, captures and fixtures (no price, no gate).
-# A hook stage also selects that scheme.
-func set_level(kind: int, value: int) -> void:
-	profile["upgrade_levels"][kind] = clampi(value,1,max_level(kind))
-	if kind==HOOKS: profile["upgrade_choices"]["hook"] = level(HOOKS)
+func set_level(key: String, value_level: int) -> void:
+	profile["upgrade_levels"][key] = clampi(value_level,1,max_level(key))
+	if key==DOUBLE: profile["upgrade_choices"]["hook"] = level(DOUBLE)
 
-func set_levels(values: Array) -> void:
-	for kind in range(mini(values.size(),UPGRADE_COUNT)): set_level(kind,int(values[kind]))
+func set_levels(values: Dictionary) -> void:
+	for key in values.keys(): set_level(key,int(values[key]))
 
-func max_level(kind: int) -> int:
-	if kind==SLOWMO: return maxi(1,balance["slowmo_seconds"].size())
-	if kind==HOOKS: return balance["hook_counts"].size()
-	return balance["rope_lengths"].size()
+func max_level(key: String) -> int:
+	return upgrade(key)["values"].size()
 
-func value(key: String, kind: int) -> float:
-	var values: Array = balance[key]
-	return float(values[clampi(level(kind)-1,0,values.size()-1)])
+func value_at(key: String, at_level: int) -> float:
+	var values: Array = upgrade(key)["values"]
+	return float(values[clampi(at_level-1,0,values.size()-1)])
+
+func value(key: String) -> float:
+	return value_at(key,level(key))
 
 func slowmo_seconds() -> float:
-	return value("slowmo_seconds",SLOWMO)
+	return value(SLOWMO)
 
 # Release slow motion: the factor applied to the simulation step and the
 # real-time pause before the next release may start it again.
@@ -334,7 +409,7 @@ func slowmo_time_scale() -> float:
 	return clampf(float(balance.get("slowmo",{}).get("time_scale",.32)),.1,1.0)
 
 func slowmo_cooldown() -> float:
-	return maxf(0.0,float(balance.get("slowmo",{}).get("cooldown_seconds",0.0)))
+	return value(SLOWMO_REST)
 
 # Walking and camera tuning lives in balance.json; the fallbacks are the
 # values the game shipped with before they were configurable.
@@ -359,134 +434,108 @@ func snap_camera_zoom(zoom: float) -> float:
 func camera_zoom() -> float:
 	return snap_camera_zoom(float(profile.get("camera_zoom",1.0)))
 
-# Specialisations: one option per track and run, switched freely between runs
-# once the track reaches its unlock level.
-func spec_unlocked(track: String) -> bool:
-	var definition: Dictionary = balance["specializations"][track]
-	return level(int(definition["track"]))>=int(definition["unlock_level"])
-
 func choice(track: String) -> String:
-	return str(profile["upgrade_choices"].get(track,balance["specializations"][track]["default"]))
-
-func spec(track: String) -> Dictionary:
-	if not spec_unlocked(track): return {}
-	return balance["specializations"][track]["options"].get(choice(track),{})
+	return str(profile["upgrade_choices"].get(track,""))
 
 func set_choice(track: String, option: String) -> String:
 	if not profile["active"].is_empty(): return "Сначала заверши текущую попытку"
 	if track=="hook":
 		var config := int(option)
-		if config<1 or config>level(HOOKS): return "Эта схема крюков ещё не куплена"
+		if config<1 or config>level(DOUBLE): return "Двойной крюк ещё не куплен"
 		profile["upgrade_choices"]["hook"] = config
 		save()
-		return "Крюки · "+HOOK_NAMES[config-1]
-	if not balance["specializations"].has(track) or not balance["specializations"][track]["options"].has(option): return "Нет такого профиля"
-	if not spec_unlocked(track): return "Откроется на уровне %d" % int(balance["specializations"][track]["unlock_level"])
-	profile["upgrade_choices"][track] = option
+		return "Крюк · "+("двойной" if config==2 else "одинарный")
+	var priority: Dictionary = balance["magnet_priority"]
+	if track!="magnet" or not priority["options"].has(option): return "Нет такого выбора"
+	if not magnet_priority_open(): return "Откроется на %d-м уровне магнита" % int(priority["unlock_level"])
+	profile["upgrade_choices"]["magnet"] = option
 	save()
-	return "Профиль: "+str(balance["specializations"][track]["options"][option]["name"])
+	return "Магнит · "+str(priority["options"][option]["name"]).to_lower()
 
-func prep_profile_keys() -> Array[String]:
-	return ["range","control","collector"]
-
-func prep_profile() -> String:
-	var selected := str(profile.get("prep_profile","range"))
-	return selected if PREP_PROFILES.has(selected) else "range"
-
-func prep_profile_name(profile_id: String = "") -> String:
-	var selected := profile_id if not profile_id.is_empty() else prep_profile()
-	return str(PREP_PROFILES.get(selected,PREP_PROFILES["range"]).get("name","Дальность"))
-
-func prep_profile_hint(profile_id: String = "") -> String:
-	var selected := profile_id if not profile_id.is_empty() else prep_profile()
-	return str(PREP_PROFILES.get(selected,PREP_PROFILES["range"]).get("hint",""))
-
-func prep_profiles_unlocked() -> bool:
-	return spec_unlocked("rope") and spec_unlocked("impulse") and spec_unlocked("throw")
-
-func set_prep_profile(profile_id: String) -> String:
-	if not profile["active"].is_empty(): return "Сначала заверши текущую попытку"
-	if not PREP_PROFILES.has(profile_id): return "Нет такого профиля"
-	if not prep_profiles_unlocked(): return "Откроется на уровне 3"
-	var choices: Dictionary = PREP_PROFILES[profile_id]["choices"]
-	for track in choices.keys(): profile["upgrade_choices"][track] = str(choices[track])
-	profile["prep_profile"] = profile_id
-	save()
-	return "Сбор: "+prep_profile_name(profile_id)
-
-func hook_config() -> int:
-	return clampi(int(profile["upgrade_choices"].get("hook",level(HOOKS))),1,level(HOOKS))
+func magnet_priority_open() -> bool:
+	return level(MAGNET)>=int(balance["magnet_priority"]["unlock_level"])
 
 func hook_count() -> int:
-	return int(balance["hook_counts"][hook_config()-1])
+	return clampi(int(profile["upgrade_choices"].get("hook",1)),1,level(DOUBLE))
 
 func hook_tips() -> int:
-	return int(balance["hook_tips"][hook_config()-1])
+	return 3 if level(RADIUS)>=3 else 1
+
+func hook_spread() -> float:
+	return value(ACCURACY)
 
 func hook_directions(direction: Vector2) -> Array[Vector2]:
 	if hook_count()==1: return [direction.normalized()]
-	var half_spread := deg_to_rad(float(balance["hook_spread_degrees"])*.5)
+	var half_spread := deg_to_rad(hook_spread()*.5)
 	return [direction.normalized().rotated(-half_spread),direction.normalized().rotated(half_spread)]
 
 func hook_radius() -> float:
-	return float(balance["hook_radii"][hook_config()-1])
+	return value(RADIUS)
 
 func rope_length() -> float:
-	return value("rope_lengths",ROPE)+float(spec("rope").get("rope_bonus",0.0))
+	return value(ROPE)
 
 func shot_range() -> float:
 	return rope_length()
 
-func reel_speed_scale() -> float:
-	return float(spec("rope").get("reel_speed",1.0))
+func swing_force() -> float:
+	return value(SWING)
 
-# Release impulse. "Control" adds nothing to a release while falling.
-# World Y points up: a negative y velocity is a fall.
-func impulse_factor(velocity: Vector2 = Vector2(0,1)) -> float:
-	var options := spec("impulse")
-	if options.has("downward_factor") and velocity.y<0: return float(options["downward_factor"])
-	return value("impulse_factors",IMPULSE)+float(options.get("impulse_bonus",0.0))
+func reel_in_speed() -> float:
+	return value(REEL_IN)
+
+func reel_out_speed() -> float:
+	return value(REEL_OUT)
+
+func impulse_factor() -> float:
+	return value(IMPULSE)
 
 func throw_speed() -> float:
-	return value("throw_speeds",THROW)*float(spec("throw").get("speed_scale",1.0))
-
-# Share of the hero's own motion a throw inherits ("steady" keeps less).
-func throw_carry() -> float:
-	return float(spec("throw").get("carry",1.0))
+	return value(THROW)
 
 func capacity() -> int:
-	return int(value("capacities",BAG))
+	return int(value(BAG))
 
 func special_slots() -> int:
-	return int(value("special_slots",BAG))
+	return int(upgrade(BAG)["special_slots"][level(BAG)-1])
 
 func bag_capacity() -> int:
 	return capacity()+special_slots()
 
 func coin_radius() -> float:
-	return value("magnet_coin_radii",MAGNET)
+	return value(MAGNET)
 
 func item_radius() -> float:
-	return value("magnet_radii",MAGNET)
+	return value(MAGNET)
 
 func magnet_priority() -> String:
-	return choice("magnet") if spec_unlocked("magnet") else ""
+	return choice("magnet") if magnet_priority_open() else ""
 
 func recovery_percent() -> int:
-	return int(value("recovery_percents",RECOVERY))
+	return int(value(RECOVERY))
 
-func upgrade_available(kind: int) -> bool:
-	return level(kind)<max_level(kind) and (kind==HOOKS or level(kind)+1<=unlocked_upgrade_level())
+# A card that means nothing yet stays closed until its base is bought.
+func dependency_open(key: String) -> bool:
+	if key==ACCURACY: return level(DOUBLE)>=2
+	if key==SLOWMO_REST: return level(SLOWMO)>=2
+	return true
 
-func cost(kind: int) -> int:
-	return price_at_level(kind,level(kind))
+func upgrade_available(key: String) -> bool:
+	if level(key)>=max_level(key) or not dependency_open(key): return false
+	return key==DOUBLE or level(key)+1<=unlocked_upgrade_level()
 
-func price_at_level(kind: int, current_level: int) -> int:
-	if current_level >= max_level(kind):
-		return 0
-	if kind==HOOKS:
-		return int(balance["hook_prices"][current_level-1])
-	return roundi(float(balance["upgrade_prices"][current_level-1]) * float(balance["upgrade_weights"][kind]))
+func lock_reason(key: String) -> String:
+	if key==ACCURACY and not dependency_open(key): return "Нужен двойной крюк"
+	if key==SLOWMO_REST and not dependency_open(key): return "Сначала купи замедление"
+	return gate_text(level(key)+1)
+
+func cost(key: String) -> int:
+	return price_at_level(key,level(key))
+
+func price_at_level(key: String, current_level: int) -> int:
+	if current_level>=max_level(key): return 0
+	if key==DOUBLE: return int(upgrade(key)["price"])
+	return roundi(float(balance["upgrade_prices"][current_level-1])*float(upgrade(key)["weight"]))
 
 func gate_met(gate: Dictionary) -> bool:
 	if gate.has("acts") and int(profile["reached_acts"])<int(gate["acts"]): return false
@@ -508,60 +557,39 @@ func gate_text(target_level: int) -> String:
 	if gate.has("summit_or_contracts"): return "Вершина или %d контр." % int(gate["summit_or_contracts"])
 	return ""
 
-func purchase(kind: int) -> String:
+func purchase(key: String) -> String:
 	if not profile["active"].is_empty():
 		return "Сначала заверши текущую попытку"
-	if level(kind) >= max_level(kind):
+	if level(key)>=max_level(key):
 		return "Уже максимальный уровень"
-	if not upgrade_available(kind):
-		return gate_text(level(kind)+1)
-	var price := cost(kind)
-	if int(profile["gold"]) < price:
-		return "Не хватает %d золота" % (price - int(profile["gold"]))
+	if not upgrade_available(key):
+		return lock_reason(key)
+	var price := cost(key)
+	if int(profile["gold"])<price:
+		return "Не хватает %d золота" % (price-int(profile["gold"]))
 	profile["gold"] -= price
-	profile["upgrade_levels"][kind] += 1
-	# A new hook scheme is taken at once; the older ones stay selectable.
-	if kind==HOOKS: profile["upgrade_choices"]["hook"] = level(HOOKS)
+	profile["upgrade_levels"][key] += 1
+	# A double hook is taken at once; the single one stays selectable.
+	if key==DOUBLE: profile["upgrade_choices"]["hook"] = 2
 	save()
-	return "Крюки · "+HOOK_NAMES[level(HOOKS)-1] if kind==HOOKS else "Улучшено: " + UPGRADE_NAMES[kind]
+	return "Улучшено: "+str(upgrade(key)["name"])
 
-func upgrade_text(kind: int, at_level: int = -1) -> String:
-	var i := clampi((level(kind) if at_level == -1 else at_level) - 1,0,max_level(kind)-1)
-	match kind:
-		ROPE: return "%d%% дальности" % roundi(float(balance["rope_lengths"][i])/float(balance["rope_lengths"][0])*100.0)
-		IMPULSE: return "+%d%% при отпускании" % roundi((float(balance["impulse_factors"][i])-1)*100)
-		HOOKS: return HOOK_NAMES[i]+(" · разброс %.0f°" % float(balance["hook_spread_degrees"]) if int(balance["hook_counts"][i])==2 else " · один канат")
-		BAG: return "%d слотов" % int(balance["capacities"][i])+(" + слот для материала, реликвии или контракта" if int(balance["special_slots"][i])>0 else "")
-		MAGNET:
-			if i==0: return "сбор при касании"
-			if float(balance["magnet_radii"][i])<=0: return "монеты за %d м" % roundi(float(balance["magnet_coin_radii"][i])*10)
-			return "монеты %d м · находки %d м" % [roundi(float(balance["magnet_coin_radii"][i])*10),roundi(float(balance["magnet_radii"][i])*10)]
-		RECOVERY: return "%d%% стоимости при поражении" % int(balance["recovery_percents"][i])
-		SLOWMO: return (str(snappedf(float(balance["slowmo_seconds"][i]),.01))+" с замедления после отцепления").replace(".",",")
-	return "%d%% скорости крюка" % roundi(float(balance["throw_speeds"][i])/float(balance["throw_speeds"][0])*100.0)
-
-func upgrade_use(kind: int, at_level: int) -> String:
-	var uses: Array = balance.get("upgrade_uses",[])
-	if kind>=uses.size(): return ""
-	return str(uses[kind][clampi(at_level-1,0,uses[kind].size()-1)])
+func upgrade_use(key: String, at_level: int) -> String:
+	var uses: Array = upgrade(key).get("uses",[])
+	return str(uses[clampi(at_level-1,0,uses.size()-1)]) if not uses.is_empty() else ""
 
 func learn_control(action: String) -> void:
 	if action not in profile["learned_controls"]:
 		profile["learned_controls"].append(action)
 
-func recommended_upgrade() -> int:
-	if not profile["active"].is_empty(): return -1
-	var available: Array[int] = []
-	for kind in [ROPE,THROW,BAG,IMPULSE,HOOKS,RECOVERY,MAGNET,SLOWMO]:
-		if upgrade_available(kind) and cost(kind)<=int(profile["gold"]):
-			available.append(kind)
-	if available.is_empty(): return -1
+func recommended_upgrade() -> String:
+	if not profile["active"].is_empty(): return ""
 	var lowest := 99
-	var selected := -1
-	for kind in available:
-		if level(kind)<lowest:
-			lowest = level(kind)
-			selected = kind
+	var selected := ""
+	for key in [ROPE,THROW,BAG,IMPULSE,RADIUS,RECOVERY,MAGNET,SWING,REEL_IN,REEL_OUT,SLOWMO,SLOWMO_REST,ACCURACY,DOUBLE]:
+		if upgrade_available(key) and cost(key)<=int(profile["gold"]) and level(key)<lowest:
+			lowest = level(key)
+			selected = key
 	return selected
 
 func next_goal() -> String:

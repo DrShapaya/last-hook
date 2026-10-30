@@ -64,7 +64,7 @@ func traverse(game, route: Array) -> int:
 				var ignored: int = game.anchor_id if not current.get("permanent",true) else -1
 				var sight: Dictionary = game.world.cast_hook(game.sim.pos,target,game.model.hook_radius(),ignored)
 				var toward: Vector2 = (target-game.sim.pos).normalized()
-				var timed_exit: bool = int(current.get("kind",0))==1
+				var timed_exit: bool = int(current.get("kind",0))==1 or GripSpec.plate(current)
 				# A careful player waits out a storm on the grip it holds.
 				var calm: bool = game.world.hazards.calm_for(game.sim.pos,game.hazard_clock,1.6) and game.world.hazards.calm_for(target,game.hazard_clock,1.6)
 				if calm and int(sight.get("object",{}).get("id",-1))==target_id and game.sim.pos.distance_to(target)<5.2 and game.shot_window_open(target) and (game.sim.vel.dot(toward)>.5 or timed_exit):

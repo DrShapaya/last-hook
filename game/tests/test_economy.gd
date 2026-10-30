@@ -159,7 +159,7 @@ func model_tests() -> void:
 	model.bag = [ItemCatalog.valuable(1,0,"root_wall",2)]
 	check(model.bag_value()==130 and model.run_coins("run-a")==8,"bag value ignores banked coins")
 	var result := model.settle("run-a","summit",30,false,0)
-	check(result["coins"]==8 and result["loot"]==39 and result["total"]==result["height"]+39 and model.profile["gold"]==8+result["total"],"defeat keeps banked coins and pays only the recovered bag; settlement never pays coins again")
+	check(result["coins"]==8 and result["loot"]==32 and result["total"]==result["height"]+32 and model.profile["gold"]==8+result["total"],"defeat keeps banked coins and pays only the recovered bag; settlement never pays coins again")
 	# Special slot of a level-5 bag.
 	model.set_level(GameModel.BAG,5)
 	model.bag.clear()
@@ -191,7 +191,7 @@ func model_tests() -> void:
 	check(model.settle("run-d","summit",60,false,0,{"contract":"root_impulse"})["contract"]==0,"a failed run completes no contract")
 	model.bag = [ItemCatalog.relic(9,0,"old_post",1,"post_seal"),ItemCatalog.material(10,0,"old_post",0,"fiber")]
 	var lost := model.settle("run-e","summit",60,false,0)
-	check(lost["recovery"]==30 and model.profile["set_parts"].get("post_seal",0)==1 and model.materials("fiber")==0,"a defeat keeps the recovery share of whole items, relics first (30% of 2 -> 1)")
+	check(lost["recovery"]==25 and model.profile["set_parts"].get("post_seal",0)==1 and model.materials("fiber")==0,"a defeat keeps the recovery share of whole items, relics first (30% of 2 -> 1)")
 	# Consumables: stock, gold, materials, conflicts, charges.
 	model.profile = GameModel.fresh_profile()
 	check(model.stock("beacon")==1 and model.profile["active_loadout"]==["beacon",""],"a new profile has one trial beacon in its loadout")
@@ -250,12 +250,12 @@ func scene_tests() -> void:
 	game.world.finds[0]["picked"] = false
 	game._collect_finds()
 	check(game.model.profile["gold"]==8 and game.world.finds[0]["picked"],"a repeated pickup callback pays nothing")
-	# Magnet: coins from level 2, ordinary finds only from level 3.
+	# Magnet: one radius for coins and finds from level 2.
 	game.model.set_level(GameModel.MAGNET,2)
-	game.world.finds.append(find_at(ItemCatalog.coin(901,0,"root_wall",8),hero+Vector2(1.2,0)))
-	game.world.finds.append(find_at(ItemCatalog.valuable(902,0,"root_wall",1),hero+Vector2(-1.2,0)))
+	game.world.finds.append(find_at(ItemCatalog.coin(901,0,"root_wall",8),hero+Vector2(.8,0)))
+	game.world.finds.append(find_at(ItemCatalog.valuable(902,0,"root_wall",1),hero+Vector2(-.8,0)))
 	game._collect_finds()
-	check(game.model.profile["gold"]==16 and game.model.bag.is_empty(),"the level-2 magnet pulls coins, not finds")
+	check(game.model.profile["gold"]==16 and game.model.bag.size()==1,"the level-2 magnet pulls coins and finds alike")
 	# Full bag: coins still bank; a plain find stays; a more valuable artifact
 	# replaces the cheapest eligible item automatically.
 	game.model.bag = [ItemCatalog.valuable(903,0,"root_wall",0)]

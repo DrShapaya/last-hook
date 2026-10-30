@@ -27,7 +27,7 @@ func run_tests() -> void:
 	game.run_seed = 58273
 	game._create_world(game.run_seed,0,126)
 	game._process(.1)
-	check(game.state=="play" and game.model.level(3)==1,"new run starts with the base kit")
+	check(game.state=="play" and game.model.level(GameModel.BAG)==1,"new run starts with the base kit")
 	check(game.world.anchors.size()>30 and game.world.ledges.size()>2,"finite mountain has a continuous route and rest ledges")
 	var rock: Dictionary = game.world.anchors[0]
 	var center: Vector2 = rock["pos"]
@@ -47,7 +47,7 @@ func run_tests() -> void:
 	var screen_point: Vector2 = game.camera.unproject_position(Vector3(first.x,first.y,0))
 	game.pointer_down(screen_point)
 	game.pointer_up(screen_point)
-	for i in range(32):
+	for i in range(60):
 		game._physics_process(1.0/120)
 	check(game.sim.attached and game.anchor_id==0,"world input fires a swept hook and catches the first anchor")
 	check("aim" in game.model.profile["learned_controls"],"the aim lesson completes only after an actual catch")
@@ -117,7 +117,7 @@ func run_tests() -> void:
 	game.bolt_active = false
 	game.sim.pos = first+Vector2(0,-2.8)
 	game.sim.vel = Vector2.ZERO
-	game.sim.attach(first,game.model.value("rope_lengths",0))
+	game.sim.attach(first,game.model.rope_length())
 	game.anchor_id = 0
 	game.anchor_contact = first
 	var reached := climb_route(game,4)
@@ -160,7 +160,7 @@ func run_tests() -> void:
 		var seed_number: int = scenario[0]
 		var kit: int = scenario[1]
 		game.model.profile = GameModel.fresh_profile()
-		game.model.set_levels([kit,kit,mini(kit,3),kit,kit,kit,kit,1])
+		game.model.set_levels({GameModel.ROPE:kit,GameModel.IMPULSE:kit,GameModel.RADIUS:kit,GameModel.BAG:kit,GameModel.MAGNET:kit,GameModel.RECOVERY:kit,GameModel.THROW:kit})
 		game.start_run(false)
 		game._create_world(seed_number,0,126)
 		game.fire_hook(game.direction_to_target(game.world.anchors[0]["pos"]))
@@ -190,10 +190,10 @@ func run_tests() -> void:
 			game.sim.attached = false
 			game.bolt_active = false
 			game.sim.vel = Vector2.ZERO
-			game.model.set_levels([rope_level,1,1,1,1,1,force_level,1])
+			game.model.set_levels({GameModel.ROPE:rope_level,GameModel.THROW:force_level})
 			game.fire_hook(Vector2(0,1))
 			game._update_bolt(.01)
-			check(absf(game.bolt_pos.distance_to(game.bolt_origin)-(.16 if force_level==1 else .31))<.001,"projectile speed depends only on force, rope %d force %d" % [rope_level,force_level])
+			check(absf(game.bolt_pos.distance_to(game.bolt_origin)-(.15 if force_level==1 else .25))<.001,"projectile speed depends only on force, rope %d force %d" % [rope_level,force_level])
 			var flight_time := .01
 			for frame in range(100):
 				if not game.bolt_active: break
@@ -201,13 +201,13 @@ func run_tests() -> void:
 				flight_time += .01
 			check(game.sim.attached==(rope_level==5),"only rope length determines whether the 80 m grip can be reached, rope %d force %d" % [rope_level,force_level])
 			if rope_level==5: long_rope_times.append(flight_time)
-	check(long_rope_times[0]>long_rope_times[1]*1.7,"strong throw (31 against 16) catches the same far grip much faster than the weak throw")
+	check(long_rope_times[0]>long_rope_times[1]*1.4,"strong throw (25 against 15) catches the same far grip much faster than the weak throw")
 	game.sim.attached = false
 	game.world.anchors.clear()
 	game.world.layout.bins.clear()
 	var shot_start: Vector2 = game.sim.pos
 	game.world.add_anchor(shot_start+Vector2(0,7),0)
-	game.model.set_levels([1,1,1,1,1,1,1,1])
+	game.model.set_levels(GameModel.default_levels())
 	game.fire_hook(Vector2(0,1))
 	game._update_bolt(.1)
 	game.sim.pos += Vector2(0,2)
@@ -302,6 +302,7 @@ func run_tests() -> void:
 	game.model.picked = [-7]
 	game.revive_used = false
 	game.sim.highest = maxf(25,game.sim.highest)
+	game.model.set_level(GameModel.SLOWMO,3)
 	game.focus_remaining = .23
 	game.sim.request_length(game.sim.length+.4)
 	var saved_target: float = game.sim.target_length
@@ -327,7 +328,7 @@ func run_tests() -> void:
 	check(game.sim.highest==before,"continuation cannot reset height reward bands")
 	game.fail_run("second fall")
 	check(game.state=="result","second failure settles the run immediately")
-	check(int(game.settlement["loot"])==60,"scene applies 30 percent retention at defeat")
+	check(int(game.settlement["loot"])==50,"scene applies 25 percent retention at defeat")
 	var settled_gold: int = game.model.profile["gold"]
 	game.finish_run(false)
 	check(int(game.model.profile["gold"])==settled_gold,"repeated result calls cannot duplicate scene rewards")
@@ -461,6 +462,7 @@ func run_tests() -> void:
 	check("rope" in game.model.profile["learned_controls"],"manual rope adjustment completes its separate lesson")
 	var release_key := InputEventKey.new()
 	release_key.keycode = KEY_SPACE
+	release_key.physical_keycode = KEY_SPACE
 	release_key.pressed = true
 	game._unhandled_input(release_key)
 	check("release" in game.model.profile["learned_controls"] and not game.sim.attached,"manual release completes the final control lesson")

@@ -29,6 +29,7 @@ var impact_point := Vector2.ZERO
 var impact_kind := ""
 var body_shadow: MeshInstance3D
 var visual_quality := "balanced"
+var effects_quality := "full"
 
 func setup(world: MountainWorld, tips: int = 1) -> void:
 	body = preload("res://scenes/player_sprite.tscn").instantiate() as ExplorerRig
@@ -362,7 +363,7 @@ func _draw_effects(flight: Dictionary, flying: bool, time: float) -> void:
 			v_idx += 6
 		trail_mesh.mesh = _fill_mesh(_mesh_of(trail_mesh),vertices,colors)
 	var age := time-impact_time
-	impact_mesh.visible = age>=0 and age<.28 and not impact_kind.is_empty()
+	impact_mesh.visible = age>=0 and age<.28 and not impact_kind.is_empty() and effects_quality!="off"
 	if not impact_mesh.visible: return
 	var color := Color("a8efcc") if impact_kind=="catch" else Color("ffd38b")
 	color.a = pow(1-age/.28,2)

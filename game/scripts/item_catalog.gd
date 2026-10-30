@@ -17,6 +17,8 @@ const ARTIFACT_KINDS := ["crown","crown","chalice","chalice","idol","idol"]
 const LEGACY_NAMES := ["Медная находка", "Янтарь", "Древняя реликвия", "Ледяной кристалл", "Обсидиан", "Небесный осколок"]
 const VALUABLE_NAMES := ["Медный слиток", "Янтарь", "Древняя реликвия", "Ледяной кристалл", "Обсидиан", "Небесный осколок"]
 const GRADE_NAMES := {"common":"общий","light":"лёгкий","medium":"средний","rare":"редкий"}
+# The colour-vision setting swaps the palette (MenuSurface.apply_palette).
+static var rarity_colors: Array = VISUAL_RARITY_COLORS
 const VISUAL_RARITY_COLORS := [Color("e0a83a"),Color("e8833a"),Color("e9bf4f"),Color("6fc6e8"),Color("a98fdc"),Color("f3d478")]
 const VISUAL_MATERIAL_COLORS := {"fiber":Color("c9a46a"),"silk":Color("e9e4f2"),"sinew":Color("7fc48a"),"core":Color("8fd8ee")}
 static var _balance: Dictionary = {}
@@ -200,7 +202,7 @@ static func visual_color(item: Dictionary) -> Color:
 		"material": return VISUAL_MATERIAL_COLORS.get(str(item.get("set_id","")),Color("c9a46a"))
 		"contract": return Color("ff9d5c")
 		"relic": return Color("d8c27a")
-	return VISUAL_RARITY_COLORS[clampi(int(item.get("tier",0)),0,VISUAL_RARITY_COLORS.size()-1)]
+	return rarity_colors[clampi(int(item.get("tier",0)),0,rarity_colors.size()-1)]
 
 static func material_name(material_id: String) -> String:
 	return str(balance()["materials"].get(material_id,{}).get("name",material_id))

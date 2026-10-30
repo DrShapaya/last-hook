@@ -8,7 +8,7 @@ class UpgradeMeter extends Control:
 	func _draw() -> void:
 		var width := (size.x-4*(total-1))/total
 		for index in range(total):
-			var color := HOLD if index<filled else STONE_LIP if index<unlocked else STONE_SHADE
+			var color := MenuSurface.HOLD if index<filled else STONE_LIP if index<unlocked else STONE_SHADE
 			var left := index*(width+4)
 			# Slanted ticks read as steps up a slope rather than a loading bar.
 			draw_colored_polygon(PackedVector2Array([Vector2(left+3,0),Vector2(left+width,0),Vector2(left+width-3,size.y),Vector2(left,size.y)]),color)
@@ -143,6 +143,10 @@ const SWIPE_RUBBER := .3
 const SWIPE_RUBBER_LIMIT := 64.0
 const SWIPE_COOLDOWN_MSEC := 80
 const PAGE_GAP := 24.0
+# A vertical drag past this is a scroll; the first move decides the direction.
+const SCROLL_SLOP := 12.0
+const SCROLL_WHEEL := 48.0
+const SCROLL_BOTTOM := 92.0
 # Set while building the expedition body. A neighbouring section built as a
 # drag preview must not overwrite the live references.
 const PAGE_REFS := ["start_button","scenic_frame","card_rect","card_clip","card_left","card_step","card_scroll","route_cards","card_arrows","location_nodes","location_anchor","acts_anchor","route_line","route_panel","card_park"]
@@ -152,6 +156,8 @@ var swipe_from := Vector2.ZERO
 var swipe_msec := 0
 var swipe_dragging := false
 var swipe_kind := ""
+var scroll_from := 0.0
+var swipe_slider: RopeSlider
 var body_nodes: Array[Control] = []
 var header_nodes: Array[Control] = []
 # The current section body, neighbours built for a drag and sections that are
@@ -161,6 +167,12 @@ var preview_pages := {}
 var outgoing_pages: Array = []
 var page_cache := {}
 var prebuild_queue: Array = []
+# The scrollable part of the settings page being built, the preset switch that
+# follows manual changes and the action waiting for its new key.
+var built_scroll: Control
+var preset_buttons: Array[Button] = []
+var rebinding_action := ""
+var settings_page: SettingsPage
 var prebuild_at := 0
 var page_tween: Tween
 # Route cards sit in a clipped strip; card_scroll is the strip position in
@@ -268,6 +280,9 @@ func _reset_build_state() -> void:
 	navigation_bar = null
 	_clear_page_refs()
 
+func rebuild() -> void:
+	if is_inside_tree(): _build_screen()
+
 func _build_screen() -> void:
 	_reset_build_state()
 	build_header()
@@ -297,7 +312,57 @@ func build_page(tab: String) -> Control:
 	for node in get_children().slice(first):
 		remove_child(node)
 		holder.add_child(node)
+	if built_scroll!=null:
+		holder.set_meta("scroll",built_scroll)
+		built_scroll = null
 	return holder
+
+# A clipped, draggable area under a page's fixed head. Its child is returned;
+# the page fills it, and LobbyView moves it (see _input).
+func scroll_page(top: float, height: float) -> Control:
+	var clip := Control.new()
+	clip.position = Vector2(0,top)
+	clip.size = Vector2(size.x,size.y-top-SCROLL_BOTTOM)
+	clip.clip_contents = true
+	clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(clip)
+	var content := Control.new()
+	content.size = Vector2(size.x,height)
+	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.set_meta("range",maxf(0.0,height-clip.size.y))
+	clip.add_child(content)
+	built_scroll = content
+	return content
+
+func scroll_content() -> Control:
+	if not is_instance_valid(page) or not page.has_meta("scroll"): return null
+	return page.get_meta("scroll") as Control
+
+func scroll_to(y: float) -> void:
+	var content := scroll_content()
+	if content!=null: content.position.y = clampf(y,-float(content.get_meta("range")),0.0)
+
+func slider_at(screen: Vector2) -> RopeSlider:
+	for node in get_tree().get_nodes_in_group("menu_slider"):
+		if node.is_visible_in_tree() and node.get_global_rect().has_point(screen): return node
+	return null
+
+func begin_rebind(action_name: String) -> void:
+	rebinding_action = action_name
+	game.toast("Нажми клавишу для действия «%s»" % KeyBindings.NAMES[action_name],3.0,"menu")
+	hud.show_menu()
+
+func _rebind_input(event: InputEventKey) -> void:
+	if not event.pressed or event.echo: return
+	get_viewport().set_input_as_handled()
+	var chosen := rebinding_action
+	rebinding_action = ""
+	if event.physical_keycode!=KEY_ESCAPE:
+		var bindings: Dictionary = model.profile["settings"]["key_bindings"]
+		var changed := KeyBindings.rebind(bindings,chosen,int(event.physical_keycode))
+		if changed==bindings: game.toast("Эта клавиша нужна, чтобы отцепиться",2.4,"menu")
+		else: game.set_setting("key_bindings",changed)
+	hud.show_menu()
 
 func _capture_refs() -> Dictionary:
 	var refs := {}
@@ -707,6 +772,9 @@ func spring_back() -> void:
 
 func _input(event: InputEvent) -> void:
 	if not is_inside_tree() or hud.layout_mode!="menu" or game.state!="menu" or game.ads.fullscreen: return
+	if event is InputEventKey and not rebinding_action.is_empty():
+		_rebind_input(event)
+		return
 	if event is InputEventKey or event is InputEventJoypadButton:
 		if event.is_pressed(): keyboard_focus = true
 		_navigation_input(event)
@@ -729,6 +797,10 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventScreenDrag:
 		pointer = event.index
 		position_value = event.position
+	elif event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_WHEEL_UP,MOUSE_BUTTON_WHEEL_DOWN]:
+		var content := scroll_content()
+		if event.pressed and content!=null: scroll_to(content.position.y+(SCROLL_WHEEL if event.button_index==MOUSE_BUTTON_WHEEL_UP else -SCROLL_WHEEL))
+		return
 	elif event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.device!=InputEvent.DEVICE_ID_EMULATION:
 		pointer = -1
 		position_value = event.position
@@ -743,6 +815,7 @@ func _input(event: InputEvent) -> void:
 	if pressed_value:
 		keyboard_focus = false
 		if swipe_pointer==-2:
+			swipe_slider = slider_at(position_value)
 			settle_slides()
 			swipe_pointer = pointer
 			swipe_from = at
@@ -753,7 +826,18 @@ func _input(event: InputEvent) -> void:
 	if pointer!=swipe_pointer: return
 	var travel := at-swipe_from
 	if not released:
-		if not swipe_dragging and absf(travel.x)>SWIPE_SLOP and absf(travel.x)>absf(travel.y)*SWIPE_RATIO:
+		var content := scroll_content()
+		# A drag begun on a slider belongs to it unless it turns into a scroll.
+		if is_instance_valid(swipe_slider) and swipe_slider.dragging: return
+		if not swipe_dragging and content!=null and float(content.get_meta("range"))>0.0 and absf(travel.y)>SCROLL_SLOP and absf(travel.y)>absf(travel.x):
+			get_viewport().set_input_as_handled()
+			swipe_dragging = true
+			swipe_kind = "scroll"
+			scroll_from = content.position.y
+		if swipe_kind=="scroll":
+			scroll_to(scroll_from+travel.y)
+			return
+		if not swipe_dragging and swipe_slider==null and absf(travel.x)>SWIPE_SLOP and absf(travel.x)>absf(travel.y)*SWIPE_RATIO:
 			get_viewport().set_input_as_handled()
 			swipe_dragging = true
 			swipe_kind = "card" if routes_swipeable() and card_rect.has_point(swipe_from) else "section"
@@ -764,6 +848,7 @@ func _input(event: InputEvent) -> void:
 	swipe_dragging = false
 	# The release belongs to the gesture, never to the button under it.
 	get_viewport().set_input_as_handled()
+	if swipe_kind=="scroll": return
 	var seconds := maxf(.001,(Time.get_ticks_msec()-swipe_msec)*.001)
 	var speed := absf(travel.x)/seconds
 	var span := card_step if swipe_kind=="card" else page_step()
@@ -1151,17 +1236,39 @@ func build_equipment() -> void:
 	switch[1].add_theme_color_override("font_color",INK_FAINT)
 	supplies_badge = soon_tag(switch[1].get_parent(),switch[1].position+Vector2(switch[1].size.x-50,-12),46)
 	paragraph(self,"Заверши попытку, чтобы улучшать снаряжение." if active else "Уровни 3–5 открываются актами, вершиной или контрактами.",Vector2(29,126),Vector2(size.x-56,22),13)
-	var order := [GameModel.THROW,0,1,2,3,4,5,GameModel.SLOWMO]
-	var columns := 2 if landscape else 1
-	var row_width := 504.0 if landscape else 484.0
-	var row_height := 84.0 if landscape else (70.0 if size.y < 950.0 else 80.0)
-	var row_gap := 8.0 if (landscape or size.y >= 950.0) else 4.0
-	var base_y := 160.0 if (landscape or size.y >= 950.0) else 148.0
-	var per_column := 4 if landscape else order.size()
-	for index in range(order.size()):
-		var column := index/per_column
-		var row := index%per_column
-		build_upgrade(order[index],Vector2(28+column*(row_width+16),base_y+row*(row_height+row_gap)),Vector2(row_width,row_height),active)
+	var categories: Array = GameModel.CATEGORIES.keys()
+	var names: Array = categories.map(func(key): return GameModel.CATEGORY_NAMES[key])
+	var tabs := segmented(self,Vector2(28,152),size.x-56,names,categories.find(hud.equipment_category),_open_category.bind(categories),40)
+	for tab in tabs: tab.add_theme_font_size_override("font_size",14)
+	var rows: Array = GameModel.CATEGORIES[hud.equipment_category].duplicate()
+	var row_size := Vector2(size.x-56,104.0 if not landscape else 86.0)
+	var row_y := 202.0
+	for key in rows:
+		build_upgrade(key,Vector2(28,row_y),row_size,active)
+		row_y += row_size.y+8
+	if hud.equipment_category=="gather": build_magnet_priority(Vector2(28,row_y),row_size,active)
+
+func _open_category(index: int, categories: Array) -> void:
+	hud.equipment_category = categories[index]
+	hud.show_menu_soon(.2)
+
+# The third line of the gathering category: not a level but a choice.
+func build_magnet_priority(at: Vector2, dimensions: Vector2, active: bool) -> void:
+	var frame := slab(self,at,dimensions)
+	var priority: Dictionary = model.balance["magnet_priority"]
+	var middle := (dimensions.y-4)*.5
+	symbol(frame,4,Vector2(16,middle-20),Vector2(40,40),INK)
+	text(frame,"Приоритет магнита",Vector2(70,middle-26),Vector2(dimensions.x*.4,22),16,INK,"strong")
+	if not model.magnet_priority_open():
+		text(frame,"Откроется на %d-м уровне магнита" % int(priority["unlock_level"]),Vector2(70,middle-2),Vector2(dimensions.x-90,20),13,INK_SOFT)
+		return
+	var keys: Array = priority["options"].keys()
+	var labels: Array = keys.map(func(key): return priority["options"][key]["name"])
+	var width: float = dimensions.x-90
+	var buttons := segmented(frame,Vector2(70,middle-2),width,labels,keys.find(model.choice("magnet")),func(index: int): _choose("magnet",str(keys[index])),40)
+	for index in range(buttons.size()):
+		buttons[index].disabled = active
+		buttons[index].tooltip_text = str(priority["options"][keys[index]]["hint"])
 
 func _supplies_soon(switch: Array[Button]) -> bool:
 	# This section is still locked: keep the selected segment on upgrades and
@@ -1170,56 +1277,68 @@ func _supplies_soon(switch: Array[Button]) -> bool:
 	wiggle_soon(supplies_badge,"Раздел «Сборы» скоро откроется")
 	return false
 
-func effect_text(kind: int, at_level: int) -> String:
-	var i := clampi(at_level-1,0,model.max_level(kind)-1)
-	var balance: Dictionary = model.balance
-	match kind:
-		GameModel.ROPE: return "%d%% дальности" % roundi(float(balance["rope_lengths"][i])/float(balance["rope_lengths"][0])*100.0)
-		GameModel.IMPULSE: return "+%d%%" % roundi((float(balance["impulse_factors"][i])-1)*100)
-		GameModel.HOOKS: return GameModel.HOOK_NAMES[i]
-		GameModel.BAG:
-			var slots := int(balance["capacities"][i])
-			return "%d %s" % [slots,"слот" if slots==1 else "слота" if slots<5 else "слотов"]+(" +1" if int(balance["special_slots"][i])>0 else "")
-		GameModel.MAGNET:
-			if i==0: return "касание"
-			if float(balance["magnet_radii"][i])<=0: return "монеты %d м" % roundi(float(balance["magnet_coin_radii"][i])*10)
-			return "%d / %d м" % [roundi(float(balance["magnet_coin_radii"][i])*10),roundi(float(balance["magnet_radii"][i])*10)]
-		GameModel.RECOVERY: return "%d%%" % int(balance["recovery_percents"][i])
-		GameModel.SLOWMO: return seconds_text(float(balance["slowmo_seconds"][i]))
-	return "%d%% скорости" % roundi(float(balance["throw_speeds"][i])/float(balance["throw_speeds"][0])*100.0)
+static func comma(number: float) -> String:
+	var shown := str(snappedf(number,.01)).replace(".",",")
+	return shown.trim_suffix(",0")
 
-func build_upgrade(kind: int, at: Vector2, dimensions: Vector2, active: bool) -> void:
+func effect_text(key: String, at_level: int) -> String:
+	var number := model.value_at(key,at_level)
+	match key:
+		GameModel.ROPE: return comma(number)+" м"
+		GameModel.IMPULSE: return "×"+("%.2f" % number).replace(".",",")
+		GameModel.ACCURACY: return comma(number)+"°"
+		GameModel.DOUBLE: return "Двойной" if at_level>=2 else "Одинарный"
+		GameModel.BAG:
+			var slots := roundi(number)
+			var extra := int(model.upgrade(key)["special_slots"][clampi(at_level-1,0,4)])
+			return "%d %s" % [slots,"слот" if slots==1 else "слота" if slots<5 else "слотов"]+(" +%d" % extra if extra>0 else "")
+		GameModel.MAGNET: return comma(number)+" м" if number>0 else "касание"
+		GameModel.RECOVERY: return "%d%%" % roundi(number)
+		GameModel.SLOWMO: return seconds_text(number) if number>0 else "нет"
+		GameModel.SLOWMO_REST: return seconds_text(number)
+	return comma(number)
+
+const UPGRADE_SYMBOLS := {"throw":6,"swing":30,"impulse":1,"rope":0,"reel_in":31,"reel_out":32,"accuracy":33,"radius":2,"double":2,"bag":3,"magnet":4,"recovery":5,"slowmo":19,"slowmo_rest":34}
+
+func build_upgrade(key: String, at: Vector2, dimensions: Vector2, active: bool) -> void:
 	var frame := slab(self,at,dimensions)
-	var level := model.level(kind)
-	var maximum := level>=model.max_level(kind)
-	var locked := not maximum and not model.upgrade_available(kind)
-	var can_buy := not active and not locked and not maximum and int(model.profile["gold"])>=model.cost(kind)
-	var affordable := int(model.profile["gold"])>=model.cost(kind)
-	var short_names := ["Длина каната","Импульс","Крюки","Рюкзак","Магнит","Защита добычи","Сила броска","Замедление"]
+	var level := model.level(key)
+	var maximum := level>=model.max_level(key)
+	var locked := not maximum and not model.upgrade_available(key)
+	var can_buy := not active and not locked and not maximum and int(model.profile["gold"])>=model.cost(key)
+	var affordable := int(model.profile["gold"])>=model.cost(key)
 	var middle := (dimensions.y-4)*.5
-	symbol(frame,19 if kind==GameModel.SLOWMO else kind,Vector2(16,middle-20),Vector2(40,40),INK)
-	text(frame,short_names[kind],Vector2(70,middle-35),Vector2(dimensions.x-240,22),16,INK,"strong")
+	symbol(frame,int(UPGRADE_SYMBOLS[key]),Vector2(16,middle-20),Vector2(40,40),INK)
+	text(frame,str(model.upgrade(key)["name"]),Vector2(70,middle-35),Vector2(dimensions.x-240,22),16,INK,"strong")
 	# Where the next level matters: an act or situation of the expeditions.
-	var use := text(frame,model.upgrade_use(kind,level if maximum else level+1),Vector2(70,middle-15),Vector2(dimensions.x-240,18),12,INK_SOFT)
+	var use := text(frame,model.upgrade_use(key,level if maximum else level+1),Vector2(70,middle-15),Vector2(dimensions.x-240,18),12,INK_SOFT)
 	use.name = "Use"
-	var current := text(frame,effect_text(kind,level),Vector2(70,middle+1),Vector2(dimensions.x-240,22),17,INK,"display")
+	var current := text(frame,effect_text(key,level),Vector2(70,middle+1),Vector2(dimensions.x-240,22),17,INK,"display")
 	if not maximum:
 		var shown := current.get_theme_font("font").get_string_size(current.text,HORIZONTAL_ALIGNMENT_LEFT,-1,17).x
-		text(frame,"→ "+effect_text(kind,level+1),Vector2(70+shown+8,middle+3),Vector2(maxf(40,dimensions.x-250-shown),20),14,INK_SOFT)
-	var meter := UpgradeMeter.new()
-	meter.filled = level
-	meter.total = model.max_level(kind)
-	meter.unlocked = model.max_level(kind) if kind==GameModel.HOOKS else mini(model.max_level(kind),model.unlocked_upgrade_level())
-	meter.position = Vector2(70,middle+28)
-	meter.size = Vector2(minf(150,dimensions.x-240),6)
-	meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	frame.add_child(meter)
-	# Level reads next to the meter; the last step says so in hold yellow.
-	var level_label := text(frame,"Макс. ур. %d" % level if maximum else "Ур. %d/%d" % [level,model.max_level(kind)],Vector2(70+meter.size.x+8,middle+20),Vector2(90,20),12,COIN if maximum else INK_SOFT,"strong")
-	level_label.name = "Level"
-	var value := "Максимум" if maximum else "После попытки" if active else model.gate_text(level+1) if locked else "Улучшить"
+		text(frame,"→ "+effect_text(key,level+1),Vector2(70+shown+8,middle+3),Vector2(maxf(40,dimensions.x-250-shown),20),14,INK_SOFT)
+	if key==GameModel.DOUBLE and maximum:
+		# Bought: the switch replaces the level bar, a single hook stays useful.
+		var buttons := segmented(frame,Vector2(dimensions.x-182,middle-22),170,["Один","Двойной"],model.hook_count()-1,func(index: int): _choose("hook",str(index+1)),40)
+		for button in buttons:
+			button.add_theme_font_size_override("font_size",13)
+			button.disabled = active
+		return
+	if key!=GameModel.DOUBLE:
+		var meter := UpgradeMeter.new()
+		meter.filled = level
+		meter.total = model.max_level(key)
+		meter.unlocked = mini(model.max_level(key),model.unlocked_upgrade_level())
+		meter.position = Vector2(70,middle+28)
+		meter.size = Vector2(minf(150,dimensions.x-240),6)
+		meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		frame.add_child(meter)
+		# Level reads next to the meter; the last step says so in hold yellow.
+		var level_label := text(frame,"Макс. ур. %d" % level if maximum else "Ур. %d/%d" % [level,model.max_level(key)],Vector2(70+meter.size.x+8,middle+20),Vector2(90,20),12,COIN if maximum else INK_SOFT,"strong")
+		level_label.name = "Level"
+	var value := "Максимум" if maximum else "После попытки" if active else model.lock_reason(key) if locked else "Улучшить"
 	var button_size := Vector2(150,dimensions.y-24)
-	var purchase := action(frame,value,Vector2(dimensions.x-button_size.x-12,middle-button_size.y*.5),button_size,hud._buy_upgrade.bind(kind),"buy" if can_buy else "secondary")
+	var purchase := action(frame,value,Vector2(dimensions.x-button_size.x-12,middle-button_size.y*.5),button_size,hud._buy_upgrade.bind(key),"buy" if can_buy else "secondary")
 	purchase.add_theme_font_size_override("font_size",15 if value.length()<16 else 12)
 	purchase.disabled = not can_buy
 	if value=="Улучшить":
@@ -1232,15 +1351,15 @@ func build_upgrade(kind: int, at: Vector2, dimensions: Vector2, active: bool) ->
 		price.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		price.position = Vector2(0,button_size.y-34)
 		purchase.add_child(price)
-		var amount := str(model.cost(kind))
+		var amount := str(model.cost(key))
 		var width: float = hud.heading_font.get_string_size(amount,HORIZONTAL_ALIGNMENT_LEFT,-1,16).x+24
 		var left := (button_size.x-width)*.5
 		symbol(price,12,Vector2(left,2),Vector2(19,19),INK if can_buy else COIN if affordable else INK_FAINT)
 		text(price,amount,Vector2(left+24,0),Vector2(width,22),16,INK if can_buy or affordable else DANGER,"display")
-	frame.tooltip_text = model.upgrade_text(kind)+("\nДалее: "+model.upgrade_text(kind,level+1)+"\nПолезно: "+model.upgrade_use(kind,level+1) if not maximum else "\nМаксимальный уровень")
+	frame.tooltip_text = effect_text(key,level)+("\nДалее: "+effect_text(key,level+1)+"\nПолезно: "+model.upgrade_use(key,level+1) if not maximum else "\nМаксимальный уровень")
 	frame.mouse_filter = Control.MOUSE_FILTER_PASS
-	if hud.upgrade_flash==kind:
-		hud.upgrade_flash = -1
+	if hud.upgrade_flash==key:
+		hud.upgrade_flash = ""
 		celebrate_upgrade(frame,dimensions,level,maximum)
 
 # --- Preparation: run profiles, active items, stock and progress ----------------------
@@ -1248,50 +1367,7 @@ func build_upgrade(kind: int, at: Vector2, dimensions: Vector2, active: bool) ->
 func build_supplies(active: bool) -> void:
 	var column_width := 504.0 if landscape else 484.0
 	paragraph(self,"Выбери стиль и предметы до старта." if not active else "Попытка идёт: сбор изменится после её завершения.",Vector2(29,130),Vector2(size.x-56,20),13)
-	var left := Vector2(28,162)
-	var right := Vector2(28+column_width+16,162) if landscape else Vector2(28,left.y+304)
-	# A preparation is a readable play style. It still drives the existing
-	# rope/impulse/throw mechanics, but the player chooses one coherent intent.
-	var profiles := slab(self,left,Vector2(column_width,292))
-	text(profiles,"Стиль восхождения",Vector2(20,12),Vector2(300,24),17,INK,"display")
-	var row_y := 40.0
-	var owned: Array = []
-	for index in range(model.level(GameModel.HOOKS)): owned.append(GameModel.HOOK_NAMES[index].replace("2 ","2×"))
-	text(profiles,"Крюки",Vector2(20,row_y+11),Vector2(110,22),14,INK_SOFT,"strong")
-	var hooks := segmented(profiles,Vector2(120,row_y),column_width-140,owned,model.hook_config()-1,func(index: int): _choose("hook",str(index+1)),40)
-	for index in range(hooks.size()):
-		var hook_count := int(model.balance["hook_counts"][index])
-		var hook_tips := int(model.balance["hook_tips"][index])
-		var tips_word := "наконечник" if hook_tips==1 else "наконечника" if hook_tips<5 else "наконечников"
-		hooks[index].tooltip_text = "%d крюк%s · %d %s" % [hook_count,"а" if hook_count==2 else "",hook_tips,tips_word]
-	for button in hooks:
-		button.disabled = active
-		button.add_theme_font_size_override("font_size",12 if owned.size()>2 else 14)
-	row_y += 48
-	text(profiles,"Профиль",Vector2(20,row_y+11),Vector2(110,22),14,INK_SOFT,"strong")
-	var prep_keys := model.prep_profile_keys()
-	var prep_names: Array[String] = []
-	for profile_id in prep_keys: prep_names.append(model.prep_profile_name(profile_id))
-	if model.prep_profiles_unlocked():
-		var prep_buttons := segmented(profiles,Vector2(120,row_y),column_width-140,prep_names,prep_keys.find(model.prep_profile()),func(index: int): _choose_prep(prep_keys[index]),40)
-		for index in range(prep_buttons.size()): prep_buttons[index].tooltip_text = model.prep_profile_hint(prep_keys[index])
-	else:
-		text(profiles,"Откроется после 3-го уровня каната, импульса и броска",Vector2(120,row_y+11),Vector2(column_width-140,22),12,INK_FAINT)
-	row_y += 48
-	paragraph(profiles,model.prep_profile_hint(),Vector2(120,row_y-4),Vector2(column_width-140,34),12,INK_SOFT)
-	row_y += 38
-	text(profiles,"Цель сбора",Vector2(20,row_y+11),Vector2(110,22),14,INK_SOFT,"strong")
-	var magnet: Dictionary = model.balance["specializations"]["magnet"]
-	if not model.spec_unlocked("magnet"):
-		text(profiles,"Откроется на 5-м уровне магнита",Vector2(120,row_y+11),Vector2(column_width-140,22),12,INK_FAINT)
-		paragraph(profiles,"До этого находки подбираются только в радиусе касания.",Vector2(120,row_y+42),Vector2(column_width-140,30),12,INK_SOFT)
-	else:
-		var magnet_keys: Array = magnet["options"].keys()
-		var magnet_names: Array[String] = []
-		for key in magnet_keys: magnet_names.append(str(magnet["options"][key]["name"]))
-		var magnet_buttons := segmented(profiles,Vector2(120,row_y),column_width-140,magnet_names,magnet_keys.find(model.choice("magnet")),func(index: int): _choose("magnet",str(magnet_keys[index])),40)
-		for index in range(magnet_buttons.size()): magnet_buttons[index].tooltip_text = str(magnet["options"][magnet_keys[index]].get("hint",""))
-		paragraph(profiles,str(magnet["options"][model.choice("magnet")].get("hint","")),Vector2(120,row_y+42),Vector2(column_width-140,30),12,INK_SOFT)
+	var right := Vector2(28,162)
 	# Active items: everything in stock goes into the next run, one charge of
 	# each, bought with gold or made from materials. Diamonds never buy them.
 	var items := slab(self,right,Vector2(column_width,262))
@@ -1329,11 +1405,6 @@ func _choose(track: String, option: String) -> void:
 	hud.show_menu_soon()
 	game.toast(message)
 
-func _choose_prep(profile_id: String) -> void:
-	var message := model.set_prep_profile(profile_id)
-	hud.show_menu_soon()
-	game.toast(message)
-
 func _toggle_slot(id: String) -> void:
 	var loadout: Array = model.profile["active_loadout"]
 	var message := ""
@@ -1356,19 +1427,20 @@ func _craft_item(id: String) -> void:
 
 func celebrate_upgrade(frame: Control, dimensions: Vector2, level: int, maximum: bool) -> void:
 	# Purchase confirmation: the row glows hold-yellow, bumps, and a burst and
-	# the new level rise from it.
-	var glow := ColorRect.new()
-	glow.color = Color(HOLD,.55)
-	glow.size = dimensions-Vector2(0,4)
-	glow.material = rounded_material(glow.size,10)
-	glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	frame.add_child(glow)
-	create_tween().tween_property(glow,"modulate:a",0.0,.7).set_trans(Tween.TRANS_SINE).set_delay(.12)
-	hud.pulse(frame,.04)
-	var burst := PlayGauges.Burst.new()
-	burst.color = HOLD
-	burst.position = Vector2(dimensions.x-87,dimensions.y*.5)
-	frame.add_child(burst)
+	# the new level rise from it. Without flashes only the level rises.
+	if not hud.effects_reduced():
+		var glow := ColorRect.new()
+		glow.color = Color(HOLD,.55)
+		glow.size = dimensions-Vector2(0,4)
+		glow.material = rounded_material(glow.size,10)
+		glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		frame.add_child(glow)
+		create_tween().tween_property(glow,"modulate:a",0.0,.7).set_trans(Tween.TRANS_SINE).set_delay(.12)
+		hud.pulse(frame,.04)
+		var burst := PlayGauges.Burst.new()
+		burst.color = HOLD
+		burst.position = Vector2(dimensions.x-87,dimensions.y*.5)
+		frame.add_child(burst)
 	var rise := PlayGauges.FloatText.new()
 	rise.text = "Максимум!" if maximum else "Ур. %d" % level
 	rise.font = hud.heading_font
@@ -1414,65 +1486,9 @@ func section(parent: Node, value: String) -> void:
 	text(parent,value,Vector2(20,14),Vector2(400,24),17,INK,"display")
 
 func build_settings() -> void:
-	title(self,"Настройки",Vector2(28,80),500,32)
-	var column_width := 500.0 if landscape else 484.0
-	var compact := landscape or size.y < 950.0
-	var graphics_h := 186.0 if compact else 198.0
-	var graphics := slab(self,Vector2(28,126 if compact else 138),Vector2(column_width,graphics_h))
-	section(graphics,"Графика")
-	var control_x := 150.0
-	var control_width := column_width-control_x-20
-	text(graphics,"Качество",Vector2(20,54 if compact else 58),Vector2(140,22),15,INK_SOFT)
-	var quality := str(model.profile.get("graphics_quality","balanced"))
-	var keys := ["high","balanced","battery"]
-	segmented(graphics,Vector2(control_x,44 if compact else 48),control_width,["Высокая","Баланс","Экономия"],keys.find(quality),func(index: int): game.set_graphics_quality(keys[index]),40)
-	text(graphics,"Цены находок",Vector2(20,98 if compact else 106),Vector2(140,22),15,INK_SOFT)
-	var prices_always := str(model.profile.get("loot_prices","near"))=="always"
-	var modes := ["near","always"]
-	var prices := segmented(graphics,Vector2(control_x,88 if compact else 96),control_width,["Рядом","Всегда"],1 if prices_always else 0,func(index: int): hud.set_loot_prices(modes[index]),40)
-	prices[0].tooltip_text = "Цена видна у находок рядом и на линии прицела"
-	# Camera scale: 100 % is the original framing. Larger values only narrow
-	# the picture; the fall edge and route rules stay the same.
-	text(graphics,"Масштаб",Vector2(20,142 if compact else 154),Vector2(140,22),15,INK_SOFT)
-	var zoom_levels := model.camera_zoom_levels()
-	var zoom_names: Array = []
-	for zoom in zoom_levels: zoom_names.append("%d%%" % roundi(float(zoom)*100))
-	var zoom_buttons := segmented(graphics,Vector2(control_x,132 if compact else 144),control_width,zoom_names,zoom_levels.find(model.camera_zoom()),func(index: int): game.set_camera_zoom(float(zoom_levels[index])),40)
-	for button in zoom_buttons: button.tooltip_text = "Крупнее герой и опоры. Граница падения не меняется."
-	# Short portrait screens set the four switches as a 2×2 grid without
-	# subtitles, so the controls block keeps its room.
-	var switches := [["Музыка","Мелодии лагеря и экспедиций","music",hud.toggle_music],["Звук","Бросок, зацеп и находки","sound",hud.toggle_sound],
-		["Вибрация","Короткий отклик при зацепе","vibration",hud.toggle_vibration],["Подсказки","Сообщения внизу экрана","notifications",hud.toggle_notifications]]
-	var feedback_h := 150.0 if compact else 248.0
-	var feedback_y := (126 + graphics_h + 12) if compact else 350.0
-	var feedback := slab(self,Vector2(28,feedback_y),Vector2(column_width,feedback_h))
-	section(feedback,"Звук и отклик")
-	for index in range(switches.size()):
-		var entry: Array = switches[index]
-		var on := bool(model.profile.get(str(entry[2]),true))
-		if compact:
-			var half := (column_width-52)*.5
-			settings_switch(feedback,str(entry[0]),"",Vector2(20+(index%2)*(half+12),46+(index/2)*50),half,on,entry[3])
-		else:
-			settings_switch(feedback,str(entry[0]),str(entry[1]),Vector2(20,50+index*48),column_width-40,on,entry[3])
-	var help_y := (feedback_y + feedback_h + 12) if compact else 612.0
-	var help_h := minf(size.y - 90.0 - help_y, 302.0) if not landscape else 412.0
-	var help_at := Vector2(552,138) if landscape else Vector2(28,help_y)
-	var help_size := Vector2(500,412) if landscape else Vector2(484,help_h)
-	var help := slab(self,help_at,help_size)
-	section(help,"Управление")
-	var instructions := [["Брось крюк","Коснись где удобно, потяни как стик и отпусти."],["Раскачайся","На канате веди палец влево или вправо."],["Выбери длину","Держи строго вверх или вниз 0,28 секунды."],["Отцепись","Подними палец. Затем снова прицелься."]]
-	if not hud.touch_controls_hint:
-		instructions = [["Брось крюк","Зажми ЛКМ, прицелься и отпусти."],["Раскачайся","A / D или стрелки."],["Выбери длину","W / S или колесо мыши."],["Отцепись","Пробел, затем целься снова."]]
-	var step := (help_size.y-54)/instructions.size()
-	for index in range(instructions.size()):
-		var row_y := 46+index*step
-		var badge := slab(help,Vector2(20,row_y+2),Vector2(32,32),SLATE,SLATE_LIP,3)
-		text(badge,str(index+1),Vector2(0,2),Vector2(32,26),16,STONE,"display").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		text(help,instructions[index][0],Vector2(64,row_y),Vector2(help_size.x-84,20),15,INK,"strong")
-		paragraph(help,instructions[index][1],Vector2(64,row_y+20),Vector2(help_size.x-84,36),12)
-	var version := text(help,"Версия "+GameModel.BUILD_VERSION,Vector2(help_size.x-180,18),Vector2(160,20),12,INK_SOFT)
-	version.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	# Kept: the page's controls call back into it.
+	settings_page = SettingsPage.new(self)
+	settings_page.build()
 
 func _notification(what: int) -> void:
 	# Kept pages live off the tree; they go with the lobby.

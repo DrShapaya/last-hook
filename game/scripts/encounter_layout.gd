@@ -306,7 +306,7 @@ func _try_obstacle(candidate: Dictionary, index: int) -> bool:
 				if not transition_clear(contact,branch["exit_pos"],candidate): return false
 		for id in nearby_ids(p.y-6,p.y+6):
 			var spring: Dictionary = anchors[id]
-			if GripSpec.kind_of(spring)==GripSpec.SPRING and not transition_clear(spring["pos"],spring["pos"]+GripSpec.exit_direction(spring)*GripSpec.SPRING_LANE,candidate): return false
+			if GripSpec.kind_of(spring)==GripSpec.SPRING and not transition_clear(spring["pos"],spring["pos"]+GripSpec.exit_direction(spring)*spring_lane(),candidate): return false
 	var kept: Array[Vector2i] = []
 	for edge in edges:
 		if transition_clear(anchors[edge.x]["pos"],anchors[edge.y]["pos"],candidate): kept.append(edge)

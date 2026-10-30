@@ -13,21 +13,43 @@ const RIDGE_NEAR := Color("8dbde8")
 const STONE := Color("efebe1")
 const STONE_SHADE := Color("dcd5c4")
 const STONE_LIP := Color("b9af97")
-const INK := Color("1f2b35")
-const INK_SOFT := Color("55636d")
-const INK_FAINT := Color("8b959b")
+# Colours the accessibility settings repaint; see apply_palette.
+static var INK := Color("1f2b35")
+static var INK_SOFT := Color("55636d")
+static var INK_FAINT := Color("8b959b")
 const SLATE := Color("24323d")
 const SLATE_LIP := Color("121b22")
-const HOLD := Color("f6c32f")
+static var HOLD := Color("f6c32f")
 const HOLD_LIP := Color("b88a12")
 const ROPE := Color("b5712b")
-const COIN := Color("c98612")
+static var COIN := Color("c98612")
 const COIN_LIGHT := Color("ffd15c")
 const CRYSTAL := Color("2f7fd6")
 const CRYSTAL_LIGHT := Color("9fd6ff")
-const MOSS := Color("4a9a52")
-const DANGER := Color("cc4b37")
-const LOOT_COLORS := [Color("e4b35e"),Color("f08f72"),Color("86c6a0"),Color("78d5d2"),Color("af9bdf"),Color("d7dcea")]
+static var MOSS := Color("4a9a52")
+static var DANGER := Color("cc4b37")
+static var LOOT_COLORS: Array = [Color("e4b35e"),Color("f08f72"),Color("86c6a0"),Color("78d5d2"),Color("af9bdf"),Color("d7dcea")]
+# Schemes for colour vision: red and green move to orange and blue, blue and
+# yellow move to pink and teal.
+const SCHEMES := {
+	"normal":{"moss":Color("4a9a52"),"danger":Color("cc4b37"),"hold":Color("f6c32f"),"coin":Color("c98612"),
+		"rarity":[Color("e0a83a"),Color("e8833a"),Color("e9bf4f"),Color("6fc6e8"),Color("a98fdc"),Color("f3d478")]},
+	"red_green":{"moss":Color("2f7fd6"),"danger":Color("b8520a"),"hold":Color("f6c32f"),"coin":Color("c98612"),
+		"rarity":[Color("e3b23c"),Color("d55e00"),Color("f0e442"),Color("56b4e9"),Color("cc79a7"),Color("f3f0e0")]},
+	"blue_yellow":{"moss":Color("1f9d84"),"danger":Color("c43a5e"),"hold":Color("f58f7a"),"coin":Color("c4553f"),
+		"rarity":[Color("e07a7a"),Color("d55e00"),Color("f2a2c0"),Color("35c0b0"),Color("b0409a"),Color("f3f0e0")]}
+}
+
+static func apply_palette(scheme: String, high_contrast: bool) -> void:
+	var colors: Dictionary = SCHEMES.get(scheme,SCHEMES["normal"])
+	MOSS = colors["moss"]
+	DANGER = colors["danger"]
+	HOLD = colors["hold"]
+	COIN = colors["coin"]
+	ItemCatalog.rarity_colors = colors["rarity"]
+	INK = Color("0b1217") if high_contrast else Color("1f2b35")
+	INK_SOFT = Color("2a333b") if high_contrast else Color("55636d")
+	INK_FAINT = Color("46525b") if high_contrast else Color("8b959b")
 
 # The route as a rope: a dotted path from the start to the summit flag, the
 # climbed part laid as twisted rope, act boundaries as notches, the personal
@@ -52,8 +74,8 @@ class RouteLine extends Control:
 		return 6+(size.x-34)*clampf(meters/maxf(1,summit),0,1)
 
 	func _draw() -> void:
-		var ink := STONE if on_dark else INK
-		var soft := Color("c9d2d8") if on_dark else INK_SOFT
+		var ink := STONE if on_dark else MenuSurface.INK
+		var soft := Color("c9d2d8") if on_dark else MenuSurface.INK_SOFT
 		var y := track_y()
 		var left := 6.0
 		var right := size.x-28
@@ -78,27 +100,27 @@ class RouteLine extends Control:
 				draw_line(Vector2(twist,y+2),Vector2(twist+3,y-3),Color("e0a15a",.8),1.2,true)
 				twist += 5
 		draw_circle(Vector2(left,y),4.5,ink)
-		draw_circle(Vector2(left,y),2,HOLD)
+		draw_circle(Vector2(left,y),2,MenuSurface.HOLD)
 		# Summit flag at the end of the path.
 		var peak := Vector2(size.x-16,y)
 		draw_colored_polygon(PackedVector2Array([peak+Vector2(-9,4),peak+Vector2(0,-6),peak+Vector2(9,4)]),Color(ink,.85))
 		draw_line(peak+Vector2(0,-4),peak+Vector2(0,-27),ink,2,true)
-		draw_colored_polygon(PackedVector2Array([peak+Vector2(1,-27),peak+Vector2(15,-23),peak+Vector2(13,-19),peak+Vector2(1,-16)]),HOLD)
+		draw_colored_polygon(PackedVector2Array([peak+Vector2(1,-27),peak+Vector2(15,-23),peak+Vector2(13,-19),peak+Vector2(1,-16)]),MenuSurface.HOLD)
 		var taken: Array[Rect2] = []
 		if current>=0:
 			var at := Vector2(x_of(current),y)
 			draw_circle(at,8,ink)
-			draw_circle(at,5,HOLD)
-			taken.append(tag("%d м" % roundi(current),at.x,strong,HOLD,INK,15))
+			draw_circle(at,5,MenuSurface.HOLD)
+			taken.append(tag("%d м" % roundi(current),at.x,strong,MenuSurface.HOLD,MenuSurface.INK,15))
 		if record>0:
 			var at := x_of(record)
 			# The record is a hold: a little faceted pebble on the path.
 			draw_colored_polygon(PackedVector2Array([Vector2(at-6,y+1),Vector2(at-3,y-5),Vector2(at+4,y-5),Vector2(at+6,y+1),Vector2(at+2,y+5),Vector2(at-4,y+5)]),HOLD_LIP)
-			draw_colored_polygon(PackedVector2Array([Vector2(at-5,y),Vector2(at-2,y-4),Vector2(at+3,y-4),Vector2(at+5,y),Vector2(at+1,y+3),Vector2(at-3,y+3)]),HOLD)
+			draw_colored_polygon(PackedVector2Array([Vector2(at-5,y),Vector2(at-2,y-4),Vector2(at+3,y-4),Vector2(at+5,y),Vector2(at+1,y+3),Vector2(at-3,y+3)]),MenuSurface.HOLD)
 			var rect := tag_rect("Рекорд %d м" % roundi(record),at,font,13)
 			var free := true
 			for other in taken: free = free and not other.grow(4).intersects(rect)
-			if free: tag("Рекорд %d м" % roundi(record),at,font,Color(SLATE,.9) if not on_dark else Color(STONE,.92),STONE if not on_dark else INK,13)
+			if free: tag("Рекорд %d м" % roundi(record),at,font,Color(SLATE,.9) if not on_dark else Color(STONE,.92),STONE if not on_dark else MenuSurface.INK,13)
 		var use := font if font!=null else ThemeDB.fallback_font
 		if not caption.is_empty():
 			draw_string(use,Vector2(left-2,y+24),caption,HORIZONTAL_ALIGNMENT_LEFT,size.x*.6,13,soft)
@@ -138,6 +160,105 @@ class RouteLine extends Control:
 		draw_colored_polygon(PackedVector2Array([Vector2(tip-5,rect.end.y-1),Vector2(tip+5,rect.end.y-1),Vector2(tip,rect.end.y+5)]),face)
 		draw_string(use if use!=null else ThemeDB.fallback_font,Vector2(rect.position.x+8,rect.position.y+16),value,HORIZONTAL_ALIGNMENT_LEFT,-1,font_size,color)
 		return rect
+
+# A value on a rope: a recessed groove, the rope laid in it up to the value and
+# a raised slate knob, like the switches. The value is written at the right
+# end. It takes taps and drags itself; LobbyView keeps menu swipes off it.
+class RopeSlider extends Control:
+	signal changed(value: float)
+	signal committed(value: float)
+	const LABEL_WIDTH := 62.0
+	const HEIGHT := 44.0
+	const KNOB := Vector2(30,38)
+	const GROOVE := 20.0
+	const SLOP := 10.0
+	var value := 0.0
+	var minimum := 0.0
+	var maximum := 100.0
+	var step := 1.0
+	var format: Callable
+	var font: Font
+	var dragging := false
+	# A touch may still become a page scroll: the value moves only on a tap or
+	# once the finger has clearly gone sideways.
+	var armed := false
+	var press_at := Vector2.ZERO
+
+	func _ready() -> void:
+		add_to_group("menu_slider")
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+
+	func track_left() -> float:
+		return KNOB.x*.5
+
+	func track_width() -> float:
+		return maxf(1.0,size.x-LABEL_WIDTH-KNOB.x)
+
+	func ratio() -> float:
+		return clampf((value-minimum)/maxf(.0001,maximum-minimum),0,1)
+
+	func _set_from(x: float) -> void:
+		var next := clampf(minimum+(x-track_left())/track_width()*(maximum-minimum),minimum,maximum)
+		next = clampf(minimum+snappedf(next-minimum,step),minimum,maximum)
+		if is_equal_approx(next,value): return
+		value = next
+		queue_redraw()
+		changed.emit(value)
+
+	func _gui_input(event: InputEvent) -> void:
+		var pressing: bool = (event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT) or event is InputEventScreenTouch
+		if pressing and event.pressed:
+			armed = true
+			press_at = event.position
+			accept_event()
+		elif pressing and armed:
+			if not dragging: _set_from(event.position.x)
+			armed = false
+			dragging = false
+			queue_redraw()
+			committed.emit(value)
+			accept_event()
+		elif armed and (event is InputEventMouseMotion or event is InputEventScreenDrag):
+			var travel: Vector2 = event.position-press_at
+			if not dragging and absf(travel.x)>=SLOP and absf(travel.x)>absf(travel.y):
+				dragging = true
+				queue_redraw()
+			if dragging: _set_from(event.position.x)
+			accept_event()
+
+	func _plate(rect: Rect2, face: Color, lip: Color, lip_size: int) -> void:
+		var box := StyleBoxFlat.new()
+		box.bg_color = face
+		box.border_color = lip
+		box.border_width_bottom = lip_size
+		box.set_corner_radius_all(6)
+		box.corner_detail = 1
+		draw_style_box(box,rect)
+
+	func _draw() -> void:
+		var y := size.y*.5
+		var left := track_left()
+		var at := left+track_width()*ratio()
+		var groove := Rect2(left-KNOB.x*.5,y-GROOVE*.5,track_width()+KNOB.x,GROOVE)
+		_plate(groove,STONE_SHADE,Color.TRANSPARENT,0)
+		# The rope lies in the groove up to the knob, its strands twisted.
+		if at>groove.position.x+4:
+			var rope_y := y
+			draw_line(Vector2(groove.position.x+4,rope_y),Vector2(at,rope_y),Color("7a4a1c"),10)
+			draw_line(Vector2(groove.position.x+4,rope_y-1),Vector2(at,rope_y-1),ROPE,7)
+			var twist := groove.position.x+6
+			while twist<at-4:
+				draw_line(Vector2(twist,rope_y+3),Vector2(twist+4,rope_y-4),Color("e0a15a",.85),1.6,true)
+				twist += 6
+		# A raised block, the same as a switch knob. It sinks while held.
+		var lift := 0.0 if dragging else -1.0
+		var knob := Rect2(at-KNOB.x*.5,y-KNOB.y*.5+lift,KNOB.x,KNOB.y)
+		_plate(knob,SLATE,SLATE_LIP,2 if dragging else 4)
+		draw_rect(Rect2(at-2,knob.position.y+9,4,KNOB.y-20),MenuSurface.HOLD)
+		var use := font if font!=null else ThemeDB.fallback_font
+		var shown: String = format.call(value) if format.is_valid() else str(roundi(value))
+		var width := use.get_string_size(shown,HORIZONTAL_ALIGNMENT_LEFT,-1,16).x
+		draw_string(use,Vector2(size.x-width,y+6),shown,HORIZONTAL_ALIGNMENT_LEFT,-1,16,MenuSurface.INK)
 
 var hud
 var game
@@ -252,7 +373,19 @@ func segmented(parent: Node, at: Vector2, width: float, options: Array, selected
 		button.add_theme_stylebox_override("hover",hover)
 		buttons.append(button)
 	paint_segments(buttons,selected)
+	buttons[0].set_meta("thumb",thumb)
+	buttons[0].set_meta("left",at.x+inset)
+	buttons[0].set_meta("each",each)
 	return buttons
+
+# Moves the thumb from outside, when a choice changed for another reason.
+func pick_segment(buttons: Array[Button], index: int) -> void:
+	var thumb: Panel = buttons[0].get_meta("thumb")
+	if int(thumb.get_meta("index",-1))==index: return
+	thumb.set_meta("index",index)
+	thumb.visible = index>=0
+	thumb.position.x = float(buttons[0].get_meta("left"))+maxi(index,0)*float(buttons[0].get_meta("each"))
+	paint_segments(buttons,index)
 
 func paint_segments(buttons: Array[Button], selected: int) -> void:
 	for index in range(buttons.size()):
@@ -271,6 +404,33 @@ func _segment_pressed(buttons: Array[Button], thumb: Panel, index: int, callback
 	var tween := thumb.create_tween()
 	tween.tween_property(thumb,"position:x",left+index*each,.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	paint_segments(buttons,index)
+
+func slider(parent: Node, at: Vector2, width: float, value: float, minimum: float, maximum: float, step: float, format: Callable, callback: Callable) -> RopeSlider:
+	var node := RopeSlider.new()
+	node.position = at
+	node.size = Vector2(width,RopeSlider.HEIGHT)
+	node.minimum = minimum
+	node.maximum = maximum
+	node.step = step
+	node.value = value
+	node.format = format
+	node.font = hud.strong_font
+	node.changed.connect(callback)
+	parent.add_child(node)
+	return node
+
+# One settings line: the name and a hint on the left. Returns the holder of the
+# control on the right.
+func settings_row(parent: Node, y: float, width: float, title_text: String, hint: String) -> Control:
+	var control_x := width*.44
+	text(parent,title_text,Vector2(20,y+(2 if not hint.is_empty() else 11)),Vector2(control_x-24,22),15,INK,"strong")
+	if not hint.is_empty(): paragraph(parent,hint,Vector2(20,y+24),Vector2(control_x-24,18),12)
+	var holder := Control.new()
+	holder.position = Vector2(control_x,y)
+	holder.size = Vector2(width-control_x-20,44)
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(holder)
+	return holder
 
 # A small hold-yellow "Скоро" plate for features that are not open yet.
 func soon_tag(parent: Node, at: Vector2, width: float = 54.0) -> Panel:

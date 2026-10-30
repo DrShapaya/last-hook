@@ -17,19 +17,31 @@ const ROLES := ["main","tutorial","branch","recovery","rest","reward","auxiliary
 # Existing tuning gathered in one place; values are unchanged.
 const ROOT_SECONDS := 2.6
 const ROOT_WARNING := 2.1
-# The spring used to scale the whole velocity by 1.13. It now adds the same
-# share of speed along its exit direction, weighted by how well the swing
-# loads the bough in that direction.
-const SPRING_BONUS := .13
+# A spring throws the hero along its exit at a fixed speed, even from a still
+# hang; a swing along the exit adds up to SPRING_TIMING of that speed, and half
+# of the speed across the exit is lost to the throw.
+const SPRING_THROW := 10.0
+const SPRING_TIMING := .2
+const SPRING_FULL_SWING := 6.0
+const SPRING_KEEP_ACROSS := .5
 # Ice: the contact starts at the old .18 m/s and accelerates down the grip's
 # surface, never further than 1.2 m and never off the drawn stone. Releasing
 # while it slides carries that motion into the flight.
 const ICE_SLIDE_RATE := .18
 const ICE_SLIDE_ACCEL := .9
 const ICE_SLIDE_MAX := 1.2
-const ICE_CARRY := 1.0
+const ICE_CARRY := 1.5
+# Ice is a plate leaning along its slide. The hook hangs under it, so it holds
+# for a moment and then runs down the lower edge and off the low end, about
+# as long a hold as a root gives from the high end.
+const ICE_GRACE := .6
+const ICE_PLATE_ACCEL := .45
+const ICE_LOWER_EDGE := .15
 # Distance the spring's throw must keep clear of rock, in its exit direction.
 const SPRING_LANE := 2.4
+# Mask levels are drawn for the full throw; older worlds keep the short lane,
+# so saved attempts regenerate unchanged.
+const SPRING_THROW_LANE := 4.5
 
 static func kind_of(object: Dictionary) -> int:
 	return clampi(int(object.get("kind",STONE)),STONE,CRYSTAL)
@@ -86,6 +98,46 @@ static func slide_distance(object: Dictionary, held: float) -> float:
 	if kind_of(object)!=ICE or held<=0: return 0.0
 	return minf(ICE_SLIDE_MAX,held*ICE_SLIDE_RATE+.5*ICE_SLIDE_ACCEL*held*held)
 
+# How far a hook has run down a plate `held` seconds after the plate let go.
+static func plate_run(held: float) -> float:
+	return held*ICE_SLIDE_RATE+.5*ICE_PLATE_ACCEL*held*held if held>0 else 0.0
+
+# Ice sliding sideways is a leaning plate. Saved worlds from before v13 slide
+# straight down and keep walking their contour.
+static func plate(object: Dictionary) -> bool:
+	return kind_of(object)==ICE and absf(slide_direction(object).x)>.5
+
+# Lean of the plate: its long axis lies along the slide.
+static func plate_tilt(object: Dictionary) -> float:
+	if not plate(object): return 0.0
+	var direction := slide_direction(object)
+	return (direction if direction.x>0 else -direction).angle()
+
+# In the plate's own frame: where the hook hangs on the lower edge, the length
+# of edge left before the low end, and the frame's way back to the world.
+static func _plate_path(object: Dictionary, contact: Vector2) -> Dictionary:
+	var pos: Vector2 = object["pos"]
+	var tilt := plate_tilt(object)
+	var side := signf(slide_direction(object).rotated(-tilt).x)
+	var contour := outline(object)
+	var bottom := INF
+	for point in contour: bottom = minf(bottom,(point-pos).rotated(-tilt).y)
+	var low_end := -INF
+	for point in contour:
+		var local := (point-pos).rotated(-tilt)
+		if local.y<=bottom+ICE_LOWER_EDGE: low_end = maxf(low_end,local.x*side)
+	var at := (contact-pos).rotated(-tilt).x
+	return {"start":pos+Vector2(at,bottom).rotated(tilt),"left":maxf(0,low_end-at*side)}
+
+static func slipped(object: Dictionary, contact: Vector2, held: float) -> bool:
+	return plate(object) and held>=seconds_to_slip(object,contact)
+
+# How long the plate holds a hook caught at `contact`.
+static func seconds_to_slip(object: Dictionary, contact: Vector2) -> float:
+	if not plate(object): return INF
+	var left: float = _plate_path(object,contact)["left"]
+	return ICE_GRACE+(sqrt(ICE_SLIDE_RATE*ICE_SLIDE_RATE+2*ICE_PLATE_ACCEL*left)-ICE_SLIDE_RATE)/ICE_PLATE_ACCEL
+
 static func slide_offset(object: Dictionary, held: float) -> Vector2:
 	return slide_direction(object)*slide_distance(object,held)
 
@@ -104,7 +156,8 @@ static func outline(object: Dictionary) -> PackedVector2Array:
 	var pos: Vector2 = object["pos"]
 	var result := PackedVector2Array()
 	if object.has("surface") or object.has("polygon"):
-		for point in object["surface"] if object.has("surface") else object["polygon"]: result.append(point+pos)
+		var tilt := plate_tilt(object)
+		for point in object["surface"] if object.has("surface") else object["polygon"]: result.append(point.rotated(tilt)+pos)
 	else:
 		var half: Vector2 = object["dimensions"]*.5
 		result = PackedVector2Array([pos-half,pos+Vector2(half.x,-half.y),pos+half,pos+Vector2(-half.x,half.y)])
@@ -133,6 +186,10 @@ static func surface_point(object: Dictionary, point: Vector2, direction: Vector2
 # it reaches; every other type keeps the contact. The walk is continuous, so
 # the hook can neither jump across a thin grip nor leave the stone.
 static func contact_after(object: Dictionary, contact: Vector2, held: float) -> Vector2:
+	if plate(object):
+		var path := _plate_path(object,contact)
+		if held<ICE_GRACE: return contact.lerp(path["start"],maxf(0,held)/ICE_GRACE)
+		return path["start"]+slide_direction(object)*minf(path["left"],plate_run(held-ICE_GRACE))
 	var remaining := slide_distance(object,held)
 	if remaining<=0: return contact
 	var contour := outline(object)
@@ -179,20 +236,25 @@ static func slide_contacts(object: Dictionary) -> Array[Vector2]:
 			result.append(contact_after(object,landing,full_slide))
 	return result
 
-static func exit_direction(object: Dictionary) -> Vector2:
-	var direction: Vector2 = object.get("exit_dir",Vector2.UP)
-	return direction.normalized() if direction.length_squared()>.0001 else Vector2.UP
+# World heights grow upwards, so Godot's Vector2.UP would point down the mountain.
+const MOUNTAIN_UP := Vector2(0,1)
 
-# How much of the spring's bonus a release at this velocity collects.
+static func exit_direction(object: Dictionary) -> Vector2:
+	var direction: Vector2 = object.get("exit_dir",MOUNTAIN_UP)
+	return direction.normalized() if direction.length_squared()>.0001 else MOUNTAIN_UP
+
+# How much of the spring's timing bonus a release at this velocity collects.
 static func spring_load(object: Dictionary, velocity: Vector2) -> float:
 	if kind_of(object)!=SPRING or velocity.length_squared()<.0001: return 0.0
-	return clampf(velocity.normalized().dot(exit_direction(object)),0,1)
+	return clampf(velocity.dot(exit_direction(object))/SPRING_FULL_SWING,0,1)
 
 static func release_velocity(object: Dictionary, velocity: Vector2, slide_velocity: Vector2 = Vector2.ZERO) -> Vector2:
 	if kind_of(object)==ICE: return velocity+slide_velocity*ICE_CARRY
-	var load := spring_load(object,velocity)
-	if load<=0: return velocity
-	return velocity+exit_direction(object)*velocity.length()*SPRING_BONUS*load
+	if kind_of(object)!=SPRING: return velocity
+	var exit := exit_direction(object)
+	var along := velocity.dot(exit)
+	var throw := SPRING_THROW*(1+SPRING_TIMING*spring_load(object,velocity))
+	return (velocity-exit*along)*SPRING_KEEP_ACROSS+exit*maxf(along,throw)
 
 static func choice_exits(object: Dictionary) -> Array:
 	return object.get("choice_exits",[]) if kind_of(object)==CRYSTAL else []

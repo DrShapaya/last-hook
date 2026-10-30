@@ -4,8 +4,8 @@ extends Node
 # Background music: a calm camp theme in the menus and one theme per
 # expedition on the climb (assets/music, composed by tools/make_music.py).
 # Two players cross-fade, so a switch never cuts a phrase off. Pause and the
-# result screen only lower the volume. The "music" profile switch turns it
-# off without touching the sound effects.
+# result screen only lower the volume. The music volume setting turns it off
+# at zero without touching the sound effects.
 
 const TRACKS := {"camp":"res://assets/music/camp.wav","green_peak":"res://assets/music/mountain.wav",
 	"stone_spires":"res://assets/music/desert.wav","sky_city":"res://assets/music/winter.wav"}
@@ -25,6 +25,7 @@ func _ready() -> void:
 	for index in range(2):
 		var player := AudioStreamPlayer.new()
 		player.volume_db = SILENT_DB
+		player.bus = "Music"
 		add_child(player)
 		players.append(player)
 

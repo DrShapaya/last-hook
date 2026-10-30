@@ -4,9 +4,9 @@
 
 **Восхождение на одном крюке.** Бросай крюк, раскачивайся на канате, отпускай в нужный момент и лети к следующей опоре — до самой вершины.
 
-Android · Windows · Godot 4.7 · версия **0.16.1**
+Android · Windows · Godot 4.7 · версия **0.16.2**
 
-[Скачать](https://github.com/DrShapaya/last-hook/releases) · [Как устроена игра](docs/DESIGN.md) · [Создание уровней](docs/LEVEL_PIPELINE.md) · [Что нового](docs/releases/v0.16.1.md)
+[Скачать](https://github.com/DrShapaya/last-hook/releases) · [Как устроена игра](docs/DESIGN.md) · [Создание уровней](docs/LEVEL_PIPELINE.md) · [Что нового](docs/releases/v0.16.2.md)
 
 <img src="docs/screenshots/green-peak.png" width="200" alt="Стандартная гора"> <img src="docs/screenshots/stone-spires.png" width="200" alt="Пустынный каньон"> <img src="docs/screenshots/sky-city.png" width="200" alt="Снежная вершина">
 
@@ -65,7 +65,9 @@ Android · Windows · Godot 4.7 · версия **0.16.1**
 ./tools/build.ps1 -Target All
 ```
 
-Скрипт запекает уровни, прогоняет 21 набор headless-тестов (`game/tests/test_*.gd`), собирает EXE и APK и проверяет подпись. Параметры: `-Target Windows|Android`, `-Release`, `-SkipTests`, пути к SDK и ключу. Журналы и тестовые сохранения пишутся в `artifacts/`.
+Перед выпуском обновить список изменений для раздела «О нас»: `python tools/build_changelog.py` (собирает `docs/releases/*.md` в `game/data/changelog.json`). Ссылки на соцсети, политику и почту задаются в `game/data/about.json`; пустое поле скрывает кнопку.
+
+Скрипт запекает уровни, прогоняет 22 набора headless-тестов (`game/tests/test_*.gd`), собирает EXE и APK и проверяет подпись. Параметры: `-Target Windows|Android`, `-Release`, `-SkipTests`, пути к SDK и ключу. Журналы и тестовые сохранения пишутся в `artifacts/`.
 
 Один набор тестов вручную (`LASTHOOK_SAVE_DIR` — любая временная папка):
 

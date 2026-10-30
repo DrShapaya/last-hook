@@ -24,8 +24,9 @@ var facet_count := 4          # large planes on the front face
 var top_band_height := .16    # visible height of the top face (it carries the paint)
 var under_height := .25       # visible height of the underside under the front face
 var crack_pattern := "corners"
-# Paint on the top face: colour, share of the width, wear amount.
-var paint_profile := {"color":Color("e9a63a"),"width":.8,"wear":.15}
+# Paint on the top face: colour, share of the width, wear amount, share of the
+# top band it covers and the stroke's segments left bare.
+var paint_profile := {"color":Color("e9a63a"),"width":.8,"wear":.15,"height":.62,"gaps":[]}
 var rear_scale := .88         # rear footprint relative to the silhouette
 var seed_value := 0
 var bulge := .1               # how far the large facets rise over the front plane
@@ -52,6 +53,8 @@ const SHAPES := {
 	"crystal":[.98,.64,.90,.21,.16,.84,10],
 }
 const FAMILIES := ["stone","root","spring","ice","crystal"]
+# Bare segments of a broken paint stroke (see MountainVisuals._paint_band).
+const BROKEN_STROKE := [3,4,7,8]
 # Lowest drop of the body below the hitbox, even in a tight spot.
 const MIN_DROP := .22
 
@@ -87,8 +90,11 @@ static func for_grip(object: Dictionary, profile: GripBiomeProfile, room_below: 
 			var side := 1.0 if spec.split_x<0 else -1.0
 			spec.cracks.append(spec.split_x+side*w*random.randf_range(.32,.42))
 	spec.crack_pattern = "deep" if kind==GripSpec.ROOT else "vein" if kind==GripSpec.CRYSTAL else "corners"
-	# A short stroke across the crown, as on the reference, not a full bar.
-	spec.paint_profile = {"color":profile.paint_color(kind),"width":random.randf_range(.5,.64),"wear":random.randf_range(.10,.18)}
+	# The stroke tells how long a grip lasts: a permanent one carries a whole,
+	# broad bar, any other a shorter stroke broken in three.
+	var whole := GripSpec.lifetime(object)=="permanent"
+	var stroke := random.randf_range(.5,.64)
+	spec.paint_profile = {"color":profile.paint_color(kind),"width":.84 if whole else stroke+.05,"wear":random.randf_range(.10,.18),"height":.85 if whole else .62,"gaps":[] if whole else BROKEN_STROKE}
 	spec._build_outline(random,h,float(shape[5]))
 	return spec
 

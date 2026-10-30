@@ -148,6 +148,11 @@ func run_tests() -> void:
 	game.start_run(false)
 	game.hud.show_play()
 	air_release(game)
+	check(not game.focus_active() and game.focus_remaining==0.0,"the first level has no slow motion at all")
+	game.hud.update_play()
+	check(not game.hud.slowmo_indicator.visible,"no slow motion, no indicator")
+	game.model.set_level(GameModel.SLOWMO,3)
+	air_release(game)
 	var base_seconds: float = game.model.slowmo_seconds()
 	check(game.focus_active() and is_equal_approx(game.focus_remaining,base_seconds),"releasing the rope starts slow motion")
 	game.hud.update_play()
@@ -181,14 +186,14 @@ func run_tests() -> void:
 	check(game.focus_remaining==0 and game.focus_cooldown>0,"catching a grip ends slow motion and starts the cooldown")
 	game.sim.attached = false
 	game.focus_cooldown = 0
-	game.model.set_level(GameModel.SLOWMO,4)
+	game.model.set_level(GameModel.SLOWMO,5)
 	air_release(game)
-	check(is_equal_approx(game.focus_remaining,float(game.model.balance["slowmo_seconds"][3])) and game.focus_remaining>base_seconds,"an upgraded level gives a longer window")
+	check(is_equal_approx(game.focus_remaining,game.model.value_at(GameModel.SLOWMO,5)) and game.focus_remaining>base_seconds,"an upgraded level gives a longer window")
 	frames = 0
 	while game.focus_remaining>0 and frames<1000:
 		game._physics_process(dt)
 		frames += 1
-	check(absf(frames*dt-float(game.model.balance["slowmo_seconds"][3]))<=dt*1.01,"the upgraded window also lasts exactly its real-time duration")
+	check(absf(frames*dt-game.model.value_at(GameModel.SLOWMO,5))<=dt*1.01,"the upgraded window also lasts exactly its real-time duration")
 	# Landing ends the window: walking never runs slowed.
 	game.focus_cooldown = 0
 	game.world.obstacles.clear()
@@ -218,13 +223,13 @@ func run_tests() -> void:
 		if FileAccess.file_exists(path): DirAccess.remove_absolute(path)
 	var economy := GameModel.new(save_path)
 	economy.profile = GameModel.fresh_profile()
-	check(economy.max_level(GameModel.SLOWMO)==4 and economy.balance["slowmo_seconds"]==[.7,1.0,1.35,1.75],"slow motion has four levels: 0,70 / 1,00 / 1,35 / 1,75 s")
-	var durations: Array = economy.balance["slowmo_seconds"]
+	var durations: Array = economy.upgrade(GameModel.SLOWMO)["values"]
+	check(economy.max_level(GameModel.SLOWMO)==5 and durations==[0.0,.25,.5,.75,1.0],"slow motion has five levels up to 1 s")
 	var increasing := true
 	for index in range(1,durations.size()): increasing = increasing and float(durations[index])>float(durations[index-1])
 	check(increasing and float(durations[-1])<=1.8,"each level adds duration and the maximum stays short enough to stay fair")
 	economy.profile["gold"] = 500
-	check(economy.purchase(GameModel.SLOWMO).begins_with("Улучшено") and economy.level(GameModel.SLOWMO)==2 and economy.profile["gold"]==380,"the first slow motion level costs the same as other first steps")
+	check(economy.purchase(GameModel.SLOWMO).begins_with("Улучшено") and economy.level(GameModel.SLOWMO)==2 and economy.profile["gold"]==410,"the first slow motion level costs the same as other first steps")
 	check(economy.purchase(GameModel.SLOWMO)=="Пройди первый акт","later levels wait for the next act like every track")
 	var reloaded := GameModel.new(save_path)
 	check(reloaded.level(GameModel.SLOWMO)==2 and is_equal_approx(reloaded.slowmo_seconds(),float(durations[1])),"the slow motion level survives a restart")
@@ -232,11 +237,12 @@ func run_tests() -> void:
 	reloaded.profile["reached_acts"] = 3
 	reloaded.profile["summit_cleared"] = true
 	for step in range(10): reloaded.purchase(GameModel.SLOWMO)
-	check(reloaded.level(GameModel.SLOWMO)==4 and reloaded.cost(GameModel.SLOWMO)==0 and reloaded.purchase(GameModel.SLOWMO)=="Уже максимальный уровень","repeated purchases stop at the maximum level")
-	check(GameModel.new(save_path).level(GameModel.SLOWMO)==4,"the maximum level is saved")
+	check(reloaded.level(GameModel.SLOWMO)==5 and reloaded.cost(GameModel.SLOWMO)==0 and reloaded.purchase(GameModel.SLOWMO)=="Уже максимальный уровень","repeated purchases stop at the maximum level")
+	check(GameModel.new(save_path).level(GameModel.SLOWMO)==5,"the maximum level is saved")
 	game.model.profile = GameModel.fresh_profile()
 	game.model.profile["gold"] = 1000
 	game.state = "menu"
+	game.hud.equipment_category = "survival"
 	game.hud.select_menu("equipment")
 	await process_frame
 	var slowmo_row := false
@@ -248,14 +254,14 @@ func run_tests() -> void:
 	var bursts: Array = game.hud.content.find_children("*","Control",true,false).filter(func(node): return node is PlayGauges.Burst)
 	var level_label := false
 	for label in game.hud.content.find_children("*","Label",true,false):
-		if label.text=="Ур. 2/4": level_label = true
+		if label.text=="Ур. 2/5": level_label = true
 	check(game.model.level(GameModel.SLOWMO)==2 and bursts.size()==1 and level_label,"a purchase is confirmed with a burst and the new level")
-	game.model.set_level(GameModel.SLOWMO,4)
+	game.model.set_level(GameModel.SLOWMO,5)
 	game.hud.select_menu("equipment")
 	await process_frame
 	var max_label := false
 	for label in game.hud.content.find_children("*","Label",true,false):
-		if label.text=="Макс. ур. 4": max_label = true
+		if label.text=="Макс. ур. 5": max_label = true
 	check(max_label,"the maximum level is labelled")
 
 	# --- 4. Camera zoom -----------------------------------------------------
@@ -315,6 +321,7 @@ func run_tests() -> void:
 	game.model.profile = GameModel.fresh_profile()
 	game.state = "menu"
 	game.hud.menu_tab = "settings"
+	game.hud.settings_section = "controls"
 	game.hud.show_menu()
 	await process_frame
 	var zoom_button: Button = null

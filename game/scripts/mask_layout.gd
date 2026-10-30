@@ -445,6 +445,9 @@ func branch_allowed(point: Vector2, index: int) -> bool:
 		if zone.has_point(point): return false
 	return super.branch_allowed(point,index)
 
+func spring_lane() -> float:
+	return GripSpec.SPRING_THROW_LANE
+
 func _main_kind(index: int, random: RandomNumberGenerator) -> int:
 	var kind := super._main_kind(index,random)
 	return int(pinned_rows.get(index,kind))

@@ -375,6 +375,7 @@ func build_grip(object: Dictionary, parent: Node3D, mount: SurfaceMount) -> void
 	holder.add_child(socket)
 	var pivot := Node3D.new()
 	pivot.name = "Изгиб" if kind==GripSpec.SPRING else "Наклон"
+	pivot.rotation.z = GripSpec.plate_tilt(object)
 	holder.add_child(pivot)
 	var block := Node3D.new()
 	block.name = "Блок"
@@ -386,6 +387,7 @@ func build_grip(object: Dictionary, parent: Node3D, mount: SurfaceMount) -> void
 	# plate laid on the face.
 	var stone := grip_stone_color(rock,profile,kind)
 	var front := _block_mesh(block,spec,stone,profile,kind)
+	_grip_shadow(holder,object,spec,frame)
 	# No seam, ring or recess round the block: it stands out of the face,
 	# and its contact is the real shadow it casts.
 	_paint_band(block,spec,front,id)
@@ -399,11 +401,41 @@ func build_grip(object: Dictionary, parent: Node3D, mount: SurfaceMount) -> void
 		GripSpec.ICE: _ice_details(object,block,spec,profile,front)
 		GripSpec.CRYSTAL: _crystal_details(object,block,spec,profile,front)
 	if GripSpec.lifetime(object)=="permanent": _hardware(block,spec,profile,front)
+	# Only the contact shade darkens the face round a grip: small fittings
+	# would throw stray specks across the facets.
+	for mesh: MeshInstance3D in holder.find_children("*","MeshInstance3D",true,false):
+		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	# Where a dial or marker sits on the front face, in holder space.
 	var face := Vector2(spec.front_ring()[0].x*.15,(spec.front_ring()[0].y+spec.bounds().position.y)*.5)
 	# The dial stands clear of the faceted face, so no plane cuts into it.
 	object["face_point"] = frame*Vector3(face.x,face.y,_face_z(front,face,spec.protrusion())+spec.bulge+.06)
 	object["dial_size"] = clampf((spec.front_ring()[0].y-spec.bounds().position.y)*.78,.34,.5)
+
+# A cast shadow falls apart on the faceted face: planes turned from the sun
+# cannot take it, so it arrives in scraps. Every grip lies on one soft shade
+# instead, off to the lower right with the sun, facing the camera whatever the
+# tilt of its holder. It sits just over the stone it covers: the camera looks
+# straight down the mountain, so the height never shows, and rock standing
+# nearer than the block still hides it.
+func _grip_shadow(holder: Node3D, object: Dictionary, spec: GripVisualSpec, frame: Transform3D) -> void:
+	var bounds := spec.bounds()
+	var size := bounds.size*Vector2(1.5,1.7)
+	var center: Vector2 = object["pos"]+bounds.get_center()+Vector2(.18,-.3)
+	var block_z := holder.position.z+(holder.basis*frame.origin).z
+	var z := minf(_stone_front(Rect2(center-size*.5,size))+.03,block_z+.02)
+	var quad := QuadMesh.new()
+	quad.size = size
+	var material := ShaderMaterial.new()
+	material.shader = world.shader("contact_shade",CONTACT_SHADER)
+	material.set_shader_parameter("opacity",.36)
+	var shade := MeshInstance3D.new()
+	shade.name = "Тень зацепа"
+	shade.mesh = quad
+	shade.material_override = material
+	shade.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var unturned := holder.basis.inverse()
+	shade.transform = Transform3D(unturned,unturned*(Vector3(center.x,center.y,z)-holder.position))
+	holder.add_child(shade)
 
 # How far an outcrop may drop under its hitbox before it would reach a find,
 # another grip or a ledge below it; loot and grips keep clear stone round them.
@@ -587,7 +619,7 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 		target.append_array(PackedVector3Array(triangle))
 		target_colors.append(shade_of.call(triangle[0],triangle[1],triangle[2],salt))
 		triangles.append([triangle[0],triangle[1],triangle[2],1])
-	var body := _solid(block,"Каменный выступ",points,colors,stone_material,true,center)
+	var body := _solid(block,"Каменный выступ",points,colors,stone_material,false,center)
 	body.set_meta("visual_spec_bounds",bounds)
 	if ice:
 		# Clear ice over the stone where it freezes; a dusty salt crust where
@@ -595,7 +627,7 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 		var glaze := profile.material_color(GripSpec.ICE)
 		var cover := .45 if float(weather["dust"])>.5 else .78
 		for index in range(cap_colors.size()): cap_colors[index] = cap_colors[index].lerp(glaze,cover)
-		_solid(block,"Ледяной скол",cap_points,cap_colors,_ice_material(),true,center)
+		_solid(block,"Ледяной скол",cap_points,cap_colors,_ice_material(),false,center)
 	return triangles
 
 # Triangles between two closed rings of different sizes, both starting at
@@ -699,7 +731,7 @@ func _paint_band(block: Node3D, spec: GripVisualSpec, front: Array, id: int) -> 
 	var mid := (a.x+b.x)*.5
 	var left := maxf(mid-half,a.x+.04)
 	var right := minf(mid+half,b.x-.04)
-	var band := spec.top_band_height*.62
+	var band := spec.top_band_height*float(spec.paint_profile["height"])
 	var edge_y := func(x: float) -> float:
 		return lerpf(a.y,b.y,(x-a.x)/(b.x-a.x))-.05
 	# Only the planes under the band are searched: the rest of the face
@@ -745,7 +777,9 @@ func _paint_band(block: Node3D, spec: GripVisualSpec, front: Array, id: int) -> 
 		grid.append(points_in_column)
 	var points := PackedVector3Array()
 	var colors := PackedColorArray()
+	var gaps: Array = spec.paint_profile["gaps"]
 	for segment in range(segments):
+		if gaps.has(segment): continue
 		var tone := paint.lightened(random.randf_range(0,.02)) if random.randf()<.5 else paint.darkened(random.randf_range(0,.03))
 		for row in range(PAINT_ROWS):
 			var p0: Vector3 = grid[segment][row]
@@ -800,20 +834,31 @@ func _spring_details(object: Dictionary, block: Node3D, spec: GripVisualSpec, pr
 	plate.position = Vector3(spec.front_width*.18,top+.012,spec.shoulder()*.45)
 	var bolt: MeshInstance3D = world.box("Пружинное крепление_болт",Vector3.ZERO,Vector3(.07,.12,.07),metal,block)
 	bolt.position = plate.position+Vector3(0,.04,0)
-	# Keep the route cue as a semantic marker for gameplay/tests. The former
-	# large chevron was rendered as two orange sticks across the stone face.
-	var direction_marker := Node3D.new()
-	direction_marker.name = "Направление выхода"
-	direction_marker.set_meta("direction",GripSpec.exit_direction(object))
-	block.add_child(direction_marker)
+	# A solid painted arrowhead on the face, pointing where the spring throws.
+	# It stays flat and compact: the former long chevron read as two orange
+	# sticks across the stone.
+	var direction := GripSpec.exit_direction(object)
+	var across := direction.orthogonal()
+	var center := Vector2(0,(spec.front_ring()[0].y+spec.bounds().position.y)*.5)
+	var corners := [center+direction*.3,center-direction*.16+across*.24,center-direction*.04,center-direction*.16-across*.24]
+	var z := -INF
+	for corner in corners: z = maxf(z,_face_z(front,corner,spec.protrusion()))
+	var lifted: Array[Vector3] = []
+	# Clear of the facets' bulge, so no plane cuts through the arrow.
+	for corner in corners: lifted.append(Vector3(corner.x,corner.y,z+spec.bulge+.06))
+	var points := PackedVector3Array([lifted[0],lifted[1],lifted[2],lifted[0],lifted[2],lifted[3]])
+	var paint: Color = spec.paint_profile["color"]
+	var arrow := _flat_surface(block,"Направление выхода",points,PackedColorArray([paint,paint.darkened(.1)]),_vertex_material("grip_groove"),false)
+	arrow.set_meta("direction",direction)
 
 func _ice_details(object: Dictionary, block: Node3D, spec: GripVisualSpec, profile: GripBiomeProfile, front: Array) -> void:
-	# A shallow groove across the ice where the hook travels, with a pale
-	# polished lip; dust streaks in the desert, icicles only in snow.
-	var direction := GripSpec.slide_direction(object)
+	# A shallow groove along the plate where the hook travels, towards its low
+	# end, with a pale polished lip; dust streaks in the desert, icicles only
+	# in snow. The block itself leans, so the groove runs level inside it.
+	var direction := Vector2(signf(GripSpec.slide_direction(object).x),0)
 	var ring := spec.front_ring()
-	var start := Vector2(-direction.x*spec.front_width*.18,ring[spec.top_left].y-spec.front_height*.16)
-	var path := PackedVector2Array([start,start+direction*spec.front_width*.22,start+direction*spec.front_width*.44])
+	var start := Vector2(-direction.x*spec.front_width*.3,ring[spec.top_left].y-spec.front_height*.4)
+	var path := PackedVector2Array([start,start+direction*spec.front_width*.3,start+direction*spec.front_width*.6])
 	var points := _face_strip(front,path,.026,.008,spec.protrusion())
 	var colors := PackedColorArray()
 	var glaze := profile.material_color(GripSpec.ICE)

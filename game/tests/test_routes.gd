@@ -59,18 +59,24 @@ func run_tests() -> void:
 	check(description.contains("Скольз") and description.contains("постоян") and description.contains("скользит"),"a permanent ice grip still names its type and its lifetime: %s" % description)
 	check(GripSpec.description(root_grip).contains("2,6 с"),"a root names its timer instead of a lifetime")
 	check(not GripSpec.expired(root_grip,2.6) and GripSpec.expired(root_grip,2.61) and not GripSpec.expired(stone,99),"the root clock keeps the old 2.6 s and only roots expire")
-	# Spring: same force as the old 1.13 multiplier along the exit, less off it.
+	# Spring: a fixed throw along the exit, whatever speed the swing brought.
 	var spring := {"kind":2,"exit_dir":Vector2(1,1).normalized()}
+	var exit := GripSpec.exit_direction(spring)
 	var along := Vector2(3,3)
-	check(absf(GripSpec.release_velocity(spring,along).length()-along.length()*1.13)<.0001,"a release along the bough's exit keeps the former 1.13 speed")
+	check(GripSpec.release_velocity(spring,Vector2.ZERO).distance_to(exit*GripSpec.SPRING_THROW)<.0001,"a spring throws a hero hanging still at its full force")
+	check(GripSpec.release_velocity(spring,-along).dot(exit)>=GripSpec.SPRING_THROW-.0001,"a release swinging against the exit is still thrown along it")
+	check(absf(GripSpec.release_velocity(spring,exit*GripSpec.SPRING_FULL_SWING).length()-GripSpec.SPRING_THROW*(1+GripSpec.SPRING_TIMING))<.0001,"a full swing along the exit adds the timing bonus")
+	var fast := exit*(GripSpec.SPRING_THROW*(1+GripSpec.SPRING_TIMING)+2)
+	check(GripSpec.release_velocity(spring,fast).distance_to(fast)<.0001,"a throw never slows a faster swing")
 	var across := Vector2(3,-3)
-	check(GripSpec.release_velocity(spring,across)==across and GripSpec.release_velocity(stone,along)==along,"releasing against the exit or from another type adds no impulse")
-	check(GripSpec.spring_load(spring,Vector2(5,0))>0 and GripSpec.spring_load(spring,Vector2(5,0))<1,"partial loading gives a partial bonus")
+	check(GripSpec.release_velocity(spring,across).dot(across)<across.length_squared() and GripSpec.release_velocity(stone,along)==along,"sideways speed is damped by a throw and other types add no impulse")
+	check(GripSpec.spring_load(spring,exit*GripSpec.SPRING_FULL_SWING*.25)<GripSpec.spring_load(spring,exit*GripSpec.SPRING_FULL_SWING) and GripSpec.spring_load(spring,Vector2(GripSpec.SPRING_FULL_SWING,0))<1,"a slow or sideways swing loads the spring only in part")
+	check(GripSpec.exit_direction({"kind":2}).y>0,"a spring without a stored exit throws up the mountain")
 	# Ice: starts at .18 m/s, accelerates, never past 1.2 m, along a local direction.
 	var slanted := {"kind":3,"slide_dir":Vector2(.3,-1),"pos":Vector2(2,5)}
 	check(GripSpec.slide_offset(slanted,100).length()<=GripSpec.ICE_SLIDE_MAX+.0001 and absf(GripSpec.slide_distance(slanted,1)-(.18+.5*GripSpec.ICE_SLIDE_ACCEL))<.0001 and GripSpec.slide_offset(slanted,1).x>0,"ice accelerates from the old rate up to the old limit along its own downslope")
 	check(GripSpec.slide_distance(slanted,.5)<GripSpec.slide_distance(slanted,1)-GripSpec.slide_distance(slanted,.5),"the slide speeds up the longer the hero holds on")
-	check(GripSpec.release_velocity(slanted,Vector2(1,2),Vector2(.8,-.2))==Vector2(1.8,1.8) and GripSpec.release_velocity(stone,Vector2(1,2),Vector2(.8,-.2))==Vector2(1,2),"releasing a sliding ice contact carries the slide into the flight; no other type does")
+	check(GripSpec.release_velocity(slanted,Vector2(1,2),Vector2(.8,-.2))==Vector2(1,2)+Vector2(.8,-.2)*GripSpec.ICE_CARRY and GripSpec.release_velocity(stone,Vector2(1,2),Vector2(.8,-.2))==Vector2(1,2),"releasing a sliding ice contact carries the slide into the flight; no other type does")
 	check(GripSpec.lateral_slide(-1).x<0 and GripSpec.lateral_slide(1).x>0 and GripSpec.lateral_slide(1).y<0,"v13 ice slides across its grip and slightly downhill")
 	check(GripSpec.slide_samples(slanted).size()==3 and GripSpec.slide_samples(stone).size()==1,"route checks sample every slide position of ice and one contact elsewhere")
 	check(GripSpec.choice_exits({"kind":4,"choice_exits":[3,4]})==[3,4] and GripSpec.choice_exits({"kind":0,"choice_exits":[3]}).is_empty(),"only crystals carry choice exits; the crystal never changes physics")
@@ -114,17 +120,36 @@ func run_tests() -> void:
 	var slid := ice_world.anchor_contact_after(ice,contact,100)
 	var outline := ice_world.anchor_outline(ice)
 	check(slid!=contact and (Geometry2D.is_point_in_polygon(slid,outline) or ice_world.anchor_surface_point(ice,slid)==slid),"held ice moves the hook but keeps it on the drawn grip")
-	# From below, the hook walks along the underside instead of sticking.
-	var under := ice_world.anchor_surface_point(ice,Vector2(.05,19.5),Vector2.UP)
+	# The plate leans along its slide, low end first, and a hook caught from
+	# below runs down its lower edge to that end.
+	var slope := GripSpec.slide_direction(ice)
+	var high_end := Vector2(INF,0)
+	var low_end := Vector2(-INF,0)
+	for point in outline:
+		if point.dot(slope)<high_end.dot(slope) or not high_end.is_finite(): high_end = point
+		if point.dot(slope)>low_end.dot(slope) or not low_end.is_finite(): low_end = point
+	check(GripSpec.plate(ice) and low_end.y<high_end.y-.3,"an ice plate leans down towards the end the hook slides to")
+	var under := ice_world.anchor_surface_point(ice,Vector2(0,18.5),Vector2(0,1))
 	var walk_ok := true
 	var previous_contact := under
 	var travelled := 0.0
+	var slip_at := -1.0
 	for frame in range(1,361):
-		var now := ice_world.anchor_contact_after(ice,under,frame/120.0)
-		walk_ok = walk_ok and now.distance_to(previous_contact)<.05 and now.y<=previous_contact.y+.0001
+		var moment := frame/120.0
+		var now := ice_world.anchor_contact_after(ice,under,moment)
+		walk_ok = walk_ok and now.distance_to(previous_contact)<.05 and (now-previous_contact).dot(slope)>=-.0001
 		travelled += now.distance_to(previous_contact)
 		previous_contact = now
-	check(walk_ok and travelled>.4,"ice walks the hook continuously along the stone, never uphill (%.2f m in 3 s)" % travelled)
+		if slip_at<0 and GripSpec.slipped(ice,under,moment): slip_at = moment
+	check(walk_ok and travelled>.3,"ice walks the hook continuously down the plate (%.2f m)" % travelled)
+	check(absf(slip_at-GripSpec.seconds_to_slip(ice,under))<.02 and slip_at>GripSpec.ICE_GRACE,"the hook slips off the low end when the plate runs out (%.2f s)" % slip_at)
+	var near_high := ice_world.anchor_surface_point(ice,under-slope*.35,Vector2(0,1))
+	var near_low := ice_world.anchor_surface_point(ice,under+slope*.35,Vector2(0,1))
+	check(GripSpec.seconds_to_slip(ice,near_high)>GripSpec.seconds_to_slip(ice,near_low)+.15,"a catch near the high end buys more time than one near the low end")
+	check(GripSpec.seconds_to_slip(ice,low_end)>=GripSpec.ICE_GRACE,"even the very end of the plate holds the hook for a moment")
+	check(ice_world.anchor_contact_after(ice,contact,100).distance_to(ice_world.anchor_contact_after(ice,under,100))<.01,"a hook that lands on top still ends at the low end of the plate")
+	check(ice_world.cast_hook(low_end+Vector2(0,-3),low_end+Vector2(0,.05),.34).get("object",{}).get("id",-1)==ice["id"],"the hook catches the plate where it is drawn, on its low end")
+	check(not GripSpec.slipped({"kind":0,"pos":Vector2(0,20)},contact,100),"other types never slip")
 	check(ice_world.anchor_contact_after({"kind":0,"pos":Vector2(0,20)},contact,100)==contact,"other types never move the contact")
 	ice_world.free()
 	# The route audit judges an ice exit from the contacts the slide really

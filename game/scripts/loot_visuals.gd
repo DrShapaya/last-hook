@@ -27,10 +27,11 @@ static func build(world: MountainWorld, find: Dictionary, holder: Node3D, qualit
 	treasure.position = Vector3(0,0,MODEL_LIFT)
 	holder.add_child(treasure)
 	TreasureModels.play_idle(treasure,float(int(item.get("id",0))%11)/11.0)
-	if quality!="battery":
+	var glints := world.effects_quality=="full"
+	if glints:
 		_sparkle(world,holder,Vector3(.20,.20,.34),.30 if not rare else .42,float(int(item.get("id",0))%7)*.37)
-	if rare:
-		_halo(world,holder,rarity_color(item).lightened(.3),.95 if quality!="battery" else .7)
+	if rare and world.effects_quality!="off":
+		_halo(world,holder,rarity_color(item).lightened(.3),.95 if glints else .7)
 	return treasure
 
 # The model stands this far in front of its holder, clear of the face.

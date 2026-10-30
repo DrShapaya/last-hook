@@ -83,6 +83,7 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_ads.gd') (Join-Path
 Invoke-TaskGodot @('--headless','--script','res://tests/test_character_editing.gd') (Join-Path $taskArtifacts 'build-character-editing.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_sprite_animation.gd') (Join-Path $taskArtifacts 'build-sprite-animation.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_polish.gd') (Join-Path $taskArtifacts 'build-polish.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_audio.gd') (Join-Path $taskArtifacts 'build-audio.log')
 }
 
 if ($Target -in @('All','Windows')) {

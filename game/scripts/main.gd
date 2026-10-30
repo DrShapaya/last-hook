@@ -15,7 +15,6 @@ var prepared_rows_left := false
 # Off in headless runs (tests, tools) unless a tool turns it on.
 var prepare_worlds := DisplayServer.get_name()!="headless"
 var camera: Camera3D
-var sound_cache: Dictionary = {}
 var scene_environment: Environment
 var shadow_atlas_size := 0
 var sun_light: DirectionalLight3D
@@ -89,7 +88,6 @@ var focus_cooldown := 0.0
 var focus_duration := 0.0
 var focus_serial := 0
 var focus_blend := 0.0
-var focus_audio: AudioStreamPlayer
 var last_release_reason := ""
 var aim_direction := Vector2.UP
 var elapsed := 0.0
@@ -132,7 +130,15 @@ var last_loot_price_hero := Vector2.INF
 var last_loot_price_aim := Vector2.INF
 var last_loot_price_playing := false
 var last_loot_price_always := false
-var audio: AudioStreamPlayer
+const LAND_SOUND_SPEED := 4.0
+const LAND_HAPTIC_SPEED := 11.0
+const WALK_STEP_SECONDS := .34
+# Air rushing past starts at this speed and is full at the second one.
+const WIND_SPEED_MIN := 8.0
+const WIND_SPEED_FULL := 30.0
+var walk_step_clock := 0.0
+var sounds: SoundBank
+var haptics: Haptics
 var music: MusicPlayer
 var preview := false
 var run_seconds := 0.0
@@ -192,14 +198,10 @@ func _ready() -> void:
 	add_child(camera)
 	camera.current = true
 	_setup_audio_buses()
-	audio = AudioStreamPlayer.new()
-	audio.volume_db = -18
-	audio.bus = "SFX"
-	add_child(audio)
-	focus_audio = AudioStreamPlayer.new()
-	focus_audio.volume_db = -20
-	focus_audio.bus = "SFX"
-	add_child(focus_audio)
+	sounds = SoundBank.new()
+	add_child(sounds)
+	haptics = Haptics.new()
+	add_child(haptics)
 	music = MusicPlayer.new()
 	add_child(music)
 	music.enabled = int(_settings()["music_volume"])>0
@@ -1171,7 +1173,7 @@ func fire_hook(direction: Vector2) -> void:
 		hook_volley.launch(sim.pos,model.hook_directions(direction),model.throw_speed(),throw_carry_velocity())
 		_sync_volley()
 	shot_serial += 1
-	_hook_sound("launch")
+	_sfx("launch")
 
 func can_walk() -> bool:
 	return sim.grounded and not sim.attached and not bolt_active
@@ -1376,14 +1378,28 @@ func release_hook(keep_primary: bool = false, reason: String = "manual") -> void
 	if reason!="manual":
 		print("HOOK_RELEASE reason=%s keep_primary=%s position=%s" % [reason,keep_primary,sim.pos])
 	if thrown:
-		_hook_sound("spring")
-		if OS.has_feature("mobile") and model.profile.get("vibration",true) and not preview: Input.vibrate_handheld(40,.5)
-	else: _sound(310,.07)
+		_sfx("spring")
+		_haptic("spring")
+	else: _sfx("release")
 	if keep_primary:
 		_recenter_climb_control(true)
 		_refresh_aim()
 	else:
 		_reset_input()
+
+# Boots on rock: a landing by how hard it was, steps in time with the walk.
+func _ground_sounds(was_grounded: bool, fall_speed: float, step: float) -> void:
+	if sim.grounded and not was_grounded:
+		if fall_speed>=LAND_SOUND_SPEED:
+			_sfx("land")
+			sounds.reset_streaks()
+		if fall_speed>=LAND_HAPTIC_SPEED: _haptic("land")
+		walk_step_clock = 0.0
+	elif sim.grounded and not sim.attached and absf(sim.vel.x)>WALK_SPEED*.5:
+		walk_step_clock += step
+		if walk_step_clock>=WALK_STEP_SECONDS:
+			walk_step_clock = 0.0
+			_sfx("step")
 
 func _start_focus() -> void:
 	# A release inside the cooldown keeps full speed; nothing can refill or
@@ -1392,14 +1408,14 @@ func _start_focus() -> void:
 	focus_duration = model.slowmo_seconds()
 	focus_remaining = focus_duration
 	focus_serial += 1
-	_focus_sound(true)
-	if OS.has_feature("mobile") and model.profile.get("vibration",true) and not preview: Input.vibrate_handheld(12,.15)
+	_sfx("focus_in")
+	_haptic("focus")
 
 func _end_focus() -> void:
 	if focus_remaining<=0.0: return
 	focus_remaining = 0.0
 	focus_cooldown = model.slowmo_cooldown()
-	_focus_sound(false)
+	_sfx("focus_out")
 
 func focus_active() -> bool:
 	return focus_remaining>0.0 and not sim.attached
@@ -1447,7 +1463,7 @@ func _physics_process(delta: float) -> void:
 				if anchor_time>=GripSpec.ICE_GRACE: world.ice_scrape(sim.anchor,delta)
 				if GripSpec.slipped(point,anchor_contact,anchor_time):
 					release_hook(true,"ice_slip")
-					_hook_sound("ice")
+					_sfx("ice")
 					toast("Крюк сорвался со льда — цепляйся!",2.0,"release")
 	# Act hazards push an airborne hero, knock it off a grip or drop a bridge.
 	hazard_cooldown = maxf(0,hazard_cooldown-delta)
@@ -1470,10 +1486,12 @@ func _physics_process(delta: float) -> void:
 		if absf(sim.length-previous_length)>.0001:
 			model.learn_control("rope")
 	if item_running("glide") and not sim.attached: sim.vel.y = maxf(sim.vel.y,-float(ItemCatalog.consumable("glide")["fall_speed"]))
+	var fall_speed := -sim.vel.y
 	var motion := world.move_player(previous,sim.pos,sim.vel)
 	sim.pos = motion["position"]
 	sim.vel = motion["velocity"]
 	sim.grounded = motion["grounded"]
+	_ground_sounds(was_grounded,fall_speed,step)
 	# Landing ends the aiming window: walking never runs in slow motion.
 	if sim.grounded and not was_grounded and focus_remaining>0: _end_focus()
 	if sim.grounded and motion["rest"] and not sim.attached:
@@ -1545,6 +1563,8 @@ func _hazard_knock(knock: Dictionary) -> void:
 	# The ordinary release path: a spring or ice effect is not granted, the
 	# grip settles as on any release.
 	hazard_cooldown = 1.2
+	_sfx("knock")
+	_haptic("knock")
 	if sim.attached: release_hook(false,"hazard")
 	sim.vel += knock["push"]
 	toast(world.hazards.knock_message(int(knock["hazard"])),1.8,"hazard")
@@ -1636,7 +1656,7 @@ func _catch_contact(hit: Dictionary, contact: Vector2) -> void:
 		safe_position = sim.pos
 		safe_contact = contact
 	_register_hook_impact(contact,"catch")
-	_hook_sound("catch")
+	if _sound_on(): sounds.play_catch()
 
 func _sync_volley() -> void:
 	if hook_volley==null: return
@@ -1668,7 +1688,7 @@ func _update_volley(step: float) -> void:
 			if collision.get("blocked",false):
 				hook_volley.return_shot(index,flight.velocity.bounce(collision.get("normal",Vector2.DOWN))*.22)
 				_register_hook_impact(contact,"rock")
-				_hook_sound("rock")
+				_sfx("rock")
 				continue
 			if sim.attached or sim.pos.distance_to(contact)>model.shot_range()+.001 or world.rope_blocked(sim.pos,contact):
 				hook_volley.return_shot(index)
@@ -1691,14 +1711,14 @@ func _register_hook_impact(point: Vector2, kind: String) -> void:
 	impact_serial += 1
 	hook_impact = point
 	hook_impact_kind = kind
-	if OS.has_feature("mobile") and kind=="catch" and model.profile.get("vibration",true): Input.vibrate_handheld(18,.25)
+	if kind in ["catch","rock"]: _haptic(kind)
 
 func _begin_hook_return(message: String = "", rebound := Vector2.ZERO, kind := "limit") -> void:
 	bolt_active = false
 	bolt_returning = true
 	return_velocity = rebound
 	_register_hook_impact(bolt_pos,kind)
-	_hook_sound("rock" if kind=="rock" else "return")
+	_sfx("rock" if kind=="rock" else "return")
 	if not message.is_empty(): toast(message,1.3,"hook")
 
 func _update_return(dt: float) -> void:
@@ -1757,7 +1777,7 @@ func _collect_finds() -> void:
 			if model.collect_coin(run_id,item):
 				_hide_find(find)
 				banked = true
-				_sound(1250,.05)
+				if _sound_on(): sounds.play_coin()
 				hud.animate_coin(int(item["value"]),find["pos"])
 			elif model.picked.has(int(item["id"])):
 				find["picked"] = true
@@ -1770,7 +1790,8 @@ func _collect_finds() -> void:
 			continue
 		if model.try_pick(item):
 			_hide_find(find)
-			_sound(1000,.08)
+			_sfx("pickup")
+			_haptic("pickup")
 			hud.refresh_bag()
 			hud.animate_pickup(model.bag[-1],find["pos"])
 	# Ledger, wallet and picked id go to disk together in the next snapshot,
@@ -1794,7 +1815,8 @@ func _auto_swap_if_better(find: Dictionary) -> bool:
 	if not model.swap_in(item,index):
 		return false
 	_hide_find(find)
-	_sound(1000,.08)
+	_sfx("pickup")
+	_haptic("pickup")
 	hud.refresh_bag()
 	hud.animate_pickup(model.bag[-1],find["pos"])
 	return true
@@ -1818,7 +1840,8 @@ func accept_swap() -> void:
 	var index := model.cheapest_index(find["item"])
 	if index>=0 and model.swap_in(find["item"],index):
 		_hide_find(find)
-		_sound(1000,.08)
+		_sfx("pickup")
+		_haptic("pickup")
 		hud.refresh_bag()
 		hud.animate_pickup(model.bag[-1],find["pos"])
 		save_snapshot()
@@ -1906,7 +1929,7 @@ func activate_item(index: int) -> void:
 	var duration := maxf(.01,float(definition["duration"]))
 	if id in ARMABLE and not _item_can_fire(id):
 		item_effect = {"id":id,"remaining":duration,"duration":duration,"armed":true,"index":index}
-		_sound(560,.08)
+		_sfx("item_arm")
 		toast(str(definition["name"])+": сработает в полёте",1.4,"item")
 		save_snapshot()
 		return
@@ -1921,7 +1944,8 @@ func _fire_item(index: int) -> void:
 	item_effect = {"id":str(entry["id"]),"remaining":float(definition["duration"]),"duration":maxf(.01,float(definition["duration"]))}
 	if entry["id"]=="beacon": beacon_targets = reachable_exits()
 	print("ITEM_BEGIN id=%s position=%s" % [entry["id"],sim.pos])
-	_sound(720,.1)
+	_sfx("item_fire")
+	_haptic("item")
 	toast(str(definition["name"]),1.2,"item")
 	save_snapshot()
 
@@ -2015,7 +2039,9 @@ func fail_run(reason: String) -> void:
 	bolt_returning = false
 	hook_volley = null
 	volley_primary = 0
-	_sound(120,.2)
+	sounds.reset_streaks()
+	_sfx("fail")
+	_haptic("fail")
 	if offer_revive:
 		save_snapshot()
 		hud.show_revive(reason)
@@ -2123,13 +2149,17 @@ func _refresh_ad_actions() -> void:
 
 func _on_ad_fullscreen(active: bool) -> void:
 	_reset_input()
-	if active: audio.stop()
+	if active: sounds.stop_all()
+	music.set_suspended(active)
 	hud.set_ad_blocked(active)
 
 func finish_run(success: bool) -> void:
 	if run_id.is_empty() or ads.fullscreen:
 		return
 	state = "result"
+	if success:
+		_sfx("win")
+		_haptic("win")
 	ads.report_event("run_finished_%s" % ("success" if success else "failed"))
 	_reset_input()
 	bolt_active = false
@@ -2448,13 +2478,20 @@ func _process(delta: float) -> void:
 # pause, revive and result screens lower it.
 func _update_music() -> void:
 	if music==null or preview or DisplayServer.get_name()=="headless": return
-	if state=="menu":
-		music.play("camp")
-		music.duck(false)
-		return
-	var location_id := "green_peak" if run_mode=="practice" else str(LevelCatalog.level(selected_location)["id"])
-	music.play(MusicPlayer.track_for_location(location_id))
+	var theme := "camp"
+	if state!="menu":
+		var location_id := "green_peak" if run_mode=="practice" else str(LevelCatalog.level(selected_location)["id"])
+		theme = MusicPlayer.track_for_location(location_id)
+	music.play(theme)
 	music.duck(state in ["pause","revive","result"])
+	music.set_muffled(focus_blend)
+	sounds.set_key(MusicPlayer.tonality(theme))
+	sounds.set_wind(_wind_level())
+
+# Air rushing past the hero, quieter while time is slowed.
+func _wind_level() -> float:
+	if state!="play" or sim==null or sim.grounded or int(_settings()["sfx_volume"])<=0: return 0.0
+	return clampf((sim.vel.length()-WIND_SPEED_MIN)/(WIND_SPEED_FULL-WIND_SPEED_MIN),0,1)*lerpf(1.0,.35,focus_blend)
 
 func _setup_audio_buses() -> void:
 	for bus_name in ["Music","SFX"]:
@@ -2463,6 +2500,9 @@ func _setup_audio_buses() -> void:
 		var index := AudioServer.bus_count-1
 		AudioServer.set_bus_name(index,bus_name)
 		AudioServer.set_bus_send(index,"Master")
+	# A safety net: however many sounds pile up, the output never clips.
+	if AudioServer.get_bus_effect_count(0)==0:
+		AudioServer.add_bus_effect(0,AudioEffectHardLimiter.new())
 
 func _set_bus(bus_name: String, percent: int) -> void:
 	var index := AudioServer.get_bus_index(bus_name)
@@ -2476,7 +2516,7 @@ func apply_audio() -> void:
 	_set_bus("SFX",int(settings["sfx_volume"]))
 	var playing := int(settings["music_volume"])>0
 	if music!=null and music.enabled!=playing: music.set_enabled(playing)
-	if int(settings["sfx_volume"])<=0 and is_instance_valid(audio): audio.stop()
+	if int(settings["sfx_volume"])<=0 and is_instance_valid(sounds): sounds.stop_all()
 
 func _capture_frame() -> void:
 	await RenderingServer.frame_post_draw
@@ -2492,132 +2532,16 @@ func toast(text: String, duration: float = 2.5, context: String = "") -> void:
 	if is_instance_valid(hud):
 		hud.set_toast(text)
 
-func _sound(frequency: float, duration: float) -> void:
-	if int(_settings()["sfx_volume"])<=0 or preview or DisplayServer.get_name()=="headless":
-		return
-	var key := "tone_%s_%s" % [frequency,duration]
-	if sound_cache.has(key):
-		audio.stream = sound_cache[key]
-		audio.play()
-		return
-	var stream := AudioStreamWAV.new()
-	stream.format = AudioStreamWAV.FORMAT_16_BITS
-	stream.mix_rate = 22050
-	var count := int(duration*stream.mix_rate)
-	var data := PackedByteArray()
-	data.resize(count*2)
-	for i in range(count):
-		var envelope := pow(1-float(i)/count,2)
-		var sample := int(sin(TAU*frequency*i/stream.mix_rate)*envelope*15000)
-		data.encode_s16(i*2,sample)
-	stream.data = data
-	sound_cache[key] = stream
-	audio.stream = stream
-	audio.play()
+func _sound_on() -> bool:
+	return int(_settings()["sfx_volume"])>0 and not preview and DisplayServer.get_name()!="headless"
 
-func _focus_sound(starting: bool) -> void:
-	# A soft falling "whoomp" when time slows and a short rise when it returns.
-	if int(_settings()["sfx_volume"])<=0 or preview or DisplayServer.get_name()=="headless" or not is_instance_valid(focus_audio): return
-	var key := "focus_%s" % starting
-	if sound_cache.has(key):
-		focus_audio.stream = sound_cache[key]
-		focus_audio.play()
-		return
-	var stream := AudioStreamWAV.new()
-	stream.format = AudioStreamWAV.FORMAT_16_BITS
-	stream.mix_rate = 22050
-	var duration := .32 if starting else .16
-	var count := int(duration*stream.mix_rate)
-	var data := PackedByteArray()
-	data.resize(count*2)
-	var phase := 0.0
-	for index in range(count):
-		var t := float(index)/count
-		var frequency := lerpf(520.0,150.0,sqrt(t)) if starting else lerpf(240.0,620.0,t)
-		phase += TAU*frequency/stream.mix_rate
-		var envelope := sin(minf(1,t*10)*PI*.5)*pow(1-t,1.6)
-		var sample := (sin(phase)*.7+sin(phase*.5)*.3)*envelope
-		data.encode_s16(index*2,int(clampf(sample,-1,1)*14000))
-	stream.data = data
-	sound_cache[key] = stream
-	focus_audio.stream = stream
-	focus_audio.play()
+func _sfx(sound: String) -> void:
+	if _sound_on(): sounds.play(sound)
 
-# A hook glancing off rock: a soft, rounded "tock" (a low body with a pitch
-# drop, two inharmonic stone partials and a muffled click) instead of a burst
-# of noise. Three slightly different pitches alternate so repeated bounces
-# do not sound mechanical.
-var rock_knock_index := 0
-const ROCK_KNOCK_PITCHES := [1.0,.92,1.07]
+func _haptic(pattern: String) -> void:
+	if model.profile.get("vibration",true) and not preview: haptics.play(pattern)
 
-func _rock_knock() -> void:
-	rock_knock_index = (rock_knock_index+1)%ROCK_KNOCK_PITCHES.size()
-	var key := "hook_rock_%d" % rock_knock_index
-	if not sound_cache.has(key):
-		var stream := AudioStreamWAV.new()
-		stream.format = AudioStreamWAV.FORMAT_16_BITS
-		stream.mix_rate = 44100
-		var pitch: float = ROCK_KNOCK_PITCHES[rock_knock_index]
-		var count := int(.24*stream.mix_rate)
-		var data := PackedByteArray()
-		data.resize(count*2)
-		var rng := RandomNumberGenerator.new()
-		rng.seed = 911+rock_knock_index
-		var body_phase := 0.0
-		var click := 0.0
-		for index in range(count):
-			var t := float(index)/stream.mix_rate
-			var attack := minf(1.0,t/.003)
-			var base := 190.0*pitch*(1.0+.55*exp(-t*38.0))
-			body_phase += TAU*base/stream.mix_rate
-			var body := sin(body_phase)*exp(-t*21.0)
-			var stone := sin(body_phase*2.37)*.32*exp(-t*42.0)+sin(body_phase*3.91)*.14*exp(-t*70.0)
-			# One-pole low-passed noise: a dull tap, not a hiss.
-			click += (rng.randf_range(-1,1)-click)*.18
-			var tap := click*.55*exp(-t*160.0)
-			var sample := tanh((body*.8+stone+tap)*attack*1.1)*.82
-			data.encode_s16(index*2,int(clampf(sample,-1,1)*15000))
-		stream.data = data
-		sound_cache[key] = stream
-	audio.stream = sound_cache[key]
-	audio.play()
-
-func _hook_sound(kind: String) -> void:
-	if int(_settings()["sfx_volume"])<=0 or preview or DisplayServer.get_name()=="headless": return
-	# The samples are fixed per kind (seeded noise): synthesise each once.
-	# Building ~4000 samples in script on every throw stalled the frame.
-	if kind=="rock":
-		_rock_knock()
-		return
-	var key := "hook_"+kind
-	if sound_cache.has(key):
-		audio.stream = sound_cache[key]
-		audio.play()
-		return
-	var stream := AudioStreamWAV.new()
-	stream.format = AudioStreamWAV.FORMAT_16_BITS
-	stream.mix_rate = 22050
-	var duration := .16 if kind=="launch" else .34 if kind=="spring" or kind=="ice" else .20
-	var count := int(duration*stream.mix_rate)
-	var data := PackedByteArray()
-	data.resize(count*2)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 731
-	for index in range(count):
-		var t := float(index)/stream.mix_rate
-		var phase := t/duration
-		var envelope := pow(1-phase,2)
-		var sample := 0.0
-		match kind:
-			"launch": sample = (rng.randf_range(-1,1)*.45+sin(TAU*(1150*t-2300*t*t))*.35)*envelope*sin(minf(1,phase*12)*PI*.5)
-			"catch": sample = (sin(TAU*840*t)+sin(TAU*1337*t)*.45+sin(TAU*2150*t)*.18)*exp(-t*26)*.55
-			# A deep twang that shoots upwards as the bough lets go.
-			# A dry scrape falling away as the hook drops off the plate.
-			"ice": sample = (rng.randf_range(-1,1)*.3+sin(TAU*(2400*t-2600*t*t))*.3)*envelope
-			"spring": sample = (sin(TAU*(170*t+1500*t*t))*.8+sin(TAU*(340*t+3000*t*t))*.3)*envelope*(.75+.25*sin(TAU*38*t))
-			_: sample = sin(TAU*(650*t-1100*t*t))*.4*envelope
-		data.encode_s16(index*2,int(clampf(sample,-1,1)*16000))
-	stream.data = data
-	sound_cache[key] = stream
-	audio.stream = stream
-	audio.play()
+# Buttons answer with a small tick and the lightest vibration.
+func ui_tap() -> void:
+	_sfx("tap")
+	_haptic("tap")

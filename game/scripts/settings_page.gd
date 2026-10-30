@@ -164,7 +164,7 @@ func _controls_rows() -> Array:
 		level("Общая громкость","","master_volume",0,100,5,percent),
 		level("Музыка","","music_volume",0,100,5,percent),
 		level("Звуковые эффекты","","sfx_volume",0,100,5,percent),
-		flag("Вибрация","Короткий отклик при зацепе",bool(model.profile.get("vibration",true)),hud.toggle_vibration)]
+		flag("Вибрация","Отклик на зацепы, удары и падения",bool(model.profile.get("vibration",true)),hud.toggle_vibration)]
 	if not hud.touch_controls_hint:
 		rows.append({"height":ROW,"build":func(slab: Control, y: float, width: float):
 			var holder := lobby.settings_row(slab,y,width,"Переназначение","")

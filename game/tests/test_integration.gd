@@ -471,8 +471,7 @@ func run_tests() -> void:
 	game.resume_run()
 	game.catches = 3
 	check(game.hud.tutorial_hint().is_empty(),"completed control hints stay completed after saving and resuming")
-	game.audio.stop()
-	game.audio.stream = null
+	game.sounds.stop_all()
 	game.queue_free()
 	await create_timer(.06).timeout
 	var directory := OS.get_environment("LASTHOOK_SAVE_DIR")

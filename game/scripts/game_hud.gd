@@ -637,6 +637,7 @@ func button(parent: Node, text: String, callback: Callable, gold: bool = false) 
 	node.custom_minimum_size = Vector2(0,51)
 	node.focus_mode = Control.FOCUS_NONE
 	parent.add_child(node)
+	node.pressed.connect(game.ui_tap)
 	if callback.is_valid(): node.pressed.connect(callback)
 	skin_button(node,"primary" if gold else "secondary")
 	return node

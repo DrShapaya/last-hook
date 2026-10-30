@@ -377,7 +377,7 @@ func test_graphics(game) -> void:
 	game.set_graphics_preset("high")
 
 func test_audio(game) -> void:
-	check(game.audio.bus=="SFX" and game.focus_audio.bus=="SFX" and game.music.players[0].bus=="Music","players use their buses")
+	check(game.sounds.players[0].bus=="SFX" and game.sounds.wind.bus=="SFX" and game.music.players[0].bus=="Music","players use their buses")
 	var music_bus := AudioServer.get_bus_index("Music")
 	game.set_setting("music_volume",0)
 	check(AudioServer.is_bus_mute(music_bus) and not game.music.enabled,"silent music stops")

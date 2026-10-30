@@ -152,6 +152,26 @@ func style_tests() -> void:
 			var a := rock.build(24.0,48.0,1.0).get_faces()
 			check(a==mesh.get_faces(),"the rock face of location %d is the same every time" % location)
 		world.free()
+	# A climb has a rhythm, and the far way has its risk.
+	var sample := LevelDesigner.make(1,0,int(LevelCatalog.route(1,0)["seed"])*31)
+	var brief_source := sample.build()
+	var tempos := {}
+	for entry in brief_source.brief["pace"]: tempos[snappedf(float(entry["rise"]),.1)] = true
+	check(tempos.size()>=3,"sections climb at different tempos %s" % str(tempos.keys()))
+	var plain: Array = brief_source.brief["splits"]
+	check(str(plain[0]["risk"])=="" and str(plain[1]["risk"])=="sand_storm","the first split teaches, the later ones carry the location's hazard")
+	var risky_world := MountainWorld.new()
+	risky_world.visuals_enabled = false
+	root.add_child(risky_world)
+	risky_world.setup(int(brief_source.brief["seeds"]["route"]),1,0,false,0,true)
+	var risky := risky_world.layout as MaskLayout
+	risky.use_source(brief_source)
+	risky_world.generate_to(sample.height+6,true,sample.height)
+	var on_far := 0
+	for hazard in risky.hazards:
+		if hazard.has("rect") and not hazard.get("affects_main",false) and (hazard["rect"] as Rect2).size.y>8.0: on_far += 1
+	check(on_far>=1 or risky.splits_built.size()<3,"a storm stands over the second way (%d)" % on_far)
+	risky_world.free()
 	check(int(parted_rows[1])>0 and int(parted_rows[2])>0,"the canyon and the peak part into separate masses %s" % str(parted_rows))
 
 # The automatic designer: beats dressed in landforms, the route on stone,

@@ -12,18 +12,21 @@ extends RefCounted
 #   splits       ways that really part (one per act)
 #   variety      different landforms per section
 #   sky          sky in view round the route (19-40%)
+#   rhythm       how much the main route's rises differ from hop to hop
 
-const WEIGHTS := {"level_hops":2.0,"long_hops":1.5,"sparse":1.5,"splits":2.0,"variety":1.0,"sky":1.0}
+const WEIGHTS := {"level_hops":2.0,"long_hops":1.5,"sparse":1.5,"splits":2.0,"variety":1.0,"sky":1.0,"rhythm":1.5}
 
 static func evaluate(layout: MaskLayout, source: LevelSource, sections: Array = []) -> Dictionary:
 	var metrics := {}
 	var problems: Array = RouteGraph.audit(layout)["problems"]
 	var hops: Array[Vector2] = []
 	var main_lengths := 0.0
+	var rises: Array[float] = []
 	for row in range(1,layout.main_route.size()):
 		var hop: Vector2 = layout.anchors[layout.main_route[row]]["pos"]-layout.anchors[layout.main_route[row-1]]["pos"]
 		hops.append(hop)
 		main_lengths += hop.length()
+		rises.append(hop.y)
 	for split in layout.splits_built:
 		var chain: Array = [split["entry"]]+split["grips"]+[split["exit"]]
 		for k in range(1,chain.size()): hops.append(layout.anchors[chain[k]]["pos"]-layout.anchors[chain[k-1]]["pos"])
@@ -42,13 +45,19 @@ static func evaluate(layout: MaskLayout, source: LevelSource, sections: Array = 
 	for section in sections: forms[section["form"]] = true
 	metrics["variety"] = float(forms.size())/maxi(1,mini(sections.size(),9))
 	metrics["sky"] = _sky_share(layout,source)
+	var mean_rise := 0.0
+	for rise in rises: mean_rise += rise/maxi(1,rises.size())
+	var spread := 0.0
+	for rise in rises: spread += pow(rise-mean_rise,2)/maxi(1,rises.size())
+	metrics["rhythm"] = sqrt(spread)
 	var terms := {
 		"level_hops":_band(metrics["level_hops"],.25,.5,.15),
 		"long_hops":clampf((float(metrics["mean_hop"])-3.6)/.8,0,1),
 		"sparse":clampf((8.5-float(metrics["grips_per_10"]))/2.5,0,1),
 		"splits":float(metrics["splits"])/maxi(1,int(metrics["splits_planned"])) if int(metrics["splits_planned"])>0 else 0.0,
 		"variety":clampf(float(metrics["variety"]),0,1),
-		"sky":_band(metrics["sky"],.19,.4,.1)}
+		"sky":_band(metrics["sky"],.19,.4,.1),
+		"rhythm":clampf((float(metrics["rhythm"])-.3)/.5,0,1)}
 	var score := 0.0
 	var total := 0.0
 	for key in WEIGHTS:

@@ -14,6 +14,8 @@ var shelves: Array = []
 # Floating shards: [x, y, half, tall].
 var shards: Array = []
 var side_peak := Vector3.ZERO
+# One giant leaning horn beside each act: [x, y0, y1, half].
+var horns: Array = []
 
 func _forms_of(beat: String) -> Array:
 	if beat=="teach": return ["wall","islands"]
@@ -25,6 +27,9 @@ func _split_shapes() -> Array:
 
 func _sway_scale() -> float:
 	return .9
+
+func _split_risk() -> String:
+	return "blizzard_gust"
 
 func _after_plan() -> void:
 	shelves.clear()
@@ -46,6 +51,14 @@ func _after_plan() -> void:
 		if absf(x)>17.0: continue
 		for piece in range(random.randi_range(2,3)):
 			shards.append([x+piece*2.1-2.0,at+random.randf_range(-.5,.5),random.randf_range(1.2,1.8),random.randf_range(2.6,3.6)])
+	horns.clear()
+	var third := height/3.0
+	for act in range(3):
+		var foot := third*act+random.randf_range(6.0,third*.45)
+		if not split_at(foot+8.0).is_empty(): foot = maxf(8.0,foot-8.0)
+		var side := -1.0 if act%2==0 else 1.0
+		var x := clampf(_tower_axis(foot)+side*random.randf_range(11.0,13.0),-15.0,13.0)
+		horns.append([x,foot,foot+random.randf_range(16.0,22.0),random.randf_range(2.8,3.6)])
 	side_peak = Vector3((-1.0 if random.randf()<.5 else 1.0)*random.randf_range(10.0,13.0),random.randf_range(25.0,31.0),0.0)
 
 # A kite-shaped shard hanging in the air, its tips up and down.
@@ -86,6 +99,13 @@ func _outline_at(point: Vector2) -> float:
 		var mid: float = float(shelf[1])+float(shelf[3])*dx-thick*.5
 		amount = maxf(amount,minf(float(shelf[2])-absf(dx),thick*.5-absf(point.y-mid)))
 	for shard in shards: amount = maxf(amount,_shard(point,shard)*2.0)
+	for horn in horns:
+		var y0: float = horn[1]
+		var y1: float = horn[2]
+		if point.y>=y0-1.0 and point.y<=y1:
+			var rise: float = clampf((point.y-y0)/(y1-y0),0,1)
+			var waist: float = float(horn[3])*(1.0-rise)*minf(1.0,(point.y-y0+1.0)/2.0)
+			amount = maxf(amount,waist-absf(point.x-float(horn[0])-LEAN*(point.y-y0)))
 	return _foot(point,amount)
 
 # Foothills wider than the tower, with a lesser peak on one side.

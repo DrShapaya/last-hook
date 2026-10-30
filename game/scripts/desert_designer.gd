@@ -30,6 +30,9 @@ func _split_shapes() -> Array:
 func _sway_scale() -> float:
 	return 1.2
 
+func _split_risk() -> String:
+	return "sand_storm"
+
 func _finish_of(form: String, center: float, finish: float, _span: float) -> float:
 	if form=="neck": return finish
 	return (-signf(center) if absf(center)>.5 else 1.0)*random.randf_range(3.5,7.5)
@@ -58,6 +61,20 @@ func _after_plan() -> void:
 			if absf(x)<17.5: pillars.append([x,y-1.0,y+thick*random.randf_range(.6,1.0),random.randf_range(1.4,2.4),random.randf()*TAU])
 		y += thick
 		ledge = not ledge
+	_add_gates()
+
+# One great gate through the rock in every act, the place it is remembered by.
+func _add_gates() -> void:
+	var step := height/3.0
+	for act in range(3):
+		var best: Array = []
+		for tier in tiers:
+			var middle := (float(tier[0])+float(tier[1]))*.5
+			if int(tier[4])==0 and middle>=step*act and middle<step*(act+1) and split_at(middle).is_empty() and (best.is_empty() or float(tier[1])-float(tier[0])>float(best[1])-float(best[0])): best = tier
+		if best.is_empty(): continue
+		var thick: float = float(best[1])-float(best[0])
+		var at := Vector2(float(best[3])+float(best[5]),float(best[0])+thick*.46)
+		windows.append([at+Vector2(random.randf_range(-3.0,3.0),0),Vector2(random.randf_range(3.6,4.8),thick*.4)])
 
 func _tier_at(y: float) -> Array:
 	for tier in tiers:

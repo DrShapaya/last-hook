@@ -310,7 +310,15 @@ func _plan_act(act: int) -> void:
 		var template: Array = STEPS[beats[entry[0]]["beat"]][entry[1]]
 		nominal += float(template[1])
 		rises.append(float(template[1]))
+	# Each section keeps its own tempo; the act as a whole still ends on time.
 	var scale := (target.y-start.y)/nominal
+	var height_at := start.y
+	nominal = FINAL_RISE
+	for k in range(rises.size()):
+		height_at += rises[k]*scale
+		rises[k] *= _rise_at(height_at)
+		nominal += rises[k]
+	scale = (target.y-start.y)/nominal
 	var first_row := route_points.size()
 	route_points.append(start)
 	row_info.append({"act":act,"beat":0,"step":0,"type":"start","def":beats[0]})
@@ -385,6 +393,12 @@ func _plan_act(act: int) -> void:
 		fork["spot"] = spot
 		for row in range(entry_row,entry_row+4): reserved_spots[row] = reserved_spots.get(row,[])+[spot]
 	act_plans.append(plan)
+
+# Tempo of the climb at a height: the brief's `pace`, 1 without one.
+func _rise_at(y: float) -> float:
+	for entry in source.brief.get("pace",[]):
+		if y>=float(entry["from"]) and y<float(entry["to"]): return clampf(float(entry.get("rise",1.0)),.6,1.4)
+	return 1.0
 
 # Width of the zigzag at a height: the brief's `pace` (from the designer:
 # wide swings on walls, near-level hops on traverses) or the route's own.
@@ -613,7 +627,30 @@ func _build_split(index: int, spec: Dictionary) -> void:
 	fork.erase("exit_dir")
 	fork["choice_exits"] = [main_route[entry_row+1],ids[0]]
 	if economy_loot: _stock_split(entry_row,exit_row,points)
+	_add_split_risk(str(spec.get("risk","")),entry_row,exit_row,ids,points)
 	splits_built.append({"entry":main_route[entry_row],"exit":main_route[exit_row],"grips":ids,"style":style})
+
+# A hazard over the far part of the second way: the long way pays better and
+# costs more, while the direct way stays quiet.
+func _add_split_risk(hazard_id: String, entry_row: int, exit_row: int, ids: Array[int], points: PackedVector2Array) -> void:
+	if hazard_id.is_empty(): return
+	var entry: Vector2 = anchors[main_route[entry_row]]["pos"]
+	var exit: Vector2 = anchors[main_route[exit_row]]["pos"]
+	var axis := (entry.x+exit.x)*.5
+	var far := 0
+	var box := Rect2()
+	var found := false
+	for k in range(points.size()):
+		if absf(points[k].x-axis)>absf(points[far].x-axis): far = k
+		if absf(points[k].x-axis)<ISOLATION: continue
+		box = box.expand(points[k]) if found else Rect2(points[k],Vector2.ZERO)
+		found = true
+	if not found: return
+	var outward := int(signf(points[far].x-axis))
+	var hazard := _plan_hazard(hazard_id,row_of(entry_row),points[far],entry,exit,outward,entry_row)
+	if hazard.is_empty() or not hazard.has("rect"): return
+	hazard["rect"] = box.grow(1.4)
+	_commit_hazard(hazard,{"anchor":ids[far],"hazards":[]})
 
 # The second way is where the reward is. The valuables of the main stretch
 # move onto it, so the direct way is quick and poor and the long way pays:

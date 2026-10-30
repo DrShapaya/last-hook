@@ -54,6 +54,11 @@ const ROUTE_ROCK := 2.6
 # base-kit reach (MaskLayout clamps it).
 const SWAY := {"base":1.0,"wall":1.3,"islands":1.2,"overhang":1.25,"arch":1.3,"split":1.25,"terrace":1.2,"traverse":1.5,"chimney":1.15,"neck":1.0}
 const SPLIT_RAMP := 4.0
+# Rise of a hop by landform (1 = the generator's): long flat swings across a
+# traverse, quick steps up a neck, so a climb has a rhythm and no even ladder.
+const TEMPO := {"base":1.0,"wall":1.0,"arch":1.0,"split":1.0,"overhang":1.1,"terrace":.85,"traverse":.72,"islands":1.2,"chimney":1.25,"neck":1.3}
+# The main stretch of a split is the quick way.
+const SPLIT_TEMPO := 1.15
 
 # The designer of a location: each mountain is drawn by its own.
 static func make(level_location: int, level_route: int, design_seed: int) -> LevelDesigner:
@@ -166,6 +171,11 @@ func _forms_of(beat: String) -> Array:
 func _split_shapes() -> Array:
 	return ["ledge","ridge","arc","stones","diagonal"]
 
+# What makes the second way risky, from the second split on: the first one
+# only teaches the choice.
+func _split_risk() -> String:
+	return "wind_pocket"
+
 func _sway_scale() -> float:
 	return 1.0
 
@@ -232,6 +242,7 @@ func _plan_splits(spans: Array) -> void:
 		shape = choices[random.randi_range(0,choices.size()-1)]
 		splits.append({"y0":y0,"y1":y1,"side":side,"main_x":main_x,"far_x":main_x+side*gap,"style":shape,
 			"path":_split_path(shape,main_x,side,gap,y0,y1),"band":float(SPLIT_BAND[shape])*random.randf_range(.85,1.15),
+			"risk":_split_risk() if not splits.is_empty() else "",
 			"ridge":random.randf_range(4.4,6.0)})
 
 # The far way's line from where it leaves the main ridge to where it rejoins.
@@ -480,14 +491,17 @@ func build(source_name: String = "") -> LevelSource:
 	for split in splits:
 		var line: Array = []
 		for point in split["path"]: line.append([snappedf(point.x,.01),snappedf(point.y,.01)])
-		specs.append({"style":split["style"],"path":line,"from":snappedf(float(split["y0"]),.1),"to":snappedf(float(split["y1"]),.1)})
+		specs.append({"style":split["style"],"risk":split["risk"],"path":line,"from":snappedf(float(split["y0"]),.1),"to":snappedf(float(split["y1"]),.1)})
 	source.brief["splits"] = specs
 	var pace: Array = []
 	for section in sections:
 		var sway: float = SWAY.get(section["form"],1.0)
+		var tempo: float = float(TEMPO.get(section["form"],1.0))*random.randf_range(.92,1.08)
 		# On the main ridge of a split the route keeps a steadier rhythm.
-		if not split_at((float(section["y0"])+float(section["y1"]))*.5).is_empty(): sway = 1.1
-		pace.append({"from":snappedf(float(section["y0"]),.01),"to":snappedf(float(section["y1"]),.01),"sway":sway*_sway_scale()})
+		if not split_at((float(section["y0"])+float(section["y1"]))*.5).is_empty():
+			sway = 1.1
+			tempo = SPLIT_TEMPO
+		pace.append({"from":snappedf(float(section["y0"]),.01),"to":snappedf(float(section["y1"]),.01),"sway":sway*_sway_scale(),"rise":snappedf(tempo,.01)})
 	source.brief["pace"] = pace
 	_dress_brief(source)
 	source.masks["rest"] = _paint_features(source,"rest")

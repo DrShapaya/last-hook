@@ -262,7 +262,9 @@ func run_tests() -> void:
 					if (rock as Vector2).distance_to(point)<1.5: wedged = true
 				if source.sample("silhouette",point)<.5 and not wedged: off_stone += 1
 				if source.sample("route",point)<.5: off_route += 1
-			if off_stone>0 or off_route>world.main_route.size()/5: source_problems.append("%d:%d %d main grips off stone, %d off route" % [location,route,off_stone,off_route])
+			# A free route finds its own stone: the corridor only leads it.
+			var loose := bool(source.brief.get("free_route",false))
+			if off_stone>0 or off_route>world.main_route.size()/(2 if loose else 5): source_problems.append("%d:%d %d main grips off stone, %d off route" % [location,route,off_stone,off_route])
 			world.free()
 	check(source_problems.is_empty(),"every route has its source masks and the corridor follows the route %s" % str(source_problems.slice(0,4)))
 	var directory := OS.get_environment("LASTHOOK_SAVE_DIR")

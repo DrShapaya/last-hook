@@ -257,7 +257,10 @@ func run_tests() -> void:
 			for id in world.main_route:
 				var point: Vector2 = world.anchors[id]["pos"]
 				if point.y>level.height: continue
-				if source.sample("silhouette",point)<.5: off_stone += 1
+				var wedged := false
+				for rock in world.layout.get("wedged_rocks") if world.layout is MaskLayout else []:
+					if (rock as Vector2).distance_to(point)<1.5: wedged = true
+				if source.sample("silhouette",point)<.5 and not wedged: off_stone += 1
 				if source.sample("route",point)<.5: off_route += 1
 			if off_stone>0 or off_route>world.main_route.size()/5: source_problems.append("%d:%d %d main grips off stone, %d off route" % [location,route,off_stone,off_route])
 			world.free()

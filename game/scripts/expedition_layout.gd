@@ -55,7 +55,11 @@ func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 	var complete := finite and (summit_added or main_point(row).y>=summit-.8)
 	_rows_done(complete)
 	if not economy_loot: return
-	loot_plan.resolve_until(INF if complete else float(row-3))
+	loot_plan.resolve_until(_loot_limit(INF if complete else float(row-3)))
+
+# The last row whose loot may be placed now, of the one asked for.
+func _loot_limit(limit: float) -> float:
+	return limit
 
 # Called once rows are laid and before the remaining loot is placed; a
 # subclass can add grips whose rewards join the same economy.
@@ -757,4 +761,4 @@ func _generate_row(index: int) -> void:
 		if info["type"]=="exit" and info["step"]==0: loot_plan.request(index,main_point(index)+Vector2(.25,-2.05),"landmark")
 		# Odd main rows carry a single coin; even rows already requested theirs.
 		elif index%2==1: loot_plan.request(index,main_point(index)+Vector2(-.25,-2.05),"main_coin")
-		loot_plan.resolve_until(float(index-2))
+		loot_plan.resolve_until(_loot_limit(float(index-2)))

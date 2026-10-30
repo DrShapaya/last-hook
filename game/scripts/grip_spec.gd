@@ -53,7 +53,12 @@ static func network_kind(kind: int) -> bool:
 # The stable network excludes reserves and reward grips: a reward grip is
 # reached only through its choice crystal and leaves forward on its own.
 static func in_network(object: Dictionary) -> bool:
-	return network_kind(kind_of(object)) and not object.get("reserve",false) and role(object)!="reward"
+	return (network_kind(kind_of(object)) or fork(object)) and not object.get("reserve",false) and role(object)!="reward"
+
+# A crystal on the main route where a level parts into two ways: it holds
+# like stone, and both ways leave from it.
+static func fork(object: Dictionary) -> bool:
+	return kind_of(object)==CRYSTAL and object.has("fork")
 
 static func timed(object: Dictionary) -> bool:
 	return kind_of(object)==ROOT

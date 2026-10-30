@@ -35,7 +35,7 @@ static func audit(layout: MountainLayout) -> Dictionary:
 		var to: Vector2 = b["pos"]
 		if to.y<=from.y or from.distance_to(to)>rope or not layout.transition_clear(from,to):
 			problems.append("main %d->%d is not a rising base-kit transfer" % [row-1,row])
-		if not GripSpec.network_kind(GripSpec.kind_of(b)):
+		if not GripSpec.network_kind(GripSpec.kind_of(b)) and not GripSpec.fork(b):
 			problems.append("main %d needs a %s grip" % [row,GripSpec.type_of(b)])
 	# 3-6. Branches leave from a grip that is consumed behind the player. Each
 	# record is judged in the state after its grip acted: every candidate exit

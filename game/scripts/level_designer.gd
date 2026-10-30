@@ -45,9 +45,8 @@ var noise := FastNoiseLite.new()
 var sections: Array = []
 # Splits bottom-up: {y0, y1, side, main_x, path: PackedVector2Array, style}
 var splits: Array = []
-# Shapes of the far way and the width of the stone band each runs on.
-const SPLIT_STYLES := ["ledge","ridge","arc","stones","diagonal"]
-const SPLIT_BAND := {"ledge":2.3,"ridge":2.8,"arc":2.2,"stones":1.8,"diagonal":2.4}
+# The width of the stone band each shape of the far way runs on.
+const SPLIT_BAND := {"ledge":2.3,"ridge":2.8,"arc":2.2,"stones":2.2,"diagonal":2.4,"butte":2.4}
 # Stone kept beside the route corridor: forks lean up to 2 units out of it.
 const ROUTE_ROCK := 2.6
 # Zigzag width of the main route by landform (1 = the generator's): wide
@@ -55,6 +54,13 @@ const ROUTE_ROCK := 2.6
 # base-kit reach (MaskLayout clamps it).
 const SWAY := {"base":1.0,"wall":1.3,"islands":1.2,"overhang":1.25,"arch":1.3,"split":1.25,"terrace":1.2,"traverse":1.5,"chimney":1.15,"neck":1.0}
 const SPLIT_RAMP := 4.0
+
+# The designer of a location: each mountain is drawn by its own.
+static func make(level_location: int, level_route: int, design_seed: int) -> LevelDesigner:
+	match level_location:
+		1: return DesertDesigner.new(level_location,level_route,design_seed)
+		2: return WinterDesigner.new(level_location,level_route,design_seed)
+	return LevelDesigner.new(level_location,level_route,design_seed)
 
 func _init(level_location: int, level_route: int, design_seed: int) -> void:
 	location = level_location
@@ -119,8 +125,9 @@ func plan() -> void:
 		var y0: float = maxf(3.0,float(entry[1])-1.0)
 		var y1: float = float(entry[2])+1.0
 		if beat=="start" or y1-y0<2.0: continue
-		var choices: Array = BEAT_FORMS[beat].filter(func(form: String) -> bool: return form!=previous_form)
-		if choices.is_empty(): choices = BEAT_FORMS[beat]
+		var forms := _forms_of(beat)
+		var choices: Array = forms.filter(func(form: String) -> bool: return form!=previous_form)
+		if choices.is_empty(): choices = forms
 		var form: String = choices[random.randi_range(0,choices.size()-1)]
 		var act := int(entry[3])
 		if act!=lean_act:
@@ -140,7 +147,7 @@ func plan() -> void:
 			finish = center
 		elif form=="neck":
 			finish = random.randf_range(-3.0,3.0)
-		finish = clampf(finish,-MAX_CENTER,MAX_CENTER)
+		finish = clampf(_finish_of(form,center,finish,y1-y0),-MAX_CENTER,MAX_CENTER)
 		var section := {"form":form,"beat":beat,"act":int(entry[3]),"y0":y0,"y1":y1,"center0":start,"center1":finish,
 			"half":SECTION_HALF[form]*random.randf_range(.9,1.1),"corridor":float(CORRIDOR_HALF.get(form,CORRIDOR_DEFAULT)),
 			"bias":random.randf_range(-1.5,1.5) if form in ["wall","terrace","arch"] else 0.0,"features":[]}
@@ -149,6 +156,56 @@ func plan() -> void:
 		center = finish
 		previous_form = form
 	_plan_splits(spans)
+	_after_plan()
+
+# --- What each location's designer sets its own way ----------------------------------
+
+func _forms_of(beat: String) -> Array:
+	return BEAT_FORMS[beat]
+
+func _split_shapes() -> Array:
+	return ["ledge","ridge","arc","stones","diagonal"]
+
+func _sway_scale() -> float:
+	return 1.0
+
+func _finish_of(_form: String, _center: float, finish: float, _span: float) -> float:
+	return finish
+
+func _after_plan() -> void:
+	pass
+
+# How far a point is inside this mountain, in units (negative outside).
+func _outline_at(point: Vector2) -> float:
+	return _shape_at(point)
+
+# A second way's own ridge, for a mountain that gives it one.
+func _far_ridge(_point: Vector2, _split: Dictionary) -> float:
+	return -INF
+
+func _split_edge(_y: float) -> float:
+	return 0.0
+
+func _split_blend() -> float:
+	return .01
+
+func _dress_brief(_source: LevelSource) -> void:
+	pass
+
+func _route_stone(point: Vector2) -> float:
+	return _blend(point.y,"corridor")+ROUTE_ROCK-absf(point.x-corridor_center(point.y))
+
+# --- Shape helpers ------------------------------------------------------------------
+
+static func rounded_box(point: Vector2, box: Rect2, radius: float) -> float:
+	var q := (point-box.get_center()).abs()-box.size*.5+Vector2(radius,radius)
+	return radius-minf(maxf(q.x,q.y),0.0)-Vector2(maxf(q.x,0.0),maxf(q.y,0.0)).length()
+
+# The union of two masses with their meeting corner rounded over `blend`.
+static func smooth_max(a: float, b: float, blend: float) -> float:
+	if not is_finite(a) or not is_finite(b): return maxf(a,b)
+	var h := clampf(.5+.5*(a-b)/blend,0,1)
+	return lerpf(b,a,h)+blend*h*(1.0-h)
 
 func _plan_splits(spans: Array) -> void:
 	splits.clear()
@@ -158,7 +215,7 @@ func _plan_splits(spans: Array) -> void:
 			var act := int(entry[3])
 			var range_y: Vector2 = acts.get(act,Vector2(INF,-INF))
 			acts[act] = Vector2(minf(range_y.x,float(entry[1])),maxf(range_y.y,float(entry[2])))
-	var style := ""
+	var shape := ""
 	for act in acts:
 		var y0: float = acts[act].x
 		var y1: float = acts[act].y
@@ -171,19 +228,19 @@ func _plan_splits(spans: Array) -> void:
 		var main_x := clampf(center-side*random.randf_range(2.0,3.0),-6.0,6.0)
 		if side>0: main_x = minf(main_x,15.0-gap)
 		else: main_x = maxf(main_x,-15.0+gap)
-		var choices: Array = SPLIT_STYLES.filter(func(name: String) -> bool: return name!=style)
-		style = choices[random.randi_range(0,choices.size()-1)]
-		splits.append({"y0":y0,"y1":y1,"side":side,"main_x":main_x,"far_x":main_x+side*gap,"style":style,
-			"path":_split_path(style,main_x,side,gap,y0,y1),"band":float(SPLIT_BAND[style])*random.randf_range(.85,1.15),
+		var choices: Array = _split_shapes().filter(func(name: String) -> bool: return name!=shape)
+		shape = choices[random.randi_range(0,choices.size()-1)]
+		splits.append({"y0":y0,"y1":y1,"side":side,"main_x":main_x,"far_x":main_x+side*gap,"style":shape,
+			"path":_split_path(shape,main_x,side,gap,y0,y1),"band":float(SPLIT_BAND[shape])*random.randf_range(.85,1.15),
 			"ridge":random.randf_range(4.4,6.0)})
 
 # The far way's line from where it leaves the main ridge to where it rejoins.
-func _split_path(style: String, main_x: float, side: float, gap: float, y0: float, y1: float) -> Array:
+func _split_path(shape: String, main_x: float, side: float, gap: float, y0: float, y1: float) -> Array:
 	var far_x := main_x+side*gap
 	var length := y1-y0
 	var near_x := main_x+side*4.2
 	var path: Array = [Vector2(near_x,y0+2.0)]
-	match style:
+	match shape:
 		"ledge":
 			# Long, gentle hops: out across the face, then side to side up the
 			# far ridge's ledges, then back across.
@@ -210,6 +267,11 @@ func _split_path(style: String, main_x: float, side: float, gap: float, y0: floa
 				path.append(Vector2(near_x+side*(gap-4.2)*minf(1.0,t/turn),y0+2.0+length*.42*t+sin(t*TAU*1.5)*1.2))
 			path.append(Vector2(far_x+side*.3,y0+length*.62))
 			path.append(Vector2(far_x-side*2.5,y1-3.5))
+		"butte":
+			# Out along a bed, up a free-standing pillar, back along its cap.
+			path.append(Vector2(far_x,y0+2.0))
+			path.append(Vector2(far_x,y1-2.5))
+			path.append(Vector2(far_x-side*2.0,y1-1.6))
 		"diagonal":
 			# A long slant out and up, then one level traverse back.
 			path.append(Vector2(far_x,y1-random.randf_range(4.5,6.0)))
@@ -297,6 +359,9 @@ func _blend(y: float, key: String) -> float:
 
 # How far a point is inside the mountain, in units (negative outside).
 func inside(point: Vector2) -> float:
+	return _outline_at(point)
+
+func _shape_at(point: Vector2) -> float:
 	var top := height+1.5
 	if point.y>top+.5 or point.y< -2.0: return -10.0
 	var split := split_at(point.y)
@@ -311,6 +376,12 @@ func inside(point: Vector2) -> float:
 	# stay inside the mountain whatever the noise and the cuts do.
 	var route_rock := _blend(point.y,"corridor")+ROUTE_ROCK-absf(point.x-corridor_center(point.y))
 	if point.y<=top: amount = maxf(amount,route_rock)
+	amount = _with_features(amount,point)
+	return maxf(amount,route_rock) if point.y<=top else amount
+
+# A section's own shapes joined to and cut out of the mass.
+func _with_features(mass: float, point: Vector2) -> float:
+	var amount := mass
 	var index := _section_at(point.y)
 	var features: Array = []
 	for neighbour in [index-1,index,index+1]:
@@ -325,13 +396,14 @@ func inside(point: Vector2) -> float:
 				var gap := float(feature[2].x)-absf(point.x-float(feature[1].x))
 				var span := float(feature[2].y)-absf(point.y-float(feature[1].y))
 				if span>0: amount = minf(amount,-minf(gap,span))
-	return maxf(amount,route_rock) if point.y<=top else amount
+	return amount
 
 # Within a split: a narrow main ridge round the route and a second ridge
 # along the other way's line, with open sky between them.
 func _split_inside(point: Vector2, split: Dictionary, top: float) -> float:
 	var axis := corridor_center(point.y)
 	var main := float(split.get("ridge",5.2))+noise.get_noise_2d(point.x,point.y)*1.2-absf(point.x-axis)
+	main += _split_edge(point.y)
 	var route_rock := _blend(point.y,"corridor")+ROUTE_ROCK-absf(point.x-axis)
 	var path: Array = split["path"]
 	var band := -INF
@@ -348,6 +420,7 @@ func _split_inside(point: Vector2, split: Dictionary, top: float) -> float:
 		band = maxf(band,here+noise.get_noise_2d(point.x*1.6,point.y*1.6+90.0)*.9-near.distance_to(point))
 		walked += (path[k] as Vector2).distance_to(path[k-1])
 	var amount := maxf(maxf(main,route_rock),band)
+	amount = smooth_max(amount,_far_ridge(point,split),_split_blend())
 	# Blend with the ordinary mountain over the split's first and last units.
 	var y0: float = split["y0"]
 	var y1: float = split["y1"]
@@ -414,8 +487,9 @@ func build(source_name: String = "") -> LevelSource:
 		var sway: float = SWAY.get(section["form"],1.0)
 		# On the main ridge of a split the route keeps a steadier rhythm.
 		if not split_at((float(section["y0"])+float(section["y1"]))*.5).is_empty(): sway = 1.1
-		pace.append({"from":snappedf(float(section["y0"]),.01),"to":snappedf(float(section["y1"]),.01),"sway":sway})
+		pace.append({"from":snappedf(float(section["y0"]),.01),"to":snappedf(float(section["y1"]),.01),"sway":sway*_sway_scale()})
 	source.brief["pace"] = pace
+	_dress_brief(source)
 	source.masks["rest"] = _paint_features(source,"rest")
 	source.masks["solid"] = _paint_features(source,"solid")
 	return source

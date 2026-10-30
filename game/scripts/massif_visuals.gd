@@ -639,6 +639,53 @@ func build_chunk(index: int, parent: Node3D) -> void:
 	await _build_landmarks(index,parent)
 	if not await pause(parent): return
 	await _build_decor(index,parent)
+	if layout is MaskLayout and (layout as MaskLayout).rock_form!="boulder":
+		if not await pause(parent): return
+		await _build_ledge_plants(index,parent)
+
+# Plants and stones along the ledges of a location's own rock.
+func _build_ledge_plants(index: int, parent: Node3D) -> void:
+	var rock := RockSurface.make(layout as MaskLayout)
+	var random := layout.rng(index,905)
+	var budget := 46 if quality=="high" else 30 if quality=="balanced" else 12
+	var placed := 0
+	for spot: Vector3 in rock.perches(index*BAND,(index+1)*BAND,random,budget*8):
+		if placed>=budget: break
+		if not await pause(parent): return
+		var point := Vector2(spot.x,spot.y)
+		if not _decor_route_clear(point,.9): continue
+		var entry := _decor_entry("grass" if random.randf()<.6 else "pebbles",profile_at(point.y),random)
+		if entry.is_empty(): continue
+		var size := FloraModels.size_of(entry,1.0)
+		var rect := Rect2(point.x-size.x*.5,point.y,size.x,size.y)
+		if _taken(index,rect.grow(.06)): continue
+		var holder := Node3D.new()
+		holder.name = "Растение_%d" % placed
+		parent.add_child(holder)
+		holder.position = Vector3(point.x,point.y,spot.z+.05)
+		FloraModels.plant(holder,entry,quality!="battery",random.randf_range(.95,1.4))
+		_take(index,rect)
+		placed += 1
+	# Roots and ice hang under the overhangs.
+	var hanging := 0
+	var hanging_budget := budget/3
+	for spot: Vector3 in rock.hangs(index*BAND,(index+1)*BAND,random,budget*40):
+		if hanging>=hanging_budget: break
+		if not await pause(parent): return
+		var point := Vector2(spot.x,spot.y)
+		if not _decor_route_clear(point,.9): continue
+		var entry := _decor_entry("hanging",profile_at(point.y),random)
+		if entry.is_empty(): continue
+		var size := FloraModels.size_of(entry,1.0)
+		var rect := Rect2(point.x-size.x*.5,point.y-size.y,size.x,size.y)
+		if _taken(index,rect.grow(.04)): continue
+		var holder := Node3D.new()
+		holder.name = "Подвес_%d" % hanging
+		parent.add_child(holder)
+		holder.position = Vector3(point.x,point.y,spot.z+.05)
+		FloraModels.plant(holder,entry,quality!="battery",1.0)
+		_take(index,rect)
+		hanging += 1
 
 func _palette(profile: GripBiomeProfile, height: float, mass: RockMassSpec) -> Dictionary:
 	var rock: Dictionary = profile.rock_material
@@ -672,6 +719,11 @@ func _build_masses(index: int, parent: Node3D) -> void:
 	# Neighbouring bands first: their masses shade this band's creases.
 	front_band(index-1)
 	front_band(index+1)
+	if layout is MaskLayout and (layout as MaskLayout).rock_form!="boulder":
+		# The masses stay an unseen frame behind the location's own rock.
+		front_band(index)
+		_build_rock_surface(index,parent)
+		return
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var emitted := 0
@@ -687,6 +739,19 @@ func _build_masses(index: int, parent: Node3D) -> void:
 	instance.material_override = rock_material_at(index*BAND+BAND*.5)
 	# Masses shade each other: overhangs, lintels and stacked blocks cast on
 	# the stone behind them. Battery has no shadow map at all.
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if quality!="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(instance)
+
+func _build_rock_surface(index: int, parent: Node3D) -> void:
+	var rock := RockSurface.make(layout as MaskLayout)
+	if rock==null: return
+	var cell := .42 if quality=="high" else .6 if quality=="balanced" else 1.0
+	var mesh := rock.build(index*BAND,(index+1)*BAND,cell)
+	if mesh.get_surface_count()==0: return
+	var instance := MeshInstance3D.new()
+	instance.name = "Скальный массив_%d" % index
+	instance.mesh = mesh
+	instance.material_override = rock_material_at(index*BAND+BAND*.5)
 	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if quality!="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(instance)
 

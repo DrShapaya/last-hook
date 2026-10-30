@@ -31,6 +31,8 @@ uniform float roughness_value : hint_range(0.0,1.0) = 0.95;
 // Bedding of the rock: broad slanted bands, scaled per profile (sandstone
 // strong, limestone faint). World space, so it never stretches on a wall.
 uniform float strata_scale : hint_range(0.0,2.0) = 0.5;
+uniform float strata_contrast : hint_range(0.0,1.0) = 0.12;
+uniform float strata_fine : hint_range(0.0,1.0) = 0.0;
 
 varying vec3 rock_position;
 varying vec3 rock_normal;
@@ -74,7 +76,13 @@ void fragment() {
 	stone*=mix(vec3(1.0),mix(vec3(0.90,0.94,1.0),vec3(1.04,1.02,0.97),smoothstep(-0.7,0.7,rock_normal.y)),macro_strength);
 	stone*=1.0-crack*0.06;
 	float bedding=noise3(vec3(p.x*0.09,p.y*0.75+p.x*0.22,p.z*0.2));
-	stone*=1.0+(bedding-0.5)*0.12*strata_scale;
+	stone*=1.0+(bedding-0.5)*strata_contrast*strata_scale;
+	if(strata_fine>0.0){
+		// Fine wavy bedding drawn across the sandstone, in uneven bands.
+		float wave=noise3(vec3(p.x*0.18,p.y*0.35,p.z*0.3))*1.4;
+		float band=noise3(vec3(p.x*0.05,(p.y+wave)*2.3,p.z*0.1));
+		stone*=1.0-strata_fine*smoothstep(0.5,0.66,band)+strata_fine*0.5*smoothstep(0.42,0.3,band);
+	}
 	// Broad warm and cool patches, a few metres across, so the massif is not
 	// one flat grey.
 	float patch=noise3(p*0.12+vec3(31.0));

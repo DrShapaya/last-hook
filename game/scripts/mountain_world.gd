@@ -422,7 +422,8 @@ func _highlight_exit(id: int, on: bool) -> void:
 		ring.rotation.x = PI*.5
 		# A temporary hint while the crystal is held, just off the exit's face.
 		ring.position = Vector3(0,0,float((object.get("face_point",Vector3(0,0,.92)) as Vector3).z)+.03)
-		ring.material_override = mat("choice_exit",Color("bfe4ff"),true)
+		# The way with the treasure shines gold.
+		ring.material_override = mat("choice_exit_gold",Color("ffd27a"),true) if object.has("split") else mat("choice_exit",Color("bfe4ff"),true)
 		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		marker.add_child(ring)
 	if marker!=null: marker.visible = on

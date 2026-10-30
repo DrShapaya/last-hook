@@ -50,7 +50,7 @@ func design_level(location: int, route: int) -> bool:
 	var candidates: Array = []
 	for attempt in range(tries):
 		var started := Time.get_ticks_msec()
-		var designer := LevelDesigner.new(location,route,base_seed*31+variant*1000+attempt)
+		var designer := LevelDesigner.make(location,route,base_seed*31+variant*1000+attempt)
 		var source := designer.build()
 		var world := MountainWorld.new()
 		world.visuals_enabled = false

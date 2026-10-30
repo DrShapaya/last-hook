@@ -108,13 +108,56 @@ func run_tests() -> void:
 	check(is_equal_approx(baked.layout.outer_edge(30.0,1),layout.outer_edge(30.0,1)) and baked.layout.main_route==layout.main_route,"a mask level loads from its bake without masks")
 	designer_tests()
 	split_tests()
+	style_tests()
 	print("MASKS_TESTS ",checks," checks, ",failures.size()," failures")
 	quit(0 if failures.is_empty() else 1)
+
+# Each location has a generator of its own, with its own rock and mask.
+func style_tests() -> void:
+	var parted_rows := {}
+	for location in range(3):
+		var designer := LevelDesigner.make(location,0,int(LevelCatalog.route(location,0)["seed"])*31)
+		var source := designer.build()
+		var world := MountainWorld.new()
+		world.visuals_enabled = false
+		root.add_child(world)
+		world.setup(int(source.brief["seeds"]["route"]),location,0,false,0,true)
+		var layout := world.layout as MaskLayout
+		layout.use_source(source)
+		world.generate_to(designer.height+6,true,designer.height)
+		var parted := 0
+		var y := 8.0
+		while y<designer.height-8.0:
+			var spans := 0
+			var inside := false
+			for x in range(-20,21):
+				var stone: bool = source.sample("silhouette",Vector2(x,y))>.5
+				if stone and not inside: spans += 1
+				inside = stone
+			if spans>=2: parted += 1
+			y += 1.0
+		parted_rows[location] = parted
+		var sky := 0
+		for id in layout.main_route:
+			if layout.inside_distance(layout.anchors[id]["pos"])<0.0: sky += 1
+		check(sky==0,"every main grip finds stone in the mask of location %d (%d in the sky)" % [location,sky])
+		match location:
+			0: check(designer.get_script()==LevelDesigner and layout.rock_form=="boulder" and layout.rock_grid.is_empty(),"the summer mountain stays boulders and keeps no rock field")
+			1: check(designer is DesertDesigner and layout.rock_form=="desert" and not (designer as DesertDesigner).tiers.is_empty(),"the canyon has its own designer and rock")
+			2: check(designer is WinterDesigner and layout.rock_form=="winter" and not layout.rock_marks.is_empty(),"the snow peak has its own designer, rock and shelves")
+		if location>0:
+			var rock := RockSurface.make(layout)
+			var mesh := rock.build(24.0,48.0,1.0)
+			check(mesh.get_surface_count()==1 and mesh.get_faces().size()>300,"location %d builds one continuous rock face" % location)
+			var a := rock.build(24.0,48.0,1.0).get_faces()
+			check(a==mesh.get_faces(),"the rock face of location %d is the same every time" % location)
+		world.free()
+	check(int(parted_rows[1])>0 and int(parted_rows[2])>0,"the canyon and the peak part into separate masses %s" % str(parted_rows))
 
 # The automatic designer: beats dressed in landforms, the route on stone,
 # the same seed giving the same source.
 func designer_tests() -> void:
-	var designer := LevelDesigner.new(1,0,777)
+	var designer := LevelDesigner.new(0,1,777)
 	var source := designer.build()
 	check(source.masks["silhouette"].get_size()==source.size() and source.brief["generator"]=="masks","the designer writes a mask source of the level's size")
 	var forms_ok := true
@@ -133,9 +176,9 @@ func designer_tests() -> void:
 		if source.sample("silhouette",Vector2(designer.corridor_center(y),y))<.5: off_stone += 1
 		y += .5
 	check(off_stone==0,"the designed route corridor runs on stone all the way up (%d gaps)" % off_stone)
-	var again := LevelDesigner.new(1,0,777).build()
+	var again := LevelDesigner.new(0,1,777).build()
 	check(again.masks["silhouette"].get_data()==source.masks["silhouette"].get_data() and again.masks["route"].get_data()==source.masks["route"].get_data(),"the same design seed gives the same masks")
-	var other := LevelDesigner.new(1,0,778).build()
+	var other := LevelDesigner.new(0,1,778).build()
 	check(other.masks["silhouette"].get_data()!=source.masks["silhouette"].get_data(),"another design seed gives another mountain")
 
 # Splits: the designer plans one per act; the generator builds each as a
@@ -185,6 +228,39 @@ func split_tests() -> void:
 			for row_id in rows:
 				if layout.anchors[row_id]["pos"].distance_to(grip)<MaskLayout.ISOLATION: isolated = false
 	check(far_grips>=6 and isolated,"the far part of every split is out of any rope's reach of the main route (%d far grips)" % far_grips)
+	# A crystal points at both ways, and only real partings have one.
+	var crystals := 0
+	var forks_ok := true
+	for anchor in layout.anchors:
+		if GripSpec.kind_of(anchor)==GripSpec.CRYSTAL:
+			crystals += 1
+			if not GripSpec.fork(anchor): forks_ok = false
+	for split in layout.splits_built:
+		var exits: Array = layout.anchors[split["entry"]].get("choice_exits",[])
+		if not GripSpec.fork(layout.anchors[split["entry"]]) or exits.size()!=2 or not exits.has(split["grips"][0]): forks_ok = false
+	check(forks_ok and crystals==layout.splits_built.size(),"a crystal stands at every split and nowhere else (%d)" % crystals)
+	# The long way pays better than the direct one.
+	for split in layout.splits_built:
+		var y0: float = layout.anchors[split["entry"]]["pos"].y
+		var y1: float = layout.anchors[split["exit"]]["pos"].y
+		var stretch: Array = []
+		for id in layout.main_route:
+			if layout.anchors[id]["pos"].y>y0 and layout.anchors[id]["pos"].y<y1: stretch.append(id)
+		var direct := 0
+		var detour := 0
+		var treasure := false
+		# Each find belongs to the way whose grips it is nearest to.
+		for find in layout.finds:
+			if find["pos"].y<y0 or find["pos"].y>y1: continue
+			var to_main := INF
+			var to_way := INF
+			for id in stretch: to_main = minf(to_main,find["pos"].distance_to(layout.anchors[id]["pos"]))
+			for id in split["grips"]: to_way = minf(to_way,find["pos"].distance_to(layout.anchors[id]["pos"]))
+			if to_main<to_way: direct += int(find["item"]["value"])
+			else:
+				detour += int(find["item"]["value"])
+				if find["role"]=="route_treasure": treasure = true
+		check(treasure and detour>=direct*3,"the second way holds a treasure and at least three times the direct way's value (%d against %d)" % [detour,direct])
 	var filler := 0
 	for anchor in layout.anchors:
 		if str(anchor.get("role",""))=="auxiliary" and not anchor.has("split") and not anchor.get("reserve",false): filler += 1

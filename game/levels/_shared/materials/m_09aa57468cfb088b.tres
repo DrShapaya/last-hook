@@ -1,0 +1,26 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://shaders/massif_rock.gdshader" id="1_l5hmj"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_l5hmj")
+shader_parameter/aerial_depth = null
+shader_parameter/snow_override = 0.8
+shader_parameter/moss_override = 0.0
+shader_parameter/dust_amount = 0.0
+shader_parameter/dust_color = Color(0.7882353, 0.80784315, 0.8235294, 1)
+shader_parameter/material_tint = null
+shader_parameter/facet_strength = 1.0
+shader_parameter/detail_strength = 0.4
+shader_parameter/aerial_color = null
+shader_parameter/form_light_world = null
+shader_parameter/form_strength = null
+shader_parameter/form_shade = null
+shader_parameter/form_lit = null
+shader_parameter/shade_floor = null
+shader_parameter/macro_strength = null
+shader_parameter/roughness_value = 0.85
+shader_parameter/strata_scale = 0.4
+shader_parameter/strata_contrast = null
+shader_parameter/strata_fine = null

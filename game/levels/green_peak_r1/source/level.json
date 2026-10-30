@@ -7,7 +7,7 @@
 	"generator": "masks",
 	"seeds": {
 		"route": 11148,
-		"design": 345588
+		"design": 347595
 	},
 	"pins": [],
 	"zones": [],
@@ -27,7 +27,7 @@
 			"to": 7.8
 		},
 		{
-			"form": "overhang",
+			"form": "islands",
 			"beat": "teach",
 			"act": 0,
 			"from": 5.8,
@@ -48,7 +48,7 @@
 			"to": 28.3
 		},
 		{
-			"form": "chimney",
+			"form": "islands",
 			"beat": "combo",
 			"act": 0,
 			"from": 26.3,
@@ -69,14 +69,14 @@
 			"to": 45.0
 		},
 		{
-			"form": "islands",
+			"form": "overhang",
 			"beat": "teach",
 			"act": 1,
 			"from": 43.0,
 			"to": 54.1
 		},
 		{
-			"form": "split",
+			"form": "arch",
 			"beat": "fork",
 			"act": 1,
 			"from": 52.1,
@@ -90,7 +90,7 @@
 			"to": 67.2
 		},
 		{
-			"form": "chimney",
+			"form": "islands",
 			"beat": "combo",
 			"act": 1,
 			"from": 65.2,
@@ -125,14 +125,14 @@
 			"to": 99.8
 		},
 		{
-			"form": "chimney",
+			"form": "traverse",
 			"beat": "combo",
 			"act": 2,
 			"from": 97.8,
 			"to": 105.9
 		},
 		{
-			"form": "split",
+			"form": "arch",
 			"beat": "fork",
 			"act": 2,
 			"from": 103.9,
@@ -148,22 +148,22 @@
 	],
 	"splits": [
 		{
-			"style": "ridge",
+			"style": "diagonal",
 			"path": [
 				[
-					-0.14,
+					-1.8,
 					17.16
 				],
 				[
-					9.13,
-					18.63
+					7.67,
+					27.52
 				],
 				[
-					9.51,
-					28.82
+					7.07,
+					30.33
 				],
 				[
-					-0.14,
+					-1.8,
 					31.93
 				]
 			],
@@ -171,22 +171,22 @@
 			"to": 32.9
 		},
 		{
-			"style": "diagonal",
+			"style": "ridge",
 			"path": [
 				[
-					1.89,
+					2.73,
 					55.07
 				],
 				[
-					12.6,
-					67.52
+					11.65,
+					57.17
 				],
 				[
-					11.9,
-					69.67
+					12.01,
+					68.19
 				],
 				[
-					1.89,
+					2.73,
 					71.27
 				]
 			],
@@ -194,30 +194,22 @@
 			"to": 72.3
 		},
 		{
-			"style": "ledge",
+			"style": "diagonal",
 			"path": [
 				[
-					-1.33,
+					-0.31,
 					95.07
 				],
 				[
-					8.22,
-					97.97
+					-9.79,
+					107.7
 				],
 				[
-					6.71,
-					102.28
+					-8.87,
+					109.67
 				],
 				[
-					9.46,
-					105.74
-				],
-				[
-					7.62,
-					109.07
-				],
-				[
-					-1.33,
+					-0.31,
 					111.27
 				]
 			],
@@ -239,7 +231,7 @@
 		{
 			"from": 5.75,
 			"to": 16.16,
-			"sway": 1.25
+			"sway": 1.2
 		},
 		{
 			"from": 14.16,
@@ -269,7 +261,7 @@
 		{
 			"from": 42.98,
 			"to": 54.07,
-			"sway": 1.2
+			"sway": 1.25
 		},
 		{
 			"from": 52.07,
@@ -322,25 +314,25 @@
 			"sway": 1.0
 		}
 	],
-	"design_variant": 0,
+	"design_variant": 2,
 	"score": {
-		"score": 0.826,
+		"score": 0.853,
 		"terms": {
-			"level_hops": 1.0,
-			"long_hops": 0.166733280533836,
-			"sparse": 0.8,
+			"level_hops": 0.855072463768116,
+			"long_hops": 0.415638665358226,
+			"sparse": 1.0,
 			"splits": 1.0,
-			"variety": 1.0,
-			"sky": 0.984848484848485
+			"variety": 0.888888888888889,
+			"sky": 0.954545454545455
 		},
 		"metrics": {
-			"level_hops": 0.47887323943662,
-			"mean_hop": 3.73338662442707,
-			"grips_per_10": 6.5,
+			"level_hops": 0.521739130434783,
+			"mean_hop": 3.93251093228658,
+			"grips_per_10": 5.83333333333333,
 			"splits": 3,
 			"splits_planned": 3,
-			"variety": 1.0,
-			"sky": 0.188484848484848
+			"variety": 0.888888888888889,
+			"sky": 0.185454545454545
 		}
 	},
 	"format": 1

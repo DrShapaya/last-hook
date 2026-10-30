@@ -26,6 +26,17 @@ var source: LevelSource
 var edge_rows := PackedVector2Array()
 # Planned rock masses: [x, y, radius, depth 0..1, role].
 var relief: Array = []
+# What the rock is made of: boulders, or the RockSurface of "desert" or
+# "winter", built from this coarse field of the mask.
+var rock_form: String = "boulder"
+# What a location's rock marks on its face (winter: its shelves).
+var rock_marks: Array = []
+# Rocks wedged over gaps for the route: stone the mask itself does not have.
+var wedged_rocks: Array = []
+var rock_grid: PackedFloat32Array = PackedFloat32Array()
+var rock_grid_size: Vector2i = Vector2i.ZERO
+var rock_grid_origin: Vector2 = Vector2.ZERO
+var rock_grid_step: float = .5
 # Main route row -> grip kind forced by a pin.
 var pinned_rows: Dictionary = {}
 # What the masks asked for and could not get, for the editor and the bake log.
@@ -206,6 +217,8 @@ func outside(point: Vector2, margin: float = .65) -> bool:
 # Greedy over sample points by depth into the mass.
 func _plan_relief() -> void:
 	relief.clear()
+	rock_form = str(source.brief.get("rock","boulder"))
+	rock_marks = source.brief.get("shelves",[])
 	var random := rng(0,811)
 	var depth := _mask_bytes("depth")
 	var candidates: Array = []
@@ -234,6 +247,18 @@ func _plan_relief() -> void:
 		placed.append(entry)
 	relief = placed
 
+# The mask as a coarse distance field: all a RockSurface needs of it, kept in
+# the bake with the layout.
+func _store_rock_grid() -> void:
+	if rock_form=="boulder": return
+	rock_grid_origin = Vector2(LevelSource.X_MIN,-3.0)
+	var top := float(source.brief.get("height",120.0))+7.0
+	rock_grid_size = Vector2i(roundi((LevelSource.X_MAX-LevelSource.X_MIN)/rock_grid_step)+1,roundi((top-rock_grid_origin.y)/rock_grid_step)+1)
+	rock_grid.resize(rock_grid_size.x*rock_grid_size.y)
+	for y in range(rock_grid_size.y):
+		for x in range(rock_grid_size.x):
+			rock_grid[y*rock_grid_size.x+x] = snappedf(inside_distance(rock_grid_origin+Vector2(x,y)*rock_grid_step),.01)
+
 # --- Route --------------------------------------------------------------------------
 
 func start_point(act: int) -> Vector2:
@@ -254,6 +279,12 @@ func _plan_act(act: int) -> void:
 	var random := act_rng(act,0,20)
 	var start := start_point(act)
 	var target := start_point(act+1)
+	if act>0 and bool(source.brief.get("free_route",false)):
+		# The last act ends wherever its stone let it: the new one starts in
+		# reach of that.
+		var last: Vector2 = route_points[-1]
+		var across := sqrt(maxf(0.0,REACH*REACH-pow(start.y-last.y,2)))
+		start.x = _stone_x(clampf(start.x,last.x-across,last.x+across),start.y,last.x-across,last.x+across)
 	var beats := beats_of(act)
 	var counts: Array[int] = []
 	for beat in beats: counts.append(int(BASE_ROWS[beat["beat"]]))
@@ -340,6 +371,7 @@ func _plan_act(act: int) -> void:
 		if kind!="exit": x = clampf(x,corridor.x-limit,corridor.x+limit)
 		var reach := sqrt(maxf(0.0,REACH*REACH-rise*rise))
 		x = clampf(x,point.x-reach,point.x+reach)
+		x = _stone_x(x,y,point.x-reach,point.x+reach)
 		point = Vector2(x,y)
 		route_points.append(point)
 		row_info.append({"act":act,"beat":entry[0],"step":entry[1],"type":kind,"def":beat,"side":fork_side if kind=="fork" else direction})
@@ -445,9 +477,14 @@ func _components_empty(layer: String) -> bool:
 # cross.
 
 const ISOLATION := 9.4
-const HOPS := {"ledge":[4.2,.35,0.0],"ridge":[3.4,.25,.9],"arc":[3.9,.3,0.0],"stones":[4.2,.2,0.0],"diagonal":[4.4,.3,.4]}  # length, length jitter, side swing
+const HOPS := {"ledge":[4.2,.35,0.0],"ridge":[3.4,.25,.9],"arc":[3.9,.3,0.0],"stones":[4.2,.2,0.0],"diagonal":[4.4,.3,.4],"butte":[4.4,.3,.3]}  # length, length jitter, side swing
+
+# Finds of a main stretch that move onto its split's second way.
+const SPLIT_LOOT_OUT := 6.0
+const SPLIT_LOOT := ["main_safe","detour","choice","route_treasure","route_cache","fork_collection","fork_risky_shortcut","fork_speed"]
 
 var splits_built: Array = []
+var _split_spots: Array[Vector2] = []
 # Why split spots were turned down, by reason (for tools and the editor).
 var split_rejects: Dictionary = {}
 var splits_done := false
@@ -457,10 +494,49 @@ func _rows_done(complete: bool) -> void:
 	splits_done = true
 	for index in range(source.brief.get("splits",[]).size()): _build_split(index,source.brief["splits"][index])
 
+# On a mask that owes the route no stone, the nearest place on stone along the
+# row, within the given range.
+func _stone_x(x: float, y: float, low: float, high: float) -> float:
+	if not bool(source.brief.get("free_route",false)): return x
+	for step in range(0,17):
+		for sign_x in [1.0,-1.0]:
+			var probe: float = x+sign_x*step*.35
+			if probe>=low and probe<=high and inside_distance(Vector2(probe,y))>=EDGE_CLEAR+.1: return probe
+	_wedge_rock(Vector2(x,y))
+	return x
+
+# No stone in reach: a rock wedged in the gap carries the grip, the way
+# chockstones hang in real slots. It joins the mask and the relief.
+func _wedge_rock(at: Vector2) -> void:
+	var center := source.to_pixel(at)
+	var radius := roundi(2.2*LevelSource.PX_PER_UNIT)
+	for y in range(maxi(0,int(center.y)-radius),mini(_height,int(center.y)+radius+1)):
+		for x in range(maxi(0,int(center.x)-radius),mini(_width,int(center.x)+radius+1)):
+			var depth := 2.2-Vector2(x-center.x,y-center.y).length()/LevelSource.PX_PER_UNIT
+			if depth>0.0: _inside[y*_width+x] = maxf(_inside[y*_width+x],depth)
+	relief.append([snappedf(at.x,.01),snappedf(at.y,.01),1.6,.55,"island"])
+	wedged_rocks.append(at)
+
+# An end of a split's line, drawn in to the nearest main grip below it (or
+# above it) when that grip's zigzag swung out of reach.
+func _toward_main(point: Vector2, below: bool) -> Vector2:
+	var nearest := Vector2.INF
+	for id in main_route:
+		var at: Vector2 = anchors[id]["pos"]
+		if (at.y<point.y)==below and at.distance_to(point)<nearest.distance_to(point): nearest = at
+	if not nearest.is_finite() or nearest.distance_to(point)<=REACH: return point
+	return nearest+(point-nearest).limit_length(REACH-.3)
+
+# Splits take finds from their main stretches, so loot waits for all rows.
+func _loot_limit(limit: float) -> float:
+	return limit if limit==INF or source==null else -INF
+
 func _build_split(index: int, spec: Dictionary) -> void:
 	var path := PackedVector2Array()
 	for point in spec.get("path",[]): path.append(Vector2(point[0],point[1]))
 	if path.size()<2: return
+	path[0] = _toward_main(path[0],true)
+	path[-1] = _toward_main(path[-1],false)
 	var style := str(spec.get("style","ledge"))
 	var hop: Array = HOPS.get(style,HOPS["ledge"])
 	# The main grips it leaves from and returns to.
@@ -527,16 +603,74 @@ func _build_split(index: int, spec: Dictionary) -> void:
 		from_id = id
 		ids.append(id)
 	_add_edge(Vector2i(from_id,main_route[exit_row]))
-	if economy_loot:
-		# Coins along every hop; a treasure where the far side turns back.
-		for k in range(points.size()):
-			var to: Vector2 = points[k+1] if k+1<points.size() else exit
-			loot_plan.request(entry_row,points[k]+Vector2(0,-1.2),"trail",to+Vector2(0,-1.2),{"count":3})
-		var far := 0
-		for k in range(points.size()):
-			if absf(points[k].x-entry.x)>absf(points[far].x-entry.x): far = k
-		loot_plan.request(entry_row,points[far]+Vector2(.25,-2.05),"route_treasure" if style=="ledge" else "route_cache")
+	# The crystal at the parting points at both ways.
+	var fork: Dictionary = anchors[main_route[entry_row]]
+	fork["kind"] = GripSpec.CRYSTAL
+	fork["fork"] = index
+	fork.erase("exit_dir")
+	fork["choice_exits"] = [main_route[entry_row+1],ids[0]]
+	if economy_loot: _stock_split(entry_row,exit_row,points)
 	splits_built.append({"entry":main_route[entry_row],"exit":main_route[exit_row],"grips":ids,"style":style})
+
+# The second way is where the reward is. The valuables of the main stretch
+# move onto it, so the direct way is quick and poor and the long way pays:
+# coins from the first hop on (seen from the crystal), a set part on the way
+# out, a treasure on the far turn and a cache on the way back.
+func _stock_split(entry_row: int, exit_row: int, points: PackedVector2Array) -> void:
+	_split_spots.clear()
+	var entry: Vector2 = anchors[main_route[entry_row]]["pos"]
+	var exit: Vector2 = anchors[main_route[exit_row]]["pos"]
+	var far := 0
+	var out: Array[int] = []
+	for k in range(points.size()):
+		if absf(points[k].x-entry.x)>absf(points[far].x-entry.x): far = k
+		if absf(points[k].x-(entry.x+exit.x)*.5)>=SPLIT_LOOT_OUT: out.append(k)
+	if out.is_empty(): out.append(far)
+	var slot := 0
+	for request in loot_plan.pending:
+		if int(request["row"])<=entry_row or int(request["row"])>=exit_row or not str(request["role"]) in SPLIT_LOOT: continue
+		request["pos"] = _split_spot(points,out[slot%out.size()],entry_row)
+		request["from"] = Vector2.INF
+		slot += 1
+	# Trails run close under the line: the stone band is narrow.
+	for k in range(-1,points.size()):
+		var from: Vector2 = entry if k<0 else points[k]
+		var to: Vector2 = points[k+1] if k+1<points.size() else exit
+		loot_plan.request(entry_row,from+Vector2(0,.1),"trail",to+Vector2(0,.1),{"count":3})
+	loot_plan.request(entry_row,_split_spot(points,far,entry_row),"route_treasure")
+	loot_plan.request(entry_row,_split_spot(points,out[0],entry_row),"detour")
+	loot_plan.request(entry_row,_split_spot(points,out[-1],entry_row),"route_cache")
+
+# A free place for a find beside a grip of the second way, on its stone;
+# the neighbouring grips when that one has none.
+func _split_spot(points: PackedVector2Array, index: int, row: int) -> Vector2:
+	for step in [0,-1,1,-2,2]:
+		var grip: Vector2 = points[clampi(index+int(step),0,points.size()-1)]
+		for offset in [Vector2(0,-1.45),Vector2(.6,-1.3),Vector2(-.6,-1.3),Vector2(1.35,0),Vector2(-1.35,0),Vector2(0,1.4),Vector2(1.3,1.0),Vector2(-1.3,1.0)]:
+			var spot: Vector2 = grip+offset
+			if not loot_plan.clear(spot,row): continue
+			var free := true
+			for taken in _split_spots:
+				if spot.distance_to(taken)<LootPlacement.FIND_SPACING+.1: free = false
+			if free:
+				_split_spots.append(spot)
+				return spot
+	return points[index]+Vector2(0,-1.45)
+
+func _in_split(y: float) -> bool:
+	if source==null: return false
+	for spec in source.brief.get("splits",[]):
+		if y>=float(spec["from"])-1.0 and y<=float(spec["to"])+1.0: return true
+	return false
+
+# A crystal means a real parting, so drawn levels keep it for the splits, and
+# a split's main stretch has no side grips of its own.
+func _beat_detour(index: int, point: Vector2, entry: int, zone: int, info: Dictionary) -> void:
+	if source!=null and (int(info["def"]["branch"])==GripSpec.CRYSTAL or _in_split(point.y)): return
+	super._beat_detour(index,point,entry,zone,info)
+
+func _fork(index: int, point: Vector2, entry: int, zone: int, info: Dictionary) -> void:
+	if not _in_split(point.y): super._fork(index,point,entry,zone,info)
 
 # A split grip near `point`: on stone, within reach of the previous grip,
 # clear of other grips, and in the middle of the split (`strict`) beyond any
@@ -611,6 +745,8 @@ func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 	_add_mask_rests()
 	_summit_ledge_last()
 	_settle_on_stone()
+	_seat_ledges()
+	_store_rock_grid()
 	_note_objects_in_sky()
 
 # Side grips and finds the generator left over painted sky move to the
@@ -665,6 +801,13 @@ func _move_anchor(id: int, spot: Vector2) -> void:
 # Grips, finds and platforms must stand on painted stone; their seats would
 # otherwise fill a sky window or gap. Each one in the sky is noted.
 var sky_objects := 0
+
+# A platform the free route left over a gap rests on a wedged rock.
+func _seat_ledges() -> void:
+	if not bool(source.brief.get("free_route",false)): return
+	for ledge in ledges:
+		var at := Vector2((float(ledge["left"])+float(ledge["right"]))*.5,float(ledge["top"])-.3)
+		if inside_distance(at)<.15: _wedge_rock(at+Vector2(0,-.5))
 
 func _note_objects_in_sky() -> void:
 	sky_objects = 0

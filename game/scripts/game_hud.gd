@@ -1306,6 +1306,8 @@ func update_play() -> void:
 			danger_timer.value = GripSpec.seconds_left(grip,game.anchor_time)/GripSpec.ROOT_SECONDS
 		elif not grip.is_empty() and GripSpec.kind_of(grip)==GripSpec.ICE:
 			danger_label.text = "Лёд скользит — готовь следующий бросок"
+		elif not grip.is_empty() and GripSpec.fork(grip):
+			danger_label.text = "Развилка: в обход — сокровища, прямо — быстрее"
 		elif not grip.is_empty() and not GripSpec.choice_exits(grip).is_empty():
 			danger_label.text = "Кристалл: два выхода подсвечены — выбирай"
 	danger_timer.visible = danger_label.text.begins_with("Корень")

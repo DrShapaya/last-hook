@@ -292,8 +292,9 @@ func card(parent: Node, at: Vector2, dimensions: Vector2, face: Color = STONE, l
 func text(parent: Node, value: String, at: Vector2, dimensions: Vector2, font_size: int = 16, color: Color = INK, weight: String = "body") -> Label:
 	var node: Label = hud.label(parent,value,font_size,color)
 	node.position = at
-	node.size = dimensions
+	# Trimming first: otherwise the size below keeps the full text's width.
 	node.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	node.size = dimensions
 	if weight=="display": node.add_theme_font_override("font",hud.heading_font)
 	elif weight=="strong": node.add_theme_font_override("font",hud.strong_font)
 	return node

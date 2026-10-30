@@ -171,6 +171,8 @@ var prebuild_queue: Array = []
 # follows manual changes and the action waiting for its new key.
 var built_scroll: Control
 var preset_buttons: Array[Button] = []
+var sync_buttons := {}
+var sync_switches := {}
 var rebinding_action := ""
 var settings_page: SettingsPage
 var prebuild_at := 0
@@ -1451,7 +1453,7 @@ func celebrate_upgrade(frame: Control, dimensions: Vector2, level: int, maximum:
 static func seconds_text(seconds: float) -> String:
 	return (str(snappedf(seconds,.01))+" с").replace(".",",")
 
-func settings_switch(parent: Node, title_text: String, subtitle: String, at: Vector2, width: float, enabled: bool, callback: Callable) -> void:
+func settings_switch(parent: Node, title_text: String, subtitle: String, at: Vector2, width: float, enabled: bool, callback: Callable) -> Button:
 	text(parent,title_text,at+Vector2(0,0 if not subtitle.is_empty() else 10),Vector2(width-104,24),16,INK,"strong")
 	if not subtitle.is_empty(): text(parent,subtitle,at+Vector2(0,24),Vector2(width-120,20),13,INK_SOFT)
 	var left := at.x+width-96
@@ -1460,8 +1462,11 @@ func settings_switch(parent: Node, title_text: String, subtitle: String, at: Vec
 	# is on. It flips in place; the page is not rebuilt.
 	var toggle := action(parent,"Вкл" if enabled else "Выкл",Vector2(left+(36 if enabled else 4),at.y+4),Vector2(56,36),Callable(),"selected" if enabled else "secondary")
 	toggle.set_meta("on",enabled)
-	toggle.pressed.connect(_flip_switch.bind(toggle,track,left,callback))
+	toggle.set_meta("track",track)
+	toggle.set_meta("left",left)
+	toggle.pressed.connect(_flip_switch.bind(toggle,callback))
 	_tight_knob(toggle)
+	return toggle
 
 # The knob is narrow: thin side padding keeps "Выкл" whole.
 func _tight_knob(toggle: Button) -> void:
@@ -1472,15 +1477,21 @@ func _tight_knob(toggle: Button) -> void:
 		box.content_margin_right = 2
 		toggle.add_theme_stylebox_override(state_name,box)
 
-func _flip_switch(toggle: Button, track: Panel, left: float, callback: Callable) -> void:
-	var on: bool = not bool(toggle.get_meta("on",false))
+func _flip_switch(toggle: Button, callback: Callable) -> void:
+	show_switch(toggle,not bool(toggle.get_meta("on",false)))
+	callback.call()
+
+# Moves a switch to a state without running its callback.
+func show_switch(toggle: Button, on: bool) -> void:
+	if not is_instance_valid(toggle) or bool(toggle.get_meta("on",false))==on: return
+	var left: float = toggle.get_meta("left")
+	var track: Panel = toggle.get_meta("track")
 	toggle.set_meta("on",on)
 	toggle.create_tween().tween_property(toggle,"position:x",left+(36 if on else 4),.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	track.add_theme_stylebox_override("panel",hud.slab_style(Color(MOSS,.35) if on else STONE_SHADE,Color.TRANSPARENT,0))
 	toggle.text = "Вкл" if on else "Выкл"
 	hud.skin_button(toggle,"selected" if on else "secondary")
 	_tight_knob(toggle)
-	callback.call()
 
 func section(parent: Node, value: String) -> void:
 	text(parent,value,Vector2(20,14),Vector2(400,24),17,INK,"display")

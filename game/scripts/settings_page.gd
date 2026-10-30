@@ -88,7 +88,8 @@ func choice(title_text: String, hint: String, key: String, labels: Array, values
 	return {"height":_hint_height(hint),"build":func(slab: Control, y: float, width: float):
 		var holder := lobby.settings_row(slab,y,width,title_text,hint)
 		var buttons := lobby.segmented(holder,Vector2.ZERO,holder.size.x,labels,values.find(settings()[key]),func(index: int): _changed(key,values[index]),40)
-		for button in buttons: button.add_theme_font_size_override("font_size",13)}
+		for button in buttons: button.add_theme_font_size_override("font_size",13)
+		lobby.sync_buttons[key] = {"buttons":buttons,"values":values}}
 
 # A long choice takes the whole width under its title.
 func wide_choice(title_text: String, hint: String, labels: Array, selected: int, callback: Callable, capture: bool = false) -> Dictionary:
@@ -112,7 +113,8 @@ func flag(title_text: String, hint: String, enabled: bool, callback: Callable) -
 		lobby.settings_switch(slab,title_text,hint,Vector2(20,y),width-40,enabled,callback)}
 
 func setting_flag(title_text: String, hint: String, key: String) -> Dictionary:
-	return flag(title_text,hint,bool(settings()[key]),func(): _changed(key,not bool(settings()[key])))
+	return {"height":_hint_height(hint),"build":func(slab: Control, y: float, width: float):
+		lobby.sync_switches[key] = lobby.settings_switch(slab,title_text,hint,Vector2(20,y),width-40,bool(settings()[key]),func(): _changed(key,not bool(settings()[key])))}
 
 static func INK() -> Color:
 	return MenuSurface.INK
@@ -127,7 +129,9 @@ static func seconds(value: float) -> String:
 
 func _graphics_rows() -> Array:
 	lobby.preset_buttons = []
-	var fps_values := [30,60,0]
+	lobby.sync_buttons = {}
+	lobby.sync_switches = {}
+	var fps_values := [30,60,120,0]
 	return [
 		wide_choice("Пресет","",["Высокая","Баланс","Экономия","Своя"],PRESET_KEYS.find(str(model.profile["graphics_quality"])),_pick_preset,true),
 		choice("Тени","",  "shadows",["Выкл","Средние","Высокие"],GameSettings.SHADOWS),
@@ -136,13 +140,22 @@ func _graphics_rows() -> Array:
 		choice("Частицы","Блики находок и удар крюка","particles",["Выкл","Снижены","Полные"],GameSettings.PARTICLES),
 		setting_flag("Свечение","Мягкий ореол света","glow"),
 		choice("Масштаб рендера","Меньше: быстрее, но мягче","render_scale",["60%","75%","85%","100%"],GameSettings.RENDER_SCALES),
-		wide_choice("Ограничение FPS","60 на экранах 90–120 Гц может мерцать",["30","60","Без ограничения"],fps_values.find(int(settings()["fps_limit"])),func(index: int): _changed("fps_limit",fps_values[index]))]
+		wide_choice("Ограничение FPS","Лимит ниже частоты экрана может мерцать",["30","60","120","Без лимита"],fps_values.find(int(settings()["fps_limit"])),func(index: int): _changed("fps_limit",fps_values[index]))]
 
 func _pick_preset(index: int) -> Variant:
 	if index>=3: return false
 	game.set_graphics_preset(PRESET_KEYS[index])
-	hud.show_menu_soon(.26)
+	_sync_rows()
 	return true
+
+# A preset rewrites several rows: they move in place, so the page stays put
+# instead of fading out and back.
+func _sync_rows() -> void:
+	for key in lobby.sync_buttons.keys():
+		var row: Dictionary = lobby.sync_buttons[key]
+		lobby.pick_segment(row["buttons"],row["values"].find(settings()[key]))
+	for key in lobby.sync_switches.keys():
+		lobby.show_switch(lobby.sync_switches[key],bool(settings()[key]))
 
 # --- Звук и управление --------------------------------------------------------------
 

@@ -17,6 +17,7 @@ var prepare_worlds := DisplayServer.get_name()!="headless"
 var camera: Camera3D
 var sound_cache: Dictionary = {}
 var scene_environment: Environment
+var shadow_atlas_size := 0
 var sun_light: DirectionalLight3D
 var hud: GameHud
 var state := "menu"
@@ -445,6 +446,12 @@ func _setup_lighting() -> void:
 const SUN_DIRECTION := Vector3(.30,-.50,-.81)
 const SUN_ENERGY := .46
 
+func _set_shadow_atlas(atlas_size: int) -> void:
+	if atlas_size==shadow_atlas_size: return
+	shadow_atlas_size = atlas_size
+	RenderingServer.directional_shadow_atlas_set_size(atlas_size,true)
+	RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_LOW)
+
 func _apply_shadow_preset(preset: String) -> void:
 	if not is_instance_valid(sun_light): return
 	# Texel-scaled biases are tuned for objects floating 0.3-3 units in front
@@ -460,8 +467,7 @@ func _apply_shadow_preset(preset: String) -> void:
 			sun_light.shadow_normal_bias = 1.2
 			sun_light.shadow_blur = 1.8
 			sun_light.directional_shadow_max_distance = 46
-			RenderingServer.directional_shadow_atlas_set_size(4096,true)
-			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_LOW)
+			_set_shadow_atlas(4096)
 		"off":
 			sun_light.shadow_enabled = false
 			sun_light.shadow_opacity = .28
@@ -478,8 +484,7 @@ func _apply_shadow_preset(preset: String) -> void:
 			sun_light.shadow_normal_bias = 1.2
 			sun_light.shadow_blur = 1.4
 			sun_light.directional_shadow_max_distance = 42
-			RenderingServer.directional_shadow_atlas_set_size(2048,true)
-			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_LOW)
+			_set_shadow_atlas(2048)
 
 func _settings() -> Dictionary:
 	return model.profile["settings"]
@@ -500,11 +505,13 @@ func _apply_graphics() -> void:
 	# follows the display's refresh rate (60/90/120 Hz), and a 60 fps cap on a
 	# 90/120 Hz screen alternates frame lengths and flickers like a strobe.
 	Engine.max_fps = int(settings["fps_limit"])
-	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
+	# Each of these recreates GPU targets and can drop a frame: only a real
+	# change may touch them, or every setting would blink the screen.
+	if DisplayServer.window_get_vsync_mode()!=DisplayServer.VSYNC_ENABLED: DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 	_apply_shadow_preset(str(settings["shadows"]))
 	# Glow is a chain of full-screen blur passes.
 	if scene_environment!=null: scene_environment.glow_enabled = bool(settings["glow"])
-	get_viewport().scaling_3d_scale = float(settings["render_scale"])
+	if not is_equal_approx(get_viewport().scaling_3d_scale,float(settings["render_scale"])): get_viewport().scaling_3d_scale = float(settings["render_scale"])
 	if is_instance_valid(world): _world_graphics(world)
 	if is_instance_valid(explorer): _explorer_graphics()
 

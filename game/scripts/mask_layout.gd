@@ -218,7 +218,7 @@ func outside(point: Vector2, margin: float = .65) -> bool:
 func _plan_relief() -> void:
 	relief.clear()
 	rock_form = str(source.brief.get("rock","boulder"))
-	rock_marks = source.brief.get("shelves",[])
+	rock_marks = source.brief.get("marks",source.brief.get("shelves",[]))
 	var random := rng(0,811)
 	var depth := _mask_bytes("depth")
 	var candidates: Array = []

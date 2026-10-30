@@ -9,8 +9,11 @@ extends LevelDesigner
 const LEDGE_HALF := Vector2(13.0,17.0)
 const WALL_HALF := Vector2(7.5,10.5)
 
-# Bottom-up: [y0, y1, half, center, kind]; kind 0 a wall, 1 a ledge.
+# Bottom-up: [y0, y1, half, center, kind, skew]; kind 0 a wall, 1 a ledge. A
+# positive skew moves both edges right, so no tier sits square on the last.
 var tiers: Array = []
+# Rocks hanging under the ledges: [x, y, half, tall].
+var drops: Array = []
 # Standing pillars: [x, y0, y1, half, phase].
 var pillars: Array = []
 # Round windows of sky: [center, radii].
@@ -35,6 +38,7 @@ func _after_plan() -> void:
 	tiers.clear()
 	pillars.clear()
 	windows.clear()
+	drops.clear()
 	var y := -2.0
 	var ledge := false
 	while y<height+8.0:
@@ -43,10 +47,13 @@ func _after_plan() -> void:
 		var half := random.randf_range(range_half.x,range_half.y)
 		if y>height-14.0: half = minf(half,8.0)
 		var center := clampf(corridor_center(minf(y+thick*.5,height))*.6+random.randf_range(-2.5,2.5),half-18.0,18.0-half)
-		tiers.append([y,y+thick,half,center,1 if ledge else 0])
+		tiers.append([y,y+thick,half,center,1 if ledge else 0,random.randf_range(-3.0,3.0)])
+		if ledge and random.randf()<.45:
+			var flank := -1.0 if random.randf()<.5 else 1.0
+			drops.append([center+flank*half*random.randf_range(.55,.8),y-1.5,random.randf_range(1.8,2.8),random.randf_range(3.0,5.0)])
 		if not ledge and thick>9.0:
 			var flank := -1.0 if random.randf()<.5 else 1.0
-			if random.randf()<.6: windows.append([Vector2(center+flank*half*.55,y+thick*.5),Vector2(random.randf_range(1.6,2.8),thick*.3)])
+			if random.randf()<.6: windows.append([Vector2(center+flank*half*.55,y+thick*.48),Vector2(random.randf_range(2.0,3.4),thick*.34)])
 			var x := center-flank*(half+random.randf_range(1.5,4.0))
 			if absf(x)<17.5: pillars.append([x,y-1.0,y+thick*random.randf_range(.6,1.0),random.randf_range(1.4,2.4),random.randf()*TAU])
 		y += thick
@@ -65,6 +72,12 @@ func _pillar(point: Vector2, pillar: Array) -> float:
 	if point.y>y1-1.2: half = float(pillar[3])*1.35
 	return minf(half-absf(point.x-float(pillar[0])),y1-point.y)
 
+# A rock hanging from a ledge, wide at its root, coming to a blunt point.
+func _drop(point: Vector2, drop: Array) -> float:
+	var fall := (float(drop[1])-point.y)/float(drop[3])
+	if fall< -.3 or fall>1.0: return -INF
+	return float(drop[2])*(1.0-pow(absf(fall-.15),1.4))-absf(point.x-float(drop[0]))
+
 func _outline_at(point: Vector2) -> float:
 	if not split_at(point.y).is_empty(): return _foot(point,_shape_at(point))
 	var top := height+1.5
@@ -73,11 +86,14 @@ func _outline_at(point: Vector2) -> float:
 	var wobble := noise.get_noise_2d(point.x*.3,point.y*.45)*3.0
 	var rise := (point.y-float(tier[0]))/(float(tier[1])-float(tier[0]))
 	var edge: float = float(tier[2])
-	# A wall curves in to a waist; a ledge is a lens, thickest in the middle.
-	if int(tier[4])==0: edge -= sin(PI*rise)*1.8
-	else: edge -= pow(absf(rise-.5)*2.0,3.0)*2.2
-	var amount := edge+wobble-absf(point.x-float(tier[3]))
+	# A wall curves in to a waist; a ledge is a lens that ends in a point.
+	if int(tier[4])==0: edge -= sin(PI*rise)*2.4
+	else:
+		edge -= pow(absf(rise-.5)*2.0,2.0)*6.0
+		wobble *= .4
+	var amount := edge+wobble-absf(point.x-float(tier[3])-float(tier[5]))
 	for pillar in pillars: amount = smooth_max(amount,_pillar(point,pillar),1.6)
+	for drop in drops: amount = smooth_max(amount,_drop(point,drop),1.2)
 	amount = _with_features(amount,point)
 	for window in windows:
 		# An arch: flat at the foot, uneven all round.
@@ -91,8 +107,8 @@ func _outline_at(point: Vector2) -> float:
 
 # The canyon stands on a broad tumble of rock.
 func _foot(point: Vector2, amount: float) -> float:
-	if point.y>12.0: return amount
-	var foot := 19.0*(1.0-pow(clampf(point.y/12.0,0,1),.7))+noise.get_noise_2d(point.x*.5,point.y*.8+70.0)*2.2-absf(point.x)
+	if point.y>16.0: return amount
+	var foot := 19.0*(1.0-pow(clampf(point.y/16.0,0,1),1.5))+noise.get_noise_2d(point.x*.5,point.y*.8+70.0)*2.2-absf(point.x)
 	return maxf(amount,foot)
 
 func _split_edge(y: float) -> float:
@@ -117,3 +133,7 @@ func _far_ridge(point: Vector2, split: Dictionary) -> float:
 func _dress_brief(source: LevelSource) -> void:
 	source.brief["rock"] = "desert"
 	source.brief["free_route"] = true
+	var marks: Array = []
+	for tier in tiers:
+		if int(tier[4])==1: marks.append([snappedf(float(tier[0]),.01),snappedf(float(tier[1]),.01),snappedf(float(tier[2]),.01),snappedf(float(tier[3])+float(tier[5]),.01)])
+	source.brief["marks"] = marks

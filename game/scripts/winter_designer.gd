@@ -29,14 +29,16 @@ func _sway_scale() -> float:
 func _after_plan() -> void:
 	shelves.clear()
 	shards.clear()
+	# Shelves climb across the tower from side to side, winding up it.
 	var y := 15.0
 	var flank := -1.0 if random.randf()<.5 else 1.0
 	while y<height-8.0:
 		if split_at(y).is_empty():
-			var half := random.randf_range(7.0,10.0)
-			shelves.append([corridor_center(y)+flank*random.randf_range(3.5,6.5),y,half,random.randf_range(-.12,.12),random.randf_range(2.4,3.2)])
+			var half := random.randf_range(9.5,12.5)
+			var slope := -flank*random.randf_range(.14,.24)
+			shelves.append([_tower_axis(y)+flank*random.randf_range(3.0,5.0),y,half,slope,random.randf_range(2.8,3.6)])
 			flank = -flank
-		y += random.randf_range(10.0,16.0)
+		y += random.randf_range(9.0,14.0)
 	for count in range(random.randi_range(4,6)):
 		var at := random.randf_range(20.0,height-10.0)
 		var side := -1.0 if random.randf()<.5 else 1.0
@@ -62,6 +64,10 @@ func _spikes(point: Vector2) -> float:
 	var along := Vector2(sin(LEAN),cos(LEAN))
 	return _peak(point.dot(across)/2.5)*2.2+_peak(point.dot(along)/5.0)*1.4-1.7
 
+# The tower winds a little as it climbs.
+func _tower_axis(y: float) -> float:
+	return corridor_center(y)+sin(y/21.0+float(seed_value%7))*2.6
+
 func _outline_at(point: Vector2) -> float:
 	var top := height+1.5
 	if point.y>top+3.0 or point.y< -2.0: return -10.0
@@ -69,11 +75,11 @@ func _outline_at(point: Vector2) -> float:
 	if not split_at(point.y).is_empty(): amount = _shape_at(point)
 	else:
 		var half := lerpf(TOWER_HALF.y,TOWER_HALF.x,clampf(point.y/height,0,1))
-		amount = half+noise.get_noise_2d(point.x*.8,point.y*.8)*1.2-absf(point.x-corridor_center(point.y))
+		amount = half+noise.get_noise_2d(point.x*.8,point.y*.8)*1.2-absf(point.x-_tower_axis(point.y))
 		amount = _with_features(amount,point)
-	# The tower's flanks are only nicked; tops and thin arcs carry full teeth.
-	var thin := 1.0-clampf((amount-1.0)/5.0,0,1)
-	amount = minf(amount,top-point.y+1.0)+_spikes(point)*lerpf(.45,1.0,thin if point.y<top-5.0 else 1.0)
+	# The tower's flanks are only nicked; its crown and the arcs carry full teeth.
+	var teeth := 1.4 if not split_at(point.y).is_empty() else 1.0 if point.y>top-5.0 else .45
+	amount = minf(amount,top-point.y+1.0)+_spikes(point)*teeth
 	for shelf in shelves:
 		var dx: float = point.x-float(shelf[0])
 		var thick: float = shelf[4]

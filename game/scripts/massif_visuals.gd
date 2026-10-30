@@ -666,9 +666,29 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 		FloraModels.plant(holder,entry,quality!="battery",random.randf_range(.95,1.4))
 		_take(index,rect)
 		placed += 1
-	# Roots and ice hang under the overhangs.
+	# Crystals stand on the crests of the cold rock.
+	if (layout as MaskLayout).rock_form=="winter":
+		var grown := 0
+		for spot: Vector3 in rock.crests(index*BAND,(index+1)*BAND,random,600):
+			if grown>=2: break
+			var point := Vector2(spot.x,spot.y)
+			if not _decor_route_clear(point,1.4): continue
+			var entry := _decor_entry("crystal",profile_at(point.y),random)
+			if entry.is_empty(): continue
+			var size := FloraModels.size_of(entry,1.3)
+			var rect := Rect2(point.x-size.x*.5,point.y,size.x,size.y)
+			if _taken(index,rect.grow(.2)): continue
+			var holder := Node3D.new()
+			holder.name = "Кристалл_%d" % grown
+			parent.add_child(holder)
+			holder.position = Vector3(point.x,point.y,spot.z+.05)
+			FloraModels.plant(holder,entry,quality!="battery",1.3)
+			_take(index,rect)
+			grown += 1
+	# Roots and ice hang under the overhangs, ice in clusters.
 	var hanging := 0
-	var hanging_budget := budget/3
+	var cold := (layout as MaskLayout).rock_form=="winter"
+	var hanging_budget := budget if cold else budget/3
 	for spot: Vector3 in rock.hangs(index*BAND,(index+1)*BAND,random,budget*40):
 		if hanging>=hanging_budget: break
 		if not await pause(parent): return
@@ -679,11 +699,13 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 		var size := FloraModels.size_of(entry,1.0)
 		var rect := Rect2(point.x-size.x*.5,point.y-size.y,size.x,size.y)
 		if _taken(index,rect.grow(.04)): continue
-		var holder := Node3D.new()
-		holder.name = "Подвес_%d" % hanging
-		parent.add_child(holder)
-		holder.position = Vector3(point.x,point.y,spot.z+.05)
-		FloraModels.plant(holder,entry,quality!="battery",1.0)
+		for piece in range(3 if cold else 1):
+			var at := point+Vector2(piece*.55-(.55 if cold else 0.0),0)
+			var holder := Node3D.new()
+			holder.name = "Подвес_%d_%d" % [hanging,piece]
+			parent.add_child(holder)
+			holder.position = Vector3(at.x,at.y,spot.z+.05)
+			FloraModels.plant(holder,entry,quality!="battery",random.randf_range(.7,1.1))
 		_take(index,rect)
 		hanging += 1
 

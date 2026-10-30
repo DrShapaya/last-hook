@@ -11,6 +11,7 @@ const SHELF_SNOW := .42
 
 var blades := FastNoiseLite.new()
 var fine := FastNoiseLite.new()
+var chunks := FastNoiseLite.new()
 var along := Vector2(sin(LEAN),cos(LEAN))
 var across := Vector2(cos(LEAN),-sin(LEAN))
 
@@ -24,10 +25,15 @@ func _init(level: MaskLayout) -> void:
 	fine.seed = random_seed+22
 	fine.frequency = .3
 	fine.fractal_octaves = 2
+	chunks.seed = random_seed+23
+	chunks.noise_type = FastNoiseLite.TYPE_CELLULAR
+	chunks.cellular_return_type = FastNoiseLite.RETURN_DISTANCE
+	chunks.frequency = .42
+	chunks.fractal_type = FastNoiseLite.FRACTAL_NONE
 
 # Facets run long up the lean.
 func _basis() -> Vector3:
-	return Vector3(1.0,2.7,LEAN)
+	return Vector3(1.35,3.1,LEAN)
 
 # How far up a blade a point stands, 0 in a seam, 1 on the crest.
 func _blade(point: Vector2) -> float:
@@ -51,11 +57,11 @@ func lumps(low: float, high: float) -> Array:
 	for shelf in layout.rock_marks:
 		var y := float(shelf[1])
 		if y<low or y>=high: continue
-		for stone in range(roundi(float(shelf[2])*4.0)):
+		for stone in range(roundi(float(shelf[2])*9.0)):
 			var x := float(shelf[0])+random.randf_range(-1.0,1.0)*float(shelf[2])
 			var at := Vector2(x,y+float(shelf[3])*(x-float(shelf[0]))-float(shelf[4])*random.randf_range(.1,.5))
 			if not _clear_of_grips(at,1.3): continue
-			var small := random.randf_range(.1,.34)
+			var small := random.randf_range(.1,.42)
 			result.append([Vector3(at.x,at.y,height(at)+.14),Vector3(small*1.4,small,small)])
 	return result
 
@@ -63,23 +69,29 @@ func height(point: Vector2) -> float:
 	var inside := distance(point)
 	var body := 1.0-exp(-maxf(inside,0.0)/1.2)
 	var shelf := _on_shelf(point)
-	if shelf>=0.0: return lerpf(FRONT_Z,RIM_Z+body*3.0,shelf*.75)
-	var z := RIM_Z+body*(1.7+_blade(point)*1.9)+fine.get_noise_2d(point.x,point.y)*.25
+	if shelf>=0.0: return lerpf(FRONT_Z,RIM_Z+body*3.0,shelf*.75)+fine.get_noise_2d(point.x*2.2,point.y*2.2)*.3
+	# The tower is blades; thin arcs and outcrops are chains of angular blocks.
+	var tower := RIM_Z+body*(1.7+_blade(point)*1.9)
+	var blocky := RIM_Z+body*(2.8-(chunks.get_noise_2dv(point)+1.0)*.95)
+	var z := lerpf(blocky,tower,smoothstep(2.0,4.5,inside))+fine.get_noise_2d(point.x,point.y)*.22
 	return minf(z,FRONT_Z-.1)
 
 func facet_color(center: Vector3, normal: Vector3) -> Color:
 	var at := Vector2(center.x,center.y)
 	var shelf := _on_shelf(at)
 	var shake := float(hash(Vector3i(roundi(center.x*9.0),roundi(center.y*9.0),5))%1000)/1000.0
-	if shelf>=SHELF_SNOW: return Color("9ea4bc").lerp(Color("868da8"),shake)
-	if shelf>=0.0: return Color("3d4a58").lerp(Color("55636f"),shake)
+	if shelf>=SHELF_SNOW: return Color("7f889f").lerp(Color("687289"),shake)
+	if shelf>=0.0: return Color("2c3642").lerp(Color("3f4b57"),shake)
 	var crest := _blade(at)
-	var color := Color("3b4856").lerp(Color("6c7a88"),crest).lightened(shake*.1)
+	var color := Color("2a3744").lerp(Color("4f5e6d"),crest).lightened(shake*.1)
 	# Ice runs down the wall under a shelf and down the seams.
 	var column := float(hash(roundi(center.x*2.0)+random_seed)%100)/100.0
 	if column<.2 and _under_shelf(at): color = color.lerp(Color("4f8fbe"),.5)
 	elif crest<.08: color = color.lerp(Color("4f8fbe"),.22)
-	if normal.y>.72: color = color.lerp(Color("9aa3b8"),smoothstep(.72,.92,normal.y))
+	# Snow settles along every top edge.
+	var drift := fine.get_noise_2d(center.x*2.0,center.y*2.0)*.5
+	if normal.y>.2 and distance(at+Vector2(0,1.0+drift))<.1: color = color.lerp(Color("c4cedb"),.92)
+	elif normal.y>.72: color = color.lerp(Color("8d97ac"),smoothstep(.72,.92,normal.y))
 	elif normal.y< -.25: color = color.lerp(Color("26364a"),.6)
 	return color
 

@@ -84,7 +84,16 @@ func perches(low: float, high: float, random: RandomNumberGenerator, tries: int)
 		var point := Vector2(random.randf_range(origin.x,origin.x+size.x*step),random.randf_range(low,high))
 		if distance(point)<.5: continue
 		var here := height(point)
-		if height(point+Vector2(0,.5))<here-.3: result.append(Vector3(point.x,point.y,here))
+		if distance(point+Vector2(0,.7))<.0 or height(point+Vector2(0,.5))<here-.3: result.append(Vector3(point.x,point.y,here))
+	return result
+
+# Points along the top of an edge: Vector3(x, y, depth).
+func crests(low: float, high: float, random: RandomNumberGenerator, tries: int) -> Array:
+	var result: Array = []
+	for attempt in range(tries):
+		var point := Vector2(random.randf_range(origin.x,origin.x+size.x*step),random.randf_range(low,high))
+		if distance(point)<.25 or distance(point+Vector2(0,.8))>.0: continue
+		result.append(Vector3(point.x,point.y,height(point)))
 	return result
 
 # Places under an overhang, for what hangs: Vector3(x, y, depth).
@@ -104,7 +113,7 @@ func _corner(i: int, j: int, cell: float) -> Vector2:
 	var key := Vector2i(i,j)
 	if corners.has(key): return corners[key]
 	var basis := _basis()
-	var point := Vector2((i+(_hash(i,j,1)-.5)*.62)*basis.x+j*basis.y*basis.z,(j+(_hash(i,j,2)-.5)*.62)*basis.y)*cell
+	var point := Vector2((i+(_hash(i,j,1)-.5)*.76)*basis.x+j*basis.y*basis.z,(j+(_hash(i,j,2)-.5)*.76)*basis.y)*cell
 	var inside := distance(point)
 	if inside< -cell*1.6: point = Vector2.INF
 	elif inside<.1: point += gradient(point)*(.1-inside)

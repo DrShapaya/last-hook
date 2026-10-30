@@ -4,9 +4,9 @@
 
 **Восхождение на одном крюке.** Бросай крюк, раскачивайся на канате, отпускай в нужный момент и лети к следующей опоре — до самой вершины.
 
-Android · Windows · Godot 4.7 · версия **0.16.0**
+Android · Windows · Godot 4.7 · версия **0.16.1**
 
-[Скачать](https://github.com/DrShapaya/last-hook/releases) · [Как устроена игра](docs/DESIGN.md) · [Создание уровней](docs/LEVEL_PIPELINE.md) · [Что нового](docs/releases/v0.16.0.md)
+[Скачать](https://github.com/DrShapaya/last-hook/releases) · [Как устроена игра](docs/DESIGN.md) · [Создание уровней](docs/LEVEL_PIPELINE.md) · [Что нового](docs/releases/v0.16.1.md)
 
 <img src="docs/screenshots/green-peak.png" width="200" alt="Стандартная гора"> <img src="docs/screenshots/stone-spires.png" width="200" alt="Пустынный каньон"> <img src="docs/screenshots/sky-city.png" width="200" alt="Снежная вершина">
 

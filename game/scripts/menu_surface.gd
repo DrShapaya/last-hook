@@ -281,7 +281,10 @@ func slab(parent: Node, at: Vector2, dimensions: Vector2, face: Color = STONE, l
 	node.position = at
 	node.size = dimensions
 	node.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	node.add_theme_stylebox_override("panel",hud.slab_style(face,lip,lip_size))
+	# Corners that do not fit tear the box: on some screen scales its edges
+	# run off down the screen.
+	var cut := mini(10,(int(minf(dimensions.x,dimensions.y))-lip_size)/2-2)
+	node.add_theme_stylebox_override("panel",hud.slab_style(face,lip,lip_size,cut))
 	parent.add_child(node)
 	return node
 

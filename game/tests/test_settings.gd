@@ -44,6 +44,10 @@ func test_presets() -> void:
 	check(custom["fps_limit"]==0 and GameSettings.detect_preset(custom)=="battery","preset keeps the fps limit")
 	custom["glow"] = true
 	check(GameSettings.detect_preset(custom)=="custom","a manual change is custom")
+	GameSettings.apply_preset(custom,"ultra")
+	check(custom["shadows"]=="ultra" and custom["lighting"]=="ultra" and custom["decor"]=="high" and GameSettings.detect_preset(custom)=="ultra","ultra adds light on top of the high bake")
+	check(GameSettings.sanitize({"lighting":"ultra"})["lighting"]=="ultra" and GameSettings.sanitize({"lighting":"neon"})["lighting"]=="standard","a saved light model is kept, a bad one falls back")
+	check(GameSettings.detect_preset(GameSettings.sanitize({"shadows":"high"}))=="high","a save from before ultra stays on high")
 
 func test_profile(directory: String) -> void:
 	var fresh := GameModel.fresh_profile()
@@ -174,7 +178,7 @@ func test_pages(game) -> void:
 	check(game.hud.settings_section=="accessibility" and all_buttons(game).has("130%"),"a section tab opens its page")
 	await open_section(game,"graphics")
 	var names := all_buttons(game)
-	for label in ["Графика","Звук","Доступность","О нас","Высокая","Баланс","Экономия","Своя"]:
+	for label in ["Графика","Звук","Доступность","О нас","Ультра","Высокая","Баланс","Экономия","Своя","Обычный"]:
 		check(names.has(label),"the graphics page shows "+label)
 	game.set_graphics_preset("high")
 	await open_section(game,"graphics")
@@ -182,7 +186,7 @@ func test_pages(game) -> void:
 	glow_off.pressed.emit()
 	check(game.model.profile["graphics_quality"]=="custom","a manual change moves the preset to custom")
 	var preset_thumb: Panel = game.hud.lobby_view.preset_buttons[0].get_meta("thumb")
-	check(int(preset_thumb.get_meta("index"))==3,"the preset switch shows Своя")
+	check(int(preset_thumb.get_meta("index"))==4,"the preset switch shows Своя")
 	game.set_graphics_preset("high")
 	await open_section(game,"graphics")
 	check(all_buttons(game).has("120") and all_buttons(game).has("Без лимита"),"the fps row offers 120")
@@ -287,6 +291,12 @@ func test_accessibility(game) -> void:
 	game.set_setting("persistent_hints",false)
 	game.model.profile["learned_controls"] = learned
 
+func test_small_plates(game) -> void:
+	await open_section(game,"graphics")
+	var badge: Panel = game.hud.lobby_view.soon_badge
+	var box := badge.get_theme_stylebox("panel") as StyleBoxFlat
+	check(box.corner_radius_top_left*2+box.border_width_bottom+4<=badge.size.y,"the corners of a small plate fit inside it with room to spare")
+
 func test_about(game) -> void:
 	await open_section(game,"about")
 	var names := all_buttons(game)
@@ -374,7 +384,14 @@ func test_graphics(game) -> void:
 	game.set_graphics_preset("balanced")
 	check(game.model.profile["graphics_quality"]=="balanced" and game.world.visual_quality=="balanced" and game.sun_light.shadow_enabled and game.scene_environment.glow_enabled,"a preset fills everything")
 	check(is_equal_approx(game.get_viewport().scaling_3d_scale,1.0),"a preset restores render scale")
+	game.set_graphics_preset("ultra")
+	check(game.scene_environment.ssao_enabled and game.get_viewport().msaa_3d==Viewport.MSAA_4X and game.scene_environment.ambient_light_source==Environment.AMBIENT_SOURCE_SKY,"ultra turns on the full light model")
+	check(game.world.visual_quality=="high","ultra plays the high bake")
+	game.set_setting("lighting","standard")
+	check(game.model.profile["graphics_quality"]=="custom" and not game.scene_environment.ssao_enabled,"the light model is its own setting")
 	game.set_graphics_preset("high")
+	check(not game.scene_environment.ssao_enabled and game.scene_environment.ambient_light_source==Environment.AMBIENT_SOURCE_COLOR and is_equal_approx(game.sun_light.light_energy,game.SUN_ENERGY),"high restores the plain light")
+	check(game.get_viewport().msaa_3d==ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d"),"high restores the project antialiasing")
 
 func test_audio(game) -> void:
 	check(game.sounds.players[0].bus=="SFX" and game.sounds.wind.bus=="SFX" and game.music.players[0].bus=="Music","players use their buses")
@@ -414,6 +431,7 @@ func run_tests() -> void:
 	await test_pages(game)
 	await test_accessibility(game)
 	await test_about(game)
+	await test_small_plates(game)
 	test_resume(game,directory)
 	game.queue_free()
 	await process_frame

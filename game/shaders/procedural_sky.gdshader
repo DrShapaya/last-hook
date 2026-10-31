@@ -1,12 +1,12 @@
 shader_type spatial;
 render_mode unshaded, cull_disabled, shadows_disabled, depth_draw_never, fog_disabled;
 
-// Procedural sky behind the climb: a gradient dome with a sun aura, high
-// cirrus, two layers of cumulus and three distant mountain ranges that always
-// stand on the bottom of the frame. As the climber gains height the ranges
-// sink and a sea of clouds rises below, so altitude is felt, never shown as
-// shapes floating in the air. Pixels hidden behind the rock are rejected by
-// the depth test before this runs.
+// Procedural sky behind the climb, in the low-poly look of the rock: a gradient
+// dome, two layers of separate faceted clouds and three faceted mountain ranges
+// standing on the bottom of the frame. The ranges sink out of the frame one by
+// one as the climber gains height, so altitude is felt, never shown as shapes
+// floating in the air. Pixels hidden behind the rock are rejected by the depth
+// test before this runs.
 
 uniform vec3 top_color : source_color = vec3(0.18, 0.44, 0.78);
 uniform vec3 horizon_color : source_color = vec3(0.62, 0.80, 0.95);
@@ -19,7 +19,7 @@ uniform vec3 range_near : source_color = vec3(0.23, 0.37, 0.43);
 uniform float snow_amount : hint_range(0.0, 1.0) = 0.3;
 
 uniform vec2 sun_pos = vec2(0.28, 0.82);
-uniform float cloud_coverage : hint_range(0.0, 1.0) = 0.46;
+uniform float cloud_coverage : hint_range(0.0, 1.0) = 0.4;
 uniform float sky_time = 0.0;
 uniform vec2 cloud_offset = vec2(0.0);
 uniform float aspect = 1.0;
@@ -49,163 +49,197 @@ float hash1(float n) {
 	return hash_unit(uint(int(floor(n)) + 1048576));
 }
 
-float noise1(highp float x) {
-	highp float i = floor(x);
-	highp float f = fract(x);
-	f = f * f * (3.0 - 2.0 * f);
-	return mix(hash1(i), hash1(i + 1.0), f);
+uint hash_cell(ivec2 cell, uint seed) {
+	ivec2 q = cell + ivec2(1048576);
+	return hash_u(uint(q.x) * 1597334677u ^ hash_u(uint(q.y) ^ seed));
 }
 
-// Ridged noise: sharp crests and soft valleys, like eroded ranges. The
-// broad form alone (two octaves) decides which flank faces the sun, so the
-// shading follows whole slopes instead of every small notch.
+// Unsmoothed noise is a broken line: everything built on it has straight
+// edges and sharp corners, the outline of a low-poly model.
+float line1(highp float x) {
+	highp float i = floor(x);
+	return mix(hash1(i), hash1(i + 1.0), x - i);
+}
+
+// Ridged broken line: sharp crests and straight flanks.
 float ridge_octaves(highp float x, int octaves) {
 	float v = 0.0;
 	float a = 0.6;
 	for (int i = 0; i < octaves; i++) {
-		float n = 1.0 - abs(noise1(x) * 2.0 - 1.0);
-		v += a * n * n;
+		v += a * (1.0 - abs(line1(x) * 2.0 - 1.0));
 		x = x * 2.13 + 13.1;
-		a *= 0.38;
+		a *= 0.42;
 	}
 	return v;
 }
 
-float ridge(float x) {
-	return ridge_octaves(x, 4);
+float cross2(vec2 a, vec2 b, vec2 p) {
+	return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
 }
 
-float hash2(vec2 p) {
-	ivec2 q = ivec2(floor(p)) + ivec2(1048576);
-	return hash_unit(uint(q.x) * 1597334677u ^ hash_u(uint(q.y)));
+bool in_triangle(vec2 p, vec2 a, vec2 b, vec2 c) {
+	return cross2(a, b, p) >= 0.0 && cross2(b, c, p) >= 0.0 && cross2(c, a, p) >= 0.0;
 }
 
-float noise2d(highp vec2 p) {
-	highp vec2 i = floor(p);
-	highp vec2 f = fract(p);
-	f = f * f * (3.0 - 2.0 * f);
-	float a = hash2(i);
-	float b = hash2(i + vec2(1.0, 0.0));
-	float c = hash2(i + vec2(0.0, 1.0));
-	float d = hash2(i + vec2(1.0, 1.0));
-	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float fbm(highp vec2 p) {
-	float v = 0.0;
-	float a = 0.5;
-	mat2 rot = mat2(vec2(0.8, -0.6), vec2(0.6, 0.8));
-	for (int i = 0; i < 4; i++) {
-		v += a * noise2d(p);
-		p = rot * p * 2.04 + vec2(1.7, 0.9);
-		a *= 0.5;
+// The triangle of a jittered mesh that holds p: xy its centroid, z a random
+// value of its own. Shading from these alone gives a flat fill per triangle.
+// Vertices move less than half a cell, so the two rows and columns of quads
+// round p always hold its triangle.
+vec3 facet(highp vec2 p, uint seed) {
+	ivec2 near = ivec2(floor(p + 0.5));
+	vec2 v[9];
+	uint bits[9];
+	for (int j = 0; j < 3; j++) {
+		for (int i = 0; i < 3; i++) {
+			ivec2 cell = near + ivec2(i - 1, j - 1);
+			uint h = hash_cell(cell, seed);
+			int index = j * 3 + i;
+			bits[index] = h;
+			v[index] = vec2(cell) + (vec2(float(h & 1023u), float((h >> 10u) & 1023u)) / 1023.0 - 0.5) * 0.6;
+		}
 	}
-	return v;
-}
-
-// One cumulus layer: rgb colour, a coverage. Billows come from a warped fbm;
-// undersides darken and the edge facing the sun catches light.
-vec4 cumulus(vec2 uv, float coverage, vec2 sky_coords) {
-	vec2 warp = vec2(noise2d(uv * 1.7 + vec2(0.0, sky_time * 0.004)), noise2d(uv * 1.7 + vec2(4.3, 1.7))) * 0.34;
-	float shape = fbm(uv + warp);
-	float threshold = 0.72 - coverage * 0.42;
-	float density = smoothstep(threshold, threshold + 0.22, shape);
-	if (density < 0.002) {
-		return vec4(0.0);
+	for (int j = 0; j < 2; j++) {
+		for (int i = 0; i < 2; i++) {
+			int index = j * 3 + i;
+			vec2 a = v[index];
+			vec2 b = v[index + 1];
+			vec2 c = v[index + 3];
+			vec2 d = v[index + 4];
+			uint h = bits[index];
+			float first = float((h >> 22u) & 31u) / 31.0;
+			float second = float(h >> 27u) / 31.0;
+			if (((h >> 20u) & 1u) == 0u) {
+				if (in_triangle(p, a, b, c)) { return vec3((a + b + c) / 3.0, first); }
+				if (in_triangle(p, b, d, c)) { return vec3((b + d + c) / 3.0, second); }
+			} else {
+				if (in_triangle(p, a, b, d)) { return vec3((a + b + d) / 3.0, first); }
+				if (in_triangle(p, a, d, c)) { return vec3((a + d + c) / 3.0, second); }
+			}
+		}
 	}
-	// Density a little lower down: high means a thick body above, so shade.
-	float below = fbm(uv + warp + vec2(0.0, -0.09));
-	float underside = clamp((below - shape) * 3.0 + 0.5, 0.0, 1.0);
-	vec2 to_sun = normalize(sun_pos - sky_coords);
-	float toward = noise2d((uv + warp - to_sun * 0.06) * 2.0);
-	float rim = clamp(density - toward * 0.9, 0.0, 1.0);
-	float light = clamp(0.35 + density * 0.55 - underside * 0.35 + rim * 0.9, 0.0, 1.0);
-	vec3 tone = mix(cloud_shadow, cloud_lit, light);
-	tone += sun_color * pow(rim, 2.0) * 0.5;
-	return vec4(tone, density);
+	return vec3(p, 0.5);
 }
 
-// A range layer: returns colour and coverage (1 below the crest line, so the
-// range always continues down to the bottom of the frame).
-vec4 range_layer(float x, float y, float base, float amplitude, vec3 tone, float snow, vec3 haze) {
-	float crest = ridge(x);
-	float line = base - crest * amplitude;
+// One layer of separate clouds: rgb colour, a coverage. Each cloud sits in a
+// cell of its row and reaches at most one cell sideways: a heap of straight
+// slopes above a shallow broken underside. Facets are lit from above and from
+// the side of the sun.
+vec4 cloud_layer(vec2 pos, vec2 cell, float coverage, uint seed, vec3 lit, vec3 shadow) {
+	float row = floor(pos.y / cell.y);
+	uint row_hash = hash_u(uint(int(row) + 1048576) ^ seed);
+	vec2 g = vec2(pos.x / cell.x + float(row_hash & 255u) / 255.0, pos.y / cell.y);
+	float column = floor(g.x);
+	vec4 result = vec4(0.0);
+	for (int offset = -1; offset <= 1; offset++) {
+		float id = column + float(offset);
+		uint h = hash_cell(ivec2(int(id), int(row)), seed);
+		if (float(h & 255u) / 255.0 > coverage) {
+			continue;
+		}
+		float width = 0.36 + float((h >> 8u) & 63u) / 63.0 * 0.42;
+		float tall = 0.24 + float((h >> 14u) & 31u) / 31.0 * 0.07;
+		float x_shift = float((h >> 19u) & 31u) / 31.0 - 0.5;
+		float y_shift = float((h >> 24u) & 31u) / 31.0 - 0.5;
+		vec2 q = (g - vec2(id + 0.5 + x_shift * 0.3, row + 0.5 + y_shift * 0.2)) / vec2(width, tall);
+		if (abs(q.x) >= 1.0 || abs(q.y) >= 1.4) {
+			continue;
+		}
+		float shape = float(h >> 8u) * 0.00013;
+		float side = 1.0 - abs(q.x);
+		float top = min(side * 3.2, 1.0) * (0.3 + 0.62 * line1(q.x * 2.6 + shape) + 0.26 * line1(q.x * 6.3 + shape * 1.7));
+		float bottom = -min(side * 3.6, 1.0) * (0.14 + 0.26 * line1(q.x * 3.7 + shape * 2.3));
+		float edge = 0.0016 / (tall * cell.y);
+		float cover = min(smoothstep(-edge, edge, top - q.y), smoothstep(-edge, edge, q.y - bottom));
+		if (cover <= 0.0) {
+			continue;
+		}
+		// Facets stay the same shape on screen for any cloud size: about five
+		// across a large cloud, three across a small one.
+		vec2 size = vec2(width, tall) * cell;
+		float mesh = 0.012 + size.y * 0.42;
+		vec3 tri = facet(q * size / mesh + vec2(shape, 0.0), seed + 7u);
+		vec2 center = (tri.xy - vec2(shape, 0.0)) * mesh / size;
+		float light = 0.46 + center.y * 0.72 - center.x * 0.24 + (tri.z - 0.5) * 0.5;
+		vec3 tone = mix(shadow, lit, smoothstep(0.08, 0.86, light));
+		result = vec4(mix(result.rgb, tone, cover), max(result.a, cover));
+	}
+	return result;
+}
+
+float crest_line(float x, float base, float amplitude) {
+	return base - ridge_octaves(x, 3) * amplitude;
+}
+
+// Paints a range over col where it covers the pixel (1 below the crest line,
+// so the range always continues down to the bottom of the frame).
+vec3 range_layer(vec3 col, float lx, float y, float line, float scale, float base, float amplitude, float sink, vec2 tri_size, uint seed, vec3 tone, float snow, vec3 haze) {
 	float cover = smoothstep(line - 0.0015, line + 0.0015, y);
 	if (cover <= 0.0) {
-		return vec4(0.0);
+		return col;
 	}
-	// The flank facing the sun (from the left) is lit, the other shaded;
-	// crests are a touch lighter than the feet of the range.
-	// Sampling the form further out the deeper the pixel lies below the crest
-	// slants the light/shade boundary like a real flank, never a vertical cut.
-	float depth = y - line;
-	float fx = x + depth * 2.4;
+	// Facets hang on the range, so they sink with it.
+	vec3 tri = facet(vec2(lx, y - sink) / tri_size, seed);
+	float cx = tri.x * tri_size.x;
+	float cy = tri.y * tri_size.y + sink;
+	float crest = ridge_octaves(cx * scale, 3);
+	float depth = cy - (base - crest * amplitude);
+	// The flank facing the sun (from the left) is lit, the other shaded.
+	float fx = cx * scale + depth * 2.4;
 	float slope = ridge_octaves(fx + 0.12, 2) - ridge_octaves(fx - 0.12, 2);
-	float lit = smoothstep(0.09, -0.09, slope + depth * 0.25);
-	vec3 col = tone * mix(0.84, 1.12, lit) * mix(1.06, 0.94, smoothstep(line, line + 0.2, y));
-	// Snow on the high crests, thinning down the flanks.
+	float lit = smoothstep(0.1, -0.1, slope + (tri.z - 0.5) * 0.16);
+	vec3 shade = tone * mix(0.82, 1.16, lit) * (0.95 + tri.z * 0.1);
+	// Snow on the high crests, broken along the facets.
 	float snow_line = 1.0 - snow * 0.55;
 	float snow_depth = (crest - snow_line) * amplitude * 0.9;
-	if (snow > 0.0 && crest > snow_line && y - line < snow_depth) {
-		vec3 white = mix(vec3(0.74, 0.80, 0.88), vec3(0.96, 0.97, 0.99), lit);
-		col = mix(col, white, smoothstep(snow_depth, snow_depth * 0.6, y - line));
+	if (snow > 0.0 && depth < snow_depth + (tri.z - 0.5) * 0.03) {
+		shade = mix(vec3(0.74, 0.80, 0.88), vec3(0.96, 0.97, 0.99), lit);
 	}
 	// Valley mist rises from the foot of each range.
-	col = mix(col, haze, smoothstep(line + 0.03, line + 0.24, y) * 0.55);
-	return vec4(col, cover);
+	shade = mix(shade, haze, smoothstep(0.05, 0.32, y - line) * 0.28);
+	return mix(col, shade, cover);
 }
 
 void fragment() {
 	float y = UV.y;
 	float height = clamp(1.0 - y, 0.0, 1.0);
-	vec3 sky = mix(horizon_color, top_color, pow(height, 0.75));
+	vec3 sky = mix(horizon_color, top_color, pow(height, 0.8));
 	vec2 sky_coords = vec2((UV.x - 0.5) * aspect + 0.5, height);
-	float sun_dist = distance(sky_coords, sun_pos);
-	sky += sun_color * exp(-sun_dist * 3.8) * 0.38;
+	sky += sun_color * exp(-distance(sky_coords, sun_pos) * 4.5) * 0.1;
+	uint seed = uint(int(sky_seed * 100.0));
 
-	// High cirrus wisps.
-	// Cloud space is measured in view heights: several billows fit across a
-	// narrow phone screen as well as a wide one.
-	vec2 view = vec2(UV.x * aspect, height);
-	vec2 cirrus_uv = view * vec2(5.0, 9.0) + vec2(sky_time * 0.01, 0.0) + cloud_offset * 0.2;
-	float cirrus = smoothstep(0.55, 0.8, fbm(cirrus_uv)) * 0.35 * smoothstep(0.35, 0.8, height);
-	sky = mix(sky, mix(cloud_shadow, cloud_lit, 0.85), cirrus);
-
-	// Far cumulus, small and slow, behind the ranges.
-	vec2 far_uv = view * vec2(6.5, 9.5) + vec2(sky_time * 0.012, 0.0) + cloud_offset * 0.3;
-	vec4 far_cloud = cumulus(far_uv, cloud_coverage * 0.8, sky_coords);
-	sky = mix(sky, mix(far_cloud.rgb, horizon_color, 0.25), far_cloud.a * smoothstep(0.08, 0.3, height));
-
-	// Ranges sink as the climb gains height (near ones faster), and pan a
-	// little with the camera. 0.0 altitude: the near range fills the lower
-	// third; far above the route only the far crests remain.
-	float rise = clamp(altitude / 120.0, 0.0, 1.6);
+	// Ranges sink as the climb gains height, the nearest first; each pans a
+	// little with the camera. At the foot of the climb they stand on the bottom
+	// of the frame; about halfway up the last crest has left it.
+	float rise = max(altitude, 0.0) / 74.0;
 	float ax = (UV.x - 0.5) * aspect;
-	vec3 haze = mix(horizon_color, cloud_lit, 0.25);
-	vec4 far_range = range_layer(ax * 3.2 + view_x * 0.01 + sky_seed, y, 0.74 + rise * 0.16, 0.2, mix(range_far, horizon_color, 0.35), snow_amount, haze);
-	sky = mix(sky, far_range.rgb, far_range.a);
+	vec3 haze = mix(horizon_color, cloud_lit, 0.2);
+	float far_sink = rise * 0.5;
+	float mid_sink = rise * 0.55;
+	float near_sink = rise * 0.6;
+	float far_x = ax + view_x * 0.003 + sky_seed;
+	float mid_x = ax + view_x * 0.008 + sky_seed * 1.7 + 40.0;
+	float near_x = ax + view_x * 0.022 + sky_seed * 2.3 + 90.0;
+	float mid_line = crest_line(mid_x * 2.3, 0.84 + mid_sink, 0.2);
+	float near_line = crest_line(near_x * 1.6, 0.95 + near_sink, 0.17);
 
-	// Near cumulus drift in front of the far range.
-	vec2 near_uv = view * vec2(3.6, 5.2) + vec2(sky_time * 0.02, 0.0) + cloud_offset * 0.6;
-	vec4 near_cloud = cumulus(near_uv, cloud_coverage, sky_coords);
-	sky = mix(sky, near_cloud.rgb, near_cloud.a * smoothstep(0.06, 0.35, height));
+	// What lies fully behind the nearer ranges is not worked out at all.
+	if (y < mid_line + 0.002 && y < near_line + 0.002) {
+		// Clouds rise past slower than the rock, the far ones slowest.
+		vec2 view = vec2(UV.x * aspect, -y);
+		vec2 far_pos = view + vec2(cloud_offset.x * 0.3 + sky_time * 0.0014, -altitude * 0.009);
+		vec4 far_cloud = cloud_layer(far_pos, vec2(0.2, 0.17), cloud_coverage * 1.1, seed + 11u, mix(cloud_lit, horizon_color, 0.3), mix(cloud_shadow, horizon_color, 0.45));
+		sky = mix(sky, far_cloud.rgb, far_cloud.a);
 
-	vec4 mid_range = range_layer(ax * 2.3 + view_x * 0.02 + sky_seed * 1.7 + 40.0, y, 0.84 + rise * 0.3, 0.17, range_mid, snow_amount * 0.7, haze);
-	sky = mix(sky, mid_range.rgb, mid_range.a);
-	vec4 near_range = range_layer(ax * 1.6 + view_x * 0.035 + sky_seed * 2.3 + 90.0, y, 0.95 + rise * 0.5, 0.15, range_near, snow_amount * 0.35, haze);
-	sky = mix(sky, near_range.rgb, near_range.a);
+		float far_line = crest_line(far_x * 3.2, 0.74 + far_sink, 0.24);
+		sky = range_layer(sky, far_x, y, far_line, 3.2, 0.74 + far_sink, 0.24, far_sink, vec2(0.05, 0.036), seed + 23u, mix(range_far, horizon_color, 0.15), snow_amount, haze);
 
-	// A sea of clouds rises over the sunk valleys once the climb is high.
-	float sea_top = 1.08 - smoothstep(0.15, 1.0, rise) * 0.3;
-	float sea_edge = sea_top - fbm(vec2(UV.x * aspect * 3.0 + sky_time * 0.01 + view_x * 0.02, 0.5)) * 0.07;
-	float sea = smoothstep(sea_edge - 0.01, sea_edge + 0.03, y);
-	if (sea > 0.0) {
-		float puff = fbm(vec2(UV.x * aspect * 4.0 + sky_time * 0.008, y * 7.0));
-		vec3 sea_tone = mix(cloud_lit, cloud_shadow, clamp((y - sea_edge) * 2.5 + (0.5 - puff) * 0.4, 0.0, 0.7));
-		sky = mix(sky, sea_tone, sea);
+		vec2 near_pos = view + vec2(cloud_offset.x * 0.6 + sky_time * 0.003, -altitude * 0.018);
+		vec4 near_cloud = cloud_layer(near_pos, vec2(0.36, 0.3), cloud_coverage, seed + 31u, cloud_lit, cloud_shadow);
+		sky = mix(sky, near_cloud.rgb, near_cloud.a);
 	}
-
-	// Soft haze along the very bottom.
-	sky = mix(sky, horizon_color * 1.04, pow(clamp(y, 0.0, 1.0), 6.0) * 0.3);
+	if (y < near_line + 0.002) {
+		sky = range_layer(sky, mid_x, y, mid_line, 2.3, 0.84 + mid_sink, 0.2, mid_sink, vec2(0.075, 0.05), seed + 41u, range_mid, snow_amount * 0.7, haze);
+	}
+	sky = range_layer(sky, near_x, y, near_line, 1.6, 0.95 + near_sink, 0.17, near_sink, vec2(0.11, 0.07), seed + 53u, range_near, snow_amount * 0.35, haze);
 	ALBEDO = sky;
 }

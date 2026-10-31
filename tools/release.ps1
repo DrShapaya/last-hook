@@ -8,7 +8,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$taskModel = Join-Path $taskRoot 'game\scripts\game_model.gd'
+$taskProject = Join-Path $taskRoot 'game\project.godot'
 $taskPresets = Join-Path $taskRoot 'game\export_presets.cfg'
 $taskUtf8 = [Text.UTF8Encoding]::new($false)
 
@@ -19,14 +19,14 @@ New-Item -ItemType Directory -Path (Split-Path $taskLockPath) -Force | Out-Null
 try { [IO.File]::Open($taskLockPath, 'OpenOrCreate', 'ReadWrite', 'None').Dispose() }
 catch { throw 'Another Last Hook build is already running. Wait for it to finish and start again.' }
 
-$taskModelText = [IO.File]::ReadAllText($taskModel)
-$taskCurrent = [regex]::Match($taskModelText, 'const BUILD_VERSION := "([^"]+)"').Groups[1].Value
-if (-not $taskCurrent) { throw 'BUILD_VERSION is missing from game_model.gd.' }
+$taskProjectText = [IO.File]::ReadAllText($taskProject)
+$taskCurrent = [regex]::Match($taskProjectText, '(?m)^config/version="([^"]+)"').Groups[1].Value
+if (-not $taskCurrent) { throw 'config/version is missing from project.godot.' }
 $taskVersions = Join-Path $taskRoot 'Builds\Versions'
 if (-not $Version) {
     # Every run without a version is a new release: the current version if it
     # has not been built yet, otherwise the next free patch number.
-    if ($taskCurrent -notmatch '^(\d+)\.(\d+)\.(\d+)$') { throw "BUILD_VERSION '$taskCurrent' must look like 0.14.0." }
+    if ($taskCurrent -notmatch '^(\d+)\.(\d+)\.(\d+)$') { throw "Version '$taskCurrent' must look like 0.14.0." }
     $taskPatch = [int]$Matches[3]
     $Version = $taskCurrent
     while (Test-Path -LiteralPath (Join-Path $taskVersions "v$Version")) {
@@ -53,8 +53,8 @@ function Set-TaskValue([string]$Text, [string]$Key, [string]$Value) {
 $taskPresetText = [IO.File]::ReadAllText($taskPresets)
 $taskCode = [int][regex]::Match($taskPresetText, '(?m)^version/code=(\d+)').Groups[1].Value
 if ($Version -ne $taskCurrent) {
-    $taskModelText = $taskModelText.Replace("const BUILD_VERSION := `"$taskCurrent`"", "const BUILD_VERSION := `"$Version`"")
-    [IO.File]::WriteAllText($taskModel, $taskModelText, $taskUtf8)
+    $taskProjectText = $taskProjectText.Replace("config/version=`"$taskCurrent`"", "config/version=`"$Version`"")
+    [IO.File]::WriteAllText($taskProject, $taskProjectText, $taskUtf8)
     $taskCode += 1
     $taskPresetText = Set-TaskValue $taskPresetText 'version/code' $taskCode
 }

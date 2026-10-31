@@ -59,18 +59,18 @@ func run_tests() -> void:
 	check(description.contains("Скольз") and description.contains("постоян") and description.contains("скользит"),"a permanent ice grip still names its type and its lifetime: %s" % description)
 	check(GripSpec.description(root_grip).contains("2,6 с"),"a root names its timer instead of a lifetime")
 	check(not GripSpec.expired(root_grip,2.6) and GripSpec.expired(root_grip,2.61) and not GripSpec.expired(stone,99),"the root clock keeps the old 2.6 s and only roots expire")
-	# Spring: a fixed throw along the exit, whatever speed the swing brought.
+	# Spring: a fixed throw straight up, whatever speed the swing brought and
+	# wherever the route goes on: a sideways throw leaves the mountain.
 	var spring := {"kind":2,"exit_dir":Vector2(1,1).normalized()}
-	var exit := GripSpec.exit_direction(spring)
 	var along := Vector2(3,3)
-	check(GripSpec.release_velocity(spring,Vector2.ZERO).distance_to(exit*GripSpec.SPRING_THROW)<.0001,"a spring throws a hero hanging still at its full force")
-	check(GripSpec.release_velocity(spring,-along).dot(exit)>=GripSpec.SPRING_THROW-.0001,"a release swinging against the exit is still thrown along it")
-	check(absf(GripSpec.release_velocity(spring,exit*GripSpec.SPRING_FULL_SWING).length()-GripSpec.SPRING_THROW*(1+GripSpec.SPRING_TIMING))<.0001,"a full swing along the exit adds the timing bonus")
-	var fast := exit*(GripSpec.SPRING_THROW*(1+GripSpec.SPRING_TIMING)+2)
-	check(GripSpec.release_velocity(spring,fast).distance_to(fast)<.0001,"a throw never slows a faster swing")
-	var across := Vector2(3,-3)
-	check(GripSpec.release_velocity(spring,across).dot(across)<across.length_squared() and GripSpec.release_velocity(stone,along)==along,"sideways speed is damped by a throw and other types add no impulse")
-	check(GripSpec.spring_load(spring,exit*GripSpec.SPRING_FULL_SWING*.25)<GripSpec.spring_load(spring,exit*GripSpec.SPRING_FULL_SWING) and GripSpec.spring_load(spring,Vector2(GripSpec.SPRING_FULL_SWING,0))<1,"a slow or sideways swing loads the spring only in part")
+	check(GripSpec.release_velocity(spring,Vector2.ZERO)==Vector2(0,GripSpec.SPRING_THROW),"a spring throws a hero hanging still straight up at full force")
+	check(GripSpec.release_velocity(spring,-along).y>=GripSpec.SPRING_THROW-.0001,"a release on the way down is still thrown up")
+	check(absf(GripSpec.release_velocity(spring,Vector2(0,GripSpec.SPRING_FULL_SWING)).y-GripSpec.SPRING_THROW*(1+GripSpec.SPRING_TIMING))<.0001,"a full swing upwards adds the timing bonus")
+	var fast := Vector2(0,GripSpec.SPRING_THROW*(1+GripSpec.SPRING_TIMING)+2)
+	check(GripSpec.release_velocity(spring,fast)==fast,"a throw never slows a faster rise")
+	var sideways: Vector2 = GripSpec.release_velocity(spring,Vector2(8,0))
+	check(absf(sideways.x)<=2.0+.0001 and sideways.y>=GripSpec.SPRING_THROW and GripSpec.release_velocity(stone,along)==along,"a throw takes most of the sideways speed and other types add no impulse")
+	check(GripSpec.spring_load(spring,Vector2(0,GripSpec.SPRING_FULL_SWING*.25))<GripSpec.spring_load(spring,Vector2(0,GripSpec.SPRING_FULL_SWING)) and GripSpec.spring_load(spring,Vector2(GripSpec.SPRING_FULL_SWING,0))==0,"only a rising swing loads the spring, a slow one in part")
 	check(GripSpec.exit_direction({"kind":2}).y>0,"a spring without a stored exit throws up the mountain")
 	# Ice: starts at .18 m/s, accelerates, never past 1.2 m, along a local direction.
 	var slanted := {"kind":3,"slide_dir":Vector2(.3,-1),"pos":Vector2(2,5)}

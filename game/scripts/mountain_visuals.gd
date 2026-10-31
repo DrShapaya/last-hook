@@ -837,7 +837,7 @@ func _spring_details(object: Dictionary, block: Node3D, spec: GripVisualSpec, pr
 	# A solid painted arrowhead on the face, pointing where the spring throws.
 	# It stays flat and compact: the former long chevron read as two orange
 	# sticks across the stone.
-	var direction := GripSpec.exit_direction(object)
+	var direction := GripSpec.MOUNTAIN_UP
 	var across := direction.orthogonal()
 	var center := Vector2(0,(spec.front_ring()[0].y+spec.bounds().position.y)*.5)
 	var corners := [center+direction*.3,center-direction*.16+across*.24,center-direction*.04,center-direction*.16-across*.24]

@@ -17,13 +17,13 @@ const ROLES := ["main","tutorial","branch","recovery","rest","reward","auxiliary
 # Existing tuning gathered in one place; values are unchanged.
 const ROOT_SECONDS := 2.6
 const ROOT_WARNING := 2.1
-# A spring throws the hero along its exit at a fixed speed, even from a still
-# hang; a swing along the exit adds up to SPRING_TIMING of that speed, and half
-# of the speed across the exit is lost to the throw.
-const SPRING_THROW := 10.0
+# A spring throws the hero straight up at a fixed speed, even from a still
+# hang: thrown towards the next grip, the hero left the mountain. A rising
+# swing adds up to SPRING_TIMING of that speed, and most sideways speed is lost.
+const SPRING_THROW := 11.0
 const SPRING_TIMING := .2
 const SPRING_FULL_SWING := 6.0
-const SPRING_KEEP_ACROSS := .5
+const SPRING_KEEP_SIDEWAYS := .25
 # Ice: the contact starts at the old .18 m/s and accelerates down the grip's
 # surface, never further than 1.2 m and never off the drawn stone. Releasing
 # while it slides carries that motion into the flight.
@@ -34,7 +34,7 @@ const ICE_CARRY := 1.5
 # Ice is a plate leaning along its slide. The hook hangs under it, so it holds
 # for a moment and then runs down the lower edge and off the low end, about
 # as long a hold as a root gives from the high end.
-const ICE_GRACE := .6
+const ICE_GRACE := .9
 const ICE_PLATE_ACCEL := .45
 const ICE_LOWER_EDGE := .15
 # Distance the spring's throw must keep clear of rock, in its exit direction.
@@ -246,15 +246,13 @@ static func exit_direction(object: Dictionary) -> Vector2:
 # How much of the spring's timing bonus a release at this velocity collects.
 static func spring_load(object: Dictionary, velocity: Vector2) -> float:
 	if kind_of(object)!=SPRING or velocity.length_squared()<.0001: return 0.0
-	return clampf(velocity.dot(exit_direction(object))/SPRING_FULL_SWING,0,1)
+	return clampf(velocity.y/SPRING_FULL_SWING,0,1)
 
 static func release_velocity(object: Dictionary, velocity: Vector2, slide_velocity: Vector2 = Vector2.ZERO) -> Vector2:
 	if kind_of(object)==ICE: return velocity+slide_velocity*ICE_CARRY
 	if kind_of(object)!=SPRING: return velocity
-	var exit := exit_direction(object)
-	var along := velocity.dot(exit)
 	var throw := SPRING_THROW*(1+SPRING_TIMING*spring_load(object,velocity))
-	return (velocity-exit*along)*SPRING_KEEP_ACROSS+exit*maxf(along,throw)
+	return Vector2(velocity.x*SPRING_KEEP_SIDEWAYS,maxf(velocity.y,throw))
 
 static func choice_exits(object: Dictionary) -> Array:
 	return object.get("choice_exits",[]) if kind_of(object)==CRYSTAL else []

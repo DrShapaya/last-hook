@@ -202,6 +202,10 @@ func _split_blend() -> float:
 func _dress_brief(_source: LevelSource) -> void:
 	pass
 
+# A last pass over the painted outline, for a mountain that wants one.
+func _finished_outline(outline: Image) -> Image:
+	return outline
+
 func _route_stone(point: Vector2) -> float:
 	return _blend(point.y,"corridor")+ROUTE_ROCK-absf(point.x-corridor_center(point.y))
 
@@ -473,7 +477,7 @@ func build(source_name: String = "") -> LevelSource:
 				var near := clampf(.3+clampf(amount/7.0,0,1)*.45+noise.get_noise_2d(point.x*3.0,point.y*3.0)*.15,0,1)
 				depth.set_pixel(x,y,Color(near,near,near))
 			difficulty.set_pixel(x,y,Color(easy,easy,easy))
-	source.masks["silhouette"] = silhouette
+	source.masks["silhouette"] = _finished_outline(silhouette)
 	source.masks["depth"] = depth
 	source.masks["difficulty"] = difficulty
 	source.masks["route"] = _paint(source,func(point: Vector2) -> float:

@@ -5,6 +5,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.util.Log;
 import com.yandex.mobile.ads.banner.*;
 import com.yandex.mobile.ads.common.*;
 import com.yandex.mobile.ads.interstitial.*;
@@ -22,6 +23,7 @@ import java.util.Set;
 
 /** All SDK work runs on Android's UI thread. Godot receives queued signals. */
 public final class LastHookAds extends GodotPlugin {
+    private static final String TAG = "LastHookAds";
     private boolean ready, initializing, destroyed, fullscreen;
     private String appMetricaApiKey = "";
     private boolean appMetricaActivated;
@@ -71,17 +73,17 @@ public final class LastHookAds extends GodotPlugin {
     }
 
     private void activateAppMetrica() {
-        if (appMetricaActivated || appMetricaApiKey.isEmpty()) return;
+        if (appMetricaActivated) return;
         try {
-            AppMetricaConfig config = AppMetricaConfig.newConfigBuilder(appMetricaApiKey).build();
-            AppMetrica.activate(getActivity().getApplicationContext(), config);
-            // Activation alone does not wire Android Activity lifecycle events.
-            // Without this call AppMetrica can miss ordinary user sessions in
-            // a Godot app because the SDK is initialized from the plugin,
-            // rather than from Application.onCreate().
-            AppMetrica.enableActivityAutoTracking(getActivity().getApplication());
+            // LastHookApplication activates AppMetrica before this plugin and
+            // before the Godot Activity is created. The plugin only marks its
+            // bridge ready and emits a diagnostic event here.
             appMetricaActivated = true;
+            AppMetrica.reportEvent("appmetrica_plugin_initialized");
+            AppMetrica.sendEventsBuffer();
+            Log.i(TAG, "AppMetrica bridge ready");
         } catch (Throwable error) {
+            Log.e(TAG, "AppMetrica initialization failed", error);
             failed("appmetrica_initialize", error.toString());
         }
     }

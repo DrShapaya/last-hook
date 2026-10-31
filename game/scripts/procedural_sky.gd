@@ -4,9 +4,8 @@ extends MeshInstance3D
 const UPDATE_INTERVAL := 1.0 / 30.0
 # Share of the screen resolution the sky is painted at, per graphics preset.
 # "high" paints every screen pixel each frame; the others paint a smaller
-# texture at most UPDATE_INTERVAL apart. The sky is soft gradients and
-# slow clouds, so it upscales cleanly, and its fbm noise is the costliest
-# fragment work of a frame on phone GPUs.
+# texture at most UPDATE_INTERVAL apart. The sky is flat facets and slow
+# clouds, so it upscales cleanly, and it covers most of a frame on phones.
 const RENDER_SCALES := {"high":1.0,"balanced":.5,"battery":.34}
 
 var sky_material := ShaderMaterial.new()
@@ -90,21 +89,21 @@ func set_quality(quality: String) -> void:
 func _apply_biome_palette(loc: int) -> void:
 	match loc:
 		1: # Desert Canyon
-			sky_material.set_shader_parameter("top_color",Color("284e78"))
-			sky_material.set_shader_parameter("horizon_color",Color("e2a476"))
-			sky_material.set_shader_parameter("cloud_lit",Color("fff6ec"))
-			sky_material.set_shader_parameter("cloud_shadow",Color("856860"))
-			sky_material.set_shader_parameter("sun_color",Color("ffdba3"))
+			sky_material.set_shader_parameter("top_color",Color("3f86cf"))
+			sky_material.set_shader_parameter("horizon_color",Color("b4d4ef"))
+			sky_material.set_shader_parameter("cloud_lit",Color("fbfcff"))
+			sky_material.set_shader_parameter("cloud_shadow",Color("aebfdd"))
+			sky_material.set_shader_parameter("sun_color",Color("fff0d6"))
 			sky_material.set_shader_parameter("cloud_coverage",0.38)
-			sky_material.set_shader_parameter("range_far",Color("d7a582"))
-			sky_material.set_shader_parameter("range_mid",Color("b0705a"))
-			sky_material.set_shader_parameter("range_near",Color("7e4a3a"))
+			sky_material.set_shader_parameter("range_far",Color("9db8de"))
+			sky_material.set_shader_parameter("range_mid",Color("7f9ccb"))
+			sky_material.set_shader_parameter("range_near",Color("c39a72"))
 			sky_material.set_shader_parameter("snow_amount",0.0)
 		2: # Snowy Summit / Sky City
-			sky_material.set_shader_parameter("top_color",Color("15386b"))
-			sky_material.set_shader_parameter("horizon_color",Color("8fcbe8"))
-			sky_material.set_shader_parameter("cloud_lit",Color("f4faff"))
-			sky_material.set_shader_parameter("cloud_shadow",Color("526c88"))
+			sky_material.set_shader_parameter("top_color",Color("1f5aa8"))
+			sky_material.set_shader_parameter("horizon_color",Color("a6d4ee"))
+			sky_material.set_shader_parameter("cloud_lit",Color("f6fbff"))
+			sky_material.set_shader_parameter("cloud_shadow",Color("9db4d4"))
 			sky_material.set_shader_parameter("sun_color",Color("e8f5ff"))
 			sky_material.set_shader_parameter("cloud_coverage",0.52)
 			sky_material.set_shader_parameter("range_far",Color("b9c8e2"))
@@ -112,15 +111,15 @@ func _apply_biome_palette(loc: int) -> void:
 			sky_material.set_shader_parameter("range_near",Color("53668c"))
 			sky_material.set_shader_parameter("snow_amount",0.8)
 		_: # Standard Alpine Mountain
-			sky_material.set_shader_parameter("top_color",Color("1c4e8c"))
-			sky_material.set_shader_parameter("horizon_color",Color("6cb0e8"))
+			sky_material.set_shader_parameter("top_color",Color("2f76c4"))
+			sky_material.set_shader_parameter("horizon_color",Color("a8d4f0"))
 			sky_material.set_shader_parameter("cloud_lit",Color("fffefa"))
-			sky_material.set_shader_parameter("cloud_shadow",Color("5c728e"))
+			sky_material.set_shader_parameter("cloud_shadow",Color("a7bad6"))
 			sky_material.set_shader_parameter("sun_color",Color("fff2cf"))
-			sky_material.set_shader_parameter("cloud_coverage",0.46)
+			sky_material.set_shader_parameter("cloud_coverage",0.4)
 			sky_material.set_shader_parameter("range_far",Color("8fb1d4"))
 			sky_material.set_shader_parameter("range_mid",Color("5c82a8"))
-			sky_material.set_shader_parameter("range_near",Color("355a63"))
+			sky_material.set_shader_parameter("range_near",Color("4f7f76"))
 			sky_material.set_shader_parameter("snow_amount",0.35)
 
 func _resize() -> void:

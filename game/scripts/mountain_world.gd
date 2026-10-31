@@ -1073,14 +1073,14 @@ func ice_scrape(contact: Vector2, delta: float) -> void:
 	tween.tween_property(chip,"scale",Vector3.ZERO,.34)
 	tween.chain().tween_callback(chip.queue_free)
 
-# The throw of a spring: sparks of its paint leave the grip along the exit, and
+# The throw of a spring: sparks of its paint leave the grip upwards, and
 # a shorter spray falls away behind the hero.
 const HERO_PLANE_Z := 3.2
 
 func spring_burst(id: int, hero: Vector2) -> void:
 	var object := anchor_by_id(id)
 	if object.is_empty() or not visuals_enabled: return
-	var exit := GripSpec.exit_direction(object)
+	var exit := GripSpec.MOUNTAIN_UP
 	var across := exit.orthogonal()
 	var p: Vector2 = object["pos"]
 	var mount: SurfaceMount = object.get("mount")

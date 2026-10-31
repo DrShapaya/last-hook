@@ -72,6 +72,17 @@ func _clear_of_grips(point: Vector2, reach: float) -> bool:
 func height(_point: Vector2) -> float:
 	return RIM_Z
 
+# Whether grips, finds and plants take their depth from this face instead of
+# the frame behind it.
+func holds_objects() -> bool:
+	return false
+
+# The way the face looks at a point, ignoring single facets.
+func normal_at(point: Vector2) -> Vector3:
+	var across := height(point+Vector2(.35,0))-height(point-Vector2(.35,0))
+	var up := height(point+Vector2(0,.35))-height(point-Vector2(0,.35))
+	return Vector3(-across/.7,-up/.7,1).normalized()
+
 # The colour of a facet from its centre and normal.
 func facet_color(_center: Vector3, _normal: Vector3) -> Color:
 	return Color.GRAY
@@ -116,9 +127,66 @@ func _corner(i: int, j: int, cell: float) -> Vector2:
 	var point := Vector2((i+(_hash(i,j,1)-.5)*.76)*basis.x+j*basis.y*basis.z,(j+(_hash(i,j,2)-.5)*.76)*basis.y)*cell
 	var inside := distance(point)
 	if inside< -cell*1.6: point = Vector2.INF
-	elif inside<.1: point += gradient(point)*(.1-inside)
+	elif inside<.1: point = _on_edge(point)
 	corners[key] = point
 	return point
+
+# Rock that shows through openings of the face.
+func _emit_behind(_low: float, _high: float, _vertices: PackedVector3Array, _normals: PackedVector3Array, _colors: PackedColorArray) -> void:
+	pass
+
+# Whether the face needs walls behind its edge. A face that falls far back by
+# itself is closed already.
+func _closes_edge() -> bool:
+	return true
+
+# Whether facets at the mask's edge are cut finer, so the outline follows it.
+func _fine_edge() -> bool:
+	return false
+
+# A point drawn onto the mask's edge. A fine edge takes a few steps, for a far
+# corner is not met by one.
+func _on_edge(point: Vector2) -> Vector2:
+	var result := point
+	for step in range(3 if _fine_edge() else 1):
+		var inside := distance(result)
+		if inside>=.1: break
+		result += gradient(result)*(.1-inside)
+	return result
+
+# One side of a facet cut in two. A side is cut for both of its facets or for
+# neither, and its middle lands in one place, so no gap opens between them.
+func _cut_side(from: Vector2, to: Vector2, cell: float) -> Vector2:
+	if minf(distance(from),distance(to))>cell*.4: return Vector2.INF
+	var middle := (from+to)*.5
+	return _on_edge(middle) if distance(middle)<.1 else middle
+
+# A facet at the mask's edge, cut along the sides that near it.
+func _emit_cut(triangle: Array, vertices: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray, cell: float) -> void:
+	var a: Vector2 = triangle[0]
+	var b: Vector2 = triangle[1]
+	var c: Vector2 = triangle[2]
+	if not a.is_finite() or not b.is_finite() or not c.is_finite(): return
+	var ab := _cut_side(a,b,cell)
+	var bc := _cut_side(b,c,cell)
+	var ca := _cut_side(c,a,cell)
+	if ab.is_finite() and bc.is_finite() and ca.is_finite():
+		for part in [[a,ab,ca],[ab,b,bc],[ca,bc,c],[ab,bc,ca]]: _emit(part,vertices,normals,colors,cell*.5)
+		return
+	# The ring of the facet, turned to start at a cut, is a fan from there.
+	var ring: Array = []
+	for corner in [[a,ab],[b,bc],[c,ca]]:
+		ring.append(corner[0])
+		if (corner[1] as Vector2).is_finite(): ring.append(corner[1])
+	var start := -1
+	for corner in [ab,bc,ca]:
+		if (corner as Vector2).is_finite():
+			start = ring.find(corner)
+			break
+	if start<0:
+		_emit(triangle,vertices,normals,colors,cell)
+		return
+	for index in range(1,ring.size()-1): _emit([ring[start],ring[(start+index)%ring.size()],ring[(start+index+1)%ring.size()]],vertices,normals,colors,cell*.5)
 
 # The face between two heights, at about `cell` units a facet.
 func build(low: float, high: float, cell: float) -> ArrayMesh:
@@ -137,8 +205,11 @@ func build(low: float, high: float, cell: float) -> ArrayMesh:
 			var c := _corner(i+1,j+1,cell)
 			var d := _corner(i,j+1,cell)
 			var triangles := [[a,b,c],[a,c,d]] if _hash(i,j,3)<.5 else [[a,b,d],[b,c,d]]
-			for triangle in triangles: _emit(triangle,vertices,normals,colors,cell)
+			for triangle in triangles:
+				if _fine_edge(): _emit_cut(triangle,vertices,normals,colors,cell)
+				else: _emit(triangle,vertices,normals,colors,cell)
 	for lump in lumps(low,high): _emit_lump(lump[0],lump[1],vertices,normals,colors)
+	_emit_behind(low,high,vertices,normals,colors)
 	var mesh := ArrayMesh.new()
 	if vertices.is_empty(): return mesh
 	var arrays := []
@@ -171,6 +242,7 @@ func _emit(triangle: Array, vertices: PackedVector3Array, normals: PackedVector3
 		normals.append(normal)
 		colors.append(color)
 	# Where the mask ends the rock turns back into the mountain.
+	if not _closes_edge(): return
 	for edge in [[pa,pb],[pb,pc],[pc,pa]]:
 		var from: Vector3 = edge[0]
 		var to: Vector3 = edge[1]

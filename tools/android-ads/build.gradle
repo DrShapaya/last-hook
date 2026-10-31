@@ -3,7 +3,14 @@ plugins { id 'com.android.library' version '8.6.1' }
 android {
     namespace 'com.lasthook.ads'
     compileSdk 36
-    defaultConfig { minSdk 24 }
+    defaultConfig {
+        minSdk 24
+        // AppMetrica must be activated from the process Application, before
+        // Godot creates its Activity. Keep this value in the native Android
+        // module so startup does not depend on a later GDScript callback.
+        buildConfigField 'String', 'APPMETRICA_API_KEY', '"23c6243b-cc83-4d98-8955-b474f0093fd5"'
+    }
+    buildFeatures { buildConfig true }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17

@@ -165,6 +165,9 @@ var last_anchor_id := -1
 # Chat 4: the active items carried this run ({"id","used"}), the running effect
 # ({"id","remaining","duration"}), the beacon's highlighted exits, the run's
 # contract and the pending full-bag swap.
+# Items are being reworked: a run takes none along, so stock stays untouched
+# and no item buttons appear.
+const RUN_ITEMS_ON := false
 var run_items: Array = []
 var item_effect: Dictionary = {}
 var beacon_targets: Array[Vector2] = []
@@ -447,12 +450,13 @@ func _setup_lighting() -> void:
 
 const SUN_DIRECTION := Vector3(.30,-.50,-.81)
 const SUN_ENERGY := .46
+const SUN_ENERGY_ULTRA := .62
 
-func _set_shadow_atlas(atlas_size: int) -> void:
+func _set_shadow_atlas(atlas_size: int, filter_quality: int = RenderingServer.SHADOW_QUALITY_SOFT_LOW) -> void:
 	if atlas_size==shadow_atlas_size: return
 	shadow_atlas_size = atlas_size
 	RenderingServer.directional_shadow_atlas_set_size(atlas_size,true)
-	RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_LOW)
+	RenderingServer.directional_soft_shadow_filter_set_quality(filter_quality)
 
 func _apply_shadow_preset(preset: String) -> void:
 	if not is_instance_valid(sun_light): return
@@ -460,6 +464,16 @@ func _apply_shadow_preset(preset: String) -> void:
 	# of the wall: low enough that shadows touch their casters, high enough
 	# that facets never self-acne while the camera scrolls.
 	match preset:
+		"ultra":
+			sun_light.shadow_enabled = true
+			# Deeper than high, but finds and tags must not stamp dark shapes on the rock.
+			sun_light.shadow_opacity = .58
+			sun_light.light_energy = SUN_ENERGY
+			sun_light.shadow_bias = .03
+			sun_light.shadow_normal_bias = 1.0
+			sun_light.shadow_blur = 3.0
+			sun_light.directional_shadow_max_distance = 50
+			_set_shadow_atlas(8192,RenderingServer.SHADOW_QUALITY_SOFT_HIGH)
 		"high":
 			sun_light.shadow_enabled = true
 			# Readable cast shadows between rock masses; ambient fill keeps them blue-grey.
@@ -488,6 +502,26 @@ func _apply_shadow_preset(preset: String) -> void:
 			sun_light.directional_shadow_max_distance = 42
 			_set_shadow_atlas(2048)
 
+# The ultra light model: the sun models the rock instead of the painted form
+# light, and the sky and occlusion replace the flat fill. The tone curve stays
+# linear: AgX and Filmic grey out the sky, coins and grips.
+func _apply_lighting(lighting: String) -> void:
+	var ultra := lighting=="ultra"
+	RenderingServer.global_shader_parameter_set("light_quality",1.0 if ultra else 0.0)
+	if ultra: sun_light.light_energy = SUN_ENERGY_ULTRA
+	sun_light.light_specular = .6 if ultra else .35
+	scene_environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY if ultra else Environment.AMBIENT_SOURCE_COLOR
+	# Half the fill stays neutral: the sky alone turns every rock blue.
+	scene_environment.ambient_light_sky_contribution = .45 if ultra else 1.0
+	scene_environment.ambient_light_color = Color("d6d2c8") if ultra else Color("b6c7d6")
+	scene_environment.ambient_light_energy = .46 if ultra else .62
+	scene_environment.ssao_enabled = ultra
+	scene_environment.ssao_radius = 1.0
+	scene_environment.ssao_intensity = 1.4
+	scene_environment.ssao_light_affect = .35
+	var msaa := Viewport.MSAA_4X if ultra else ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d") as Viewport.MSAA
+	if get_viewport().msaa_3d!=msaa: get_viewport().msaa_3d = msaa
+
 func _settings() -> Dictionary:
 	return model.profile["settings"]
 
@@ -511,6 +545,7 @@ func _apply_graphics() -> void:
 	# change may touch them, or every setting would blink the screen.
 	if DisplayServer.window_get_vsync_mode()!=DisplayServer.VSYNC_ENABLED: DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
 	_apply_shadow_preset(str(settings["shadows"]))
+	_apply_lighting(str(settings["lighting"]))
 	# Glow is a chain of full-screen blur passes.
 	if scene_environment!=null: scene_environment.glow_enabled = bool(settings["glow"])
 	if not is_equal_approx(get_viewport().scaling_3d_scale,float(settings["render_scale"])): get_viewport().scaling_3d_scale = float(settings["render_scale"])
@@ -748,7 +783,7 @@ func start_run(endless: bool) -> void:
 	model.bag = []
 	model.picked = []
 	model.begin_run_ledger(run_id)
-	run_items = model.take_run_items() if run_mode!="practice" else []
+	run_items = model.take_run_items() if RUN_ITEMS_ON and run_mode!="practice" else []
 	item_effect = {}
 	beacon_targets.clear()
 	swap_offer = {}

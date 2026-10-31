@@ -1276,8 +1276,7 @@ func update_play() -> void:
 			if not current.get("permanent",true): parts.append("Опора исчезнет при отпускании")
 			if GripSpec.kind_of(current)==GripSpec.SPRING:
 				parts.append("отпусти — подбросит по стрелке")
-				var throw_exit := GripSpec.exit_direction(current)
-				throw_direction = Vector2(throw_exit.x,-throw_exit.y)
+				throw_direction = Vector2(0,-1)
 				aim_overlay.throw_color = game.world.profile_at(current["pos"].y).paint_color(GripSpec.SPRING)
 			elif GripSpec.plate(current):
 				var slide := GripSpec.slide_direction(current)
@@ -1294,8 +1293,10 @@ func update_play() -> void:
 	danger_edge.strength = clampf(game.camera_dip/.6,0,1)
 	danger_edge.edge_y = content_point(game.camera.unproject_position(Vector3(game.sim.pos.x,game.screen_bottom_y(),0))).y
 	danger_edge.queue_redraw()
-	rope_gauge.ratio = game.sim.length/maxf(.1,game.model.shot_range())
-	rope_gauge.meters = roundi(game.sim.length*10)
+	# The rope as it is drawn: slack line never counts as paid out.
+	var rope_out: float = minf(game.sim.path_distance(),game.sim.length)
+	rope_gauge.ratio = rope_out/maxf(.1,game.model.shot_range())
+	rope_gauge.meters = roundi(rope_out*10)
 	rope_gauge.direction = reel
 	aim_overlay.aim_color = MenuSurface.HOLD
 	if aim_overlay.active:

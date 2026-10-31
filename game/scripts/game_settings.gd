@@ -5,7 +5,8 @@ extends RefCounted
 # what may be stored, the defaults and the graphics presets. main.gd applies
 # them. A value read from a save is never trusted: anything outside the lists
 # below falls back to its default, so a hand-edited profile cannot break a run.
-const SHADOWS := ["off","medium","high"]
+const SHADOWS := ["off","medium","high","ultra"]
+const LIGHTING := ["standard","ultra"]
 const DETAIL := ["battery","balanced","high"]
 const PARTICLES := ["off","reduced","full"]
 const RENDER_SCALES := [.6,.75,.85,1.0]
@@ -20,9 +21,10 @@ const DEFAULT_HOLD := .28
 # What a preset fills in. The fps limit is frame pacing, not workload, so no
 # preset touches it.
 const PRESETS := {
-	"high":{"shadows":"high","decor":"high","sky":"high","particles":"full","glow":true,"render_scale":1.0},
-	"balanced":{"shadows":"medium","decor":"balanced","sky":"balanced","particles":"full","glow":true,"render_scale":1.0},
-	"battery":{"shadows":"off","decor":"battery","sky":"battery","particles":"reduced","glow":false,"render_scale":.75}
+	"ultra":{"shadows":"ultra","lighting":"ultra","decor":"high","sky":"high","particles":"full","glow":true,"render_scale":1.0},
+	"high":{"shadows":"high","lighting":"standard","decor":"high","sky":"high","particles":"full","glow":true,"render_scale":1.0},
+	"balanced":{"shadows":"medium","lighting":"standard","decor":"balanced","sky":"balanced","particles":"full","glow":true,"render_scale":1.0},
+	"battery":{"shadows":"off","lighting":"standard","decor":"battery","sky":"battery","particles":"reduced","glow":false,"render_scale":.75}
 }
 
 static func defaults() -> Dictionary:
@@ -61,6 +63,7 @@ static func sanitize(source: Variant) -> Dictionary:
 	var clean := defaults()
 	if not source is Dictionary: return clean
 	clean["shadows"] = _pick(source.get("shadows"),SHADOWS,clean["shadows"])
+	clean["lighting"] = _pick(source.get("lighting"),LIGHTING,clean["lighting"])
 	for key in ["decor","sky"]: clean[key] = _pick(source.get(key),DETAIL,clean[key])
 	clean["particles"] = _pick(source.get("particles"),PARTICLES,clean["particles"])
 	clean["render_scale"] = _pick(source.get("render_scale"),RENDER_SCALES,clean["render_scale"])

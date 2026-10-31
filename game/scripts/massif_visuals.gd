@@ -47,6 +47,8 @@ var masses_by_id: Dictionary = {}
 var query_cache: Dictionary = {}
 var route_cache: Dictionary = {}
 var mass_signature := Vector4i(-1,-1,-1,-1)
+var seen_rock: RockSurface
+var seen_rock_asked := false
 # Openings of the arches: body and fill masses keep out of them.
 var arch_openings: Array[Rect2] = []
 
@@ -71,6 +73,12 @@ func _apply_rock_profile(material: ShaderMaterial, profile: GripBiomeProfile) ->
 	material.set_shader_parameter("roughness_value",float(rock["roughness"]))
 	material.set_shader_parameter("detail_strength",float(rock["normal_strength"]))
 	material.set_shader_parameter("strata_scale",float(rock["strata_scale"]))
+	if rock.has("strata_fine"):
+		material.set_shader_parameter("strata_contrast",float(rock["strata_contrast"]))
+		material.set_shader_parameter("strata_fine",float(rock["strata_fine"]))
+	if rock.has("grain_strength"):
+		material.set_shader_parameter("grain_texture",load("res://assets/art/sandstone_grain.png"))
+		material.set_shader_parameter("grain_strength",float(rock["grain_strength"]))
 
 # The expedition's rock carries its act's weather (moss, snow, dust) instead of
 # the first location's height bands; one material per act.
@@ -553,11 +561,24 @@ func surface_query(point: Vector2) -> RockSurfaceHit:
 		hit.depth = mass.inside(point)
 		hit.material_profile = mass.material_profile
 	if hit.valid():
+		hit.exposure = 1.0 if _open_above(point,hit.position.z) else 0.0
+		var rock := _seen_rock()
+		if rock!=null:
+			hit.position.z = rock.height(point)
+			hit.normal = rock.normal_at(point)
 		var along := Vector3.RIGHT-hit.normal*hit.normal.x
 		hit.tangent = along.normalized() if along.length_squared()>.0001 else Vector3.RIGHT
-		hit.exposure = 1.0 if _open_above(point,hit.position.z) else 0.0
 	query_cache[point] = hit
 	return hit
+
+# The location's own rock, where objects stand on what the player sees and the
+# masses only say where stone is.
+func _seen_rock() -> RockSurface:
+	if not seen_rock_asked and layout is MaskLayout and not (layout as MaskLayout).rock_grid.is_empty():
+		seen_rock_asked = true
+		var rock := RockSurface.make(layout as MaskLayout)
+		if rock!=null and rock.holds_objects(): seen_rock = rock
+	return seen_rock
 
 func _open_above(point: Vector2, z: float) -> bool:
 	var probe := point+Vector2(0,1.2)
@@ -574,7 +595,9 @@ func stone_field(point: Vector2) -> float:
 
 func wall_depth(point: Vector2) -> float:
 	var hit := surface_query(point)
-	return hit.position.z if hit.valid() else -3.0
+	if hit.valid(): return hit.position.z
+	var rock := _seen_rock()
+	return rock.height(point) if rock!=null else -3.0
 
 func vertex(point: Vector2) -> Vector3:
 	return Vector3(point.x,point.y,wall_depth(point))
@@ -618,6 +641,7 @@ func mount_at(point: Vector2, footprint: Vector2, object: Dictionary = {}, stand
 # Every mass over the area counts with its full front, bevels and dome
 # included, not only the face a gameplay point sees.
 func _stone_front(area: Rect2) -> float:
+	if _seen_rock()!=null: return super._stone_front(area)
 	var front := -INF
 	for bin in range(int(floor(area.position.y/BIN)),int(floor(area.end.y/BIN))+1):
 		_masses_near(Vector2(area.get_center().x,bin*BIN+BIN*.5))
@@ -643,6 +667,12 @@ func build_chunk(index: int, parent: Node3D) -> void:
 		if not await pause(parent): return
 		await _build_ledge_plants(index,parent)
 
+func _in_cave(point: Vector2, reach: float = 0.0) -> bool:
+	if not layout is MaskLayout: return false
+	for cave in (layout as MaskLayout).rock_caves:
+		if ((point-Vector2(float(cave[0]),float(cave[1])))/(Vector2(float(cave[2]),float(cave[3]))+Vector2(reach,reach))).length()<1.0: return true
+	return false
+
 # Plants and stones along the ledges of a location's own rock.
 func _build_ledge_plants(index: int, parent: Node3D) -> void:
 	var rock := RockSurface.make(layout as MaskLayout)
@@ -653,7 +683,7 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 		if placed>=budget: break
 		if not await pause(parent): return
 		var point := Vector2(spot.x,spot.y)
-		if not _decor_route_clear(point,.9): continue
+		if not _decor_route_clear(point,.9) or _in_cave(point,.4): continue
 		var entry := _decor_entry("grass" if random.randf()<.6 else "pebbles",profile_at(point.y),random)
 		if entry.is_empty(): continue
 		var size := FloraModels.size_of(entry,1.0)
@@ -693,7 +723,7 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 		if hanging>=hanging_budget: break
 		if not await pause(parent): return
 		var point := Vector2(spot.x,spot.y)
-		if not _decor_route_clear(point,.9): continue
+		if not _decor_route_clear(point,.9) or _in_cave(point,.4): continue
 		var entry := _decor_entry("hanging",profile_at(point.y),random)
 		if entry.is_empty(): continue
 		var size := FloraModels.size_of(entry,1.0)
@@ -801,6 +831,7 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 # --- Decor --------------------------------------------------------------------------
 
 func _decor_blocked(point: Vector2, reach: float = 0.0) -> bool:
+	if _in_cave(point,reach+.4): return true
 	for anchor in layout.nearby_ids(point.y-2.0,point.y+2.0):
 		var grip: Dictionary = layout.anchors[anchor]
 		var grip_size: Vector2 = grip.get("dimensions",Vector2(1.6,.65))

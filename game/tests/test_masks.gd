@@ -6,6 +6,8 @@ extends SceneTree
 
 var checks := 0
 var failures: Array[String] = []
+# Points this far inside the mask stand clear of the rock's rounded edge.
+const ROLL_CLEAR := 3.6
 
 func _initialize() -> void:
 	call_deferred("run_tests")
@@ -143,7 +145,9 @@ func style_tests() -> void:
 		check(sky==0,"every main grip finds stone in the mask of location %d (%d in the sky)" % [location,sky])
 		match location:
 			0: check(designer.get_script()==LevelDesigner and layout.rock_form=="boulder" and layout.rock_grid.is_empty(),"the summer mountain stays boulders and keeps no rock field")
-			1: check(designer is DesertDesigner and layout.rock_form=="desert" and not (designer as DesertDesigner).tiers.is_empty(),"the canyon has its own designer and rock")
+			1:
+				check(designer is DesertDesigner and layout.rock_form=="desert" and not (designer as DesertDesigner).tiers.is_empty(),"the canyon has its own designer and rock")
+				desert_outline_tests()
 			2: check(designer is WinterDesigner and layout.rock_form=="winter" and not layout.rock_marks.is_empty(),"the snow peak has its own designer, rock and shelves")
 		if location>0:
 			var rock := RockSurface.make(layout)
@@ -151,6 +155,7 @@ func style_tests() -> void:
 			check(mesh.get_surface_count()==1 and mesh.get_faces().size()>300,"location %d builds one continuous rock face" % location)
 			var a := rock.build(24.0,48.0,1.0).get_faces()
 			check(a==mesh.get_faces(),"the rock face of location %d is the same every time" % location)
+		if location==1: desert_depth_tests(world,layout)
 		world.free()
 	# A climb has a rhythm, and the far way has its risk.
 	var sample := LevelDesigner.make(1,0,int(LevelCatalog.route(1,0)["seed"])*31)
@@ -173,6 +178,154 @@ func style_tests() -> void:
 	check(on_far>=1 or risky.splits_built.size()<3,"a storm stands over the second way (%d)" % on_far)
 	risky_world.free()
 	check(int(parted_rows[1])>0 and int(parted_rows[2])>0,"the canyon and the peak part into separate masses %s" % str(parted_rows))
+
+# The canyon has real depth, and what stands on it stands on the rock in view.
+func desert_depth_tests(world: MountainWorld, layout: MaskLayout) -> void:
+	var rock := RockSurface.make(layout)
+	var depths: Array = []
+	var y := 10.0
+	while y<130.0:
+		var x := -16.0
+		while x<=16.0:
+			if rock.distance(Vector2(x,y))>3.0: depths.append(rock.height(Vector2(x,y)))
+			x += 1.0
+		y += 1.0
+	depths.sort()
+	var low: float = depths[int(depths.size()*.05)]
+	var high: float = depths[int(depths.size()*.95)]
+	print("DESERT_DEPTH ",low," .. ",high)
+	check(high-low>=3.0,"the canyon's face spans 3 units of depth (%.2f .. %.2f)" % [low,high])
+	# A ledge overhangs: the rock falls far back under it, into a hollow deeper
+	# than the wall further down.
+	var drops: Array = []
+	var hollows: Array = []
+	for ledge in layout.rock_marks:
+		var at := Vector2(float(ledge[3]),float(ledge[0])-1.0)
+		if rock.distance(at)<ROLL_CLEAR or rock.distance(at+Vector2(0,-3.0))<ROLL_CLEAR: continue
+		var crest := rock.height(Vector2(at.x,lerpf(float(ledge[0]),float(ledge[1]),.45)))
+		drops.append(crest-rock.height(at))
+		hollows.append(rock.height(at+Vector2(0,-3.0))-rock.height(at))
+	drops.sort()
+	hollows.sort()
+	print("DESERT_UNDERCUT drop ",drops," hollow ",hollows)
+	check(drops.size()>=2 and float(drops[drops.size()/2])>=3.0,"a ledge overhangs the rock under it by 3 units %s" % str(drops))
+	check(float(hollows[hollows.size()/2])>=.5,"under a ledge lies a hollow, deeper than the wall below %s" % str(hollows))
+	# The outline has no spikes: at the coarsest preset no vertex of the face
+	# stands off the mask, and hardly any stone is a thin sharp tip.
+	var worst := 0.0
+	var boulders: Array = rock.lumps(48.0,72.0)
+	for vertex in rock.build(48.0,72.0,1.0).get_faces():
+		# The far wall of a cave lies behind the opening on purpose.
+		if vertex.z<DesertRock.EDGE_Z-.2: continue
+		var on_boulder := false
+		for boulder in boulders:
+			if Vector2(vertex.x,vertex.y).distance_to(Vector2(boulder[0].x,boulder[0].y))<=maxf(boulder[1].x,boulder[1].y)*1.3:
+				on_boulder = true
+				break
+		if not on_boulder: worst = maxf(worst,-rock.distance(Vector2(vertex.x,vertex.y)))
+	var stone := 0
+	var tips := 0
+	y = 6.0
+	while y<130.0:
+		var x := -19.0
+		while x<=19.0:
+			if rock.distance(Vector2(x,y))>0:
+				stone += 1
+				var deepest := rock.distance(Vector2(x,y))
+				for turn in range(12): deepest = maxf(deepest,rock.distance(Vector2(x,y)+Vector2.RIGHT.rotated(TAU*turn/12.0)*.9))
+				if deepest<.75: tips += 1
+			x += .5
+		y += .5
+	var tip_share := float(tips)/stone
+	print("DESERT_SPIKES off mask ",worst," tips ",tip_share)
+	check(worst<=.2,"no vertex of the rock stands off the mask (%.2f)" % worst)
+	# Thin arches and bridges count too, so some stone always falls here.
+	check(tip_share<=.02,"thin sharp tips are rare (%.3f of the stone)" % tip_share)
+	# Caves lie in thick rock, and nothing the player needs stands in one.
+	check(layout.rock_caves.size()>=3,"the canyon has caves (%d)" % layout.rock_caves.size())
+	var in_cave := 0
+	var off_stone := 0
+	for cave in layout.rock_caves:
+		var at := Vector2(float(cave[0]),float(cave[1]))
+		if layout.inside_distance(at)<float(cave[3]): off_stone += 1
+		check(rock.distance(at)<0.0,"a cave opens the face, it is no paint on it")
+		var spots: Array = []
+		for anchor in layout.anchors: spots.append(anchor["pos"])
+		for find in layout.finds: spots.append(find["pos"])
+		for spot: Vector2 in spots:
+			if ((spot-at)/Vector2(float(cave[2]),float(cave[3]))).length()<1.0: in_cave += 1
+	check(off_stone==0,"every cave lies inside the rock (%d do not)" % off_stone)
+	check(in_cave==0,"no grip or find stands in a cave (%d do)" % in_cave)
+	# Near its edge the rock has a side: it faces away from the viewer, not at him.
+	var sides: Array = []
+	y = 6.0
+	while y<130.0:
+		var x := -19.0
+		while x<=19.0:
+			var inside := rock.distance(Vector2(x,y))
+			if inside>.3 and inside<.9: sides.append(rock.normal_at(Vector2(x,y)).z)
+			x += .5
+		y += .5
+	sides.sort()
+	var side: float = sides[sides.size()/2]
+	print("DESERT_SIDE ",side)
+	check(side<=.55,"the rock turns away from the viewer at its edge (normal z %.2f)" % side)
+	var visuals := MassifVisuals.new(world,layout)
+	var off_face := 0
+	for id in layout.main_route:
+		var point: Vector2 = layout.anchors[id]["pos"]
+		if rock.distance(point)>0 and absf(visuals.wall_depth(point)-rock.height(point))>.01: off_face += 1
+	check(off_face==0,"grips take their depth from the rock in view (%d do not)" % off_face)
+
+# Rock has no ruled edges: no long dead-level rim and no long straight wall on
+# any route of the canyon. The very top is left out, its cap carries the summit.
+func desert_outline_tests() -> void:
+	for route in range(3):
+		var designer := LevelDesigner.make(1,route,int(LevelCatalog.route(1,route)["seed"])*31)
+		var source := designer.build()
+		var mask: Image = source.masks["silhouette"]
+		var longest_rim := 0
+		var rim_at := 0.0
+		var longest_wall := 0
+		var wall_at := 0.0
+		var runs := [0,0]
+		var edges := [-INF,-INF]
+		var last_row := PackedByteArray()
+		for row in range(mask.get_height()-1,-1,-1):
+			var y := source.to_world(Vector2(0,row)).y
+			if y>designer.height-2.0: continue
+			var stone := PackedByteArray()
+			stone.resize(mask.get_width())
+			var first := -1
+			var last := -1
+			for x in range(mask.get_width()):
+				if mask.get_pixel(x,row).r>.5:
+					stone[x] = 1
+					if first<0: first = x
+					last = x
+			if not last_row.is_empty():
+				var run := 0
+				for x in range(mask.get_width()):
+					run = run+1 if stone[x]!=last_row[x] else 0
+					if run>longest_rim:
+						longest_rim = run
+						rim_at = y
+			last_row = stone
+			for side in range(2):
+				var edge: float = first if side==0 else last
+				if edge<0 or absf(edge-float(edges[side]))>2.0:
+					runs[side] = 0
+					edges[side] = edge
+				runs[side] += 1
+				if runs[side]>longest_wall:
+					longest_wall = runs[side]
+					wall_at = y
+		var rim := longest_rim/float(LevelSource.PX_PER_UNIT)
+		var wall := longest_wall/float(LevelSource.PX_PER_UNIT)
+		print("DESERT_OUTLINE route ",route," rim ",rim," at ",rim_at," wall ",wall," at ",wall_at)
+		# The belly of a wide ledge may run level for a short way, as in the picture.
+		check(rim<=4.0,"route %d has no dead-level rim over 4 units (%.1f at %.1f)" % [route,rim,rim_at])
+		check(wall<=6.0,"route %d has no straight wall over 6 units (%.1f at %.1f)" % [route,wall,wall_at])
 
 # The automatic designer: beats dressed in landforms, the route on stone,
 # the same seed giving the same source.

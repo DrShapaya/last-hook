@@ -149,18 +149,26 @@ func run_tests() -> void:
 	game.sim.vel = Vector2.ZERO
 	game.hud.update_play()
 	var arrow: Vector2 = game.hud.aim_overlay.throw_direction
-	check(arrow.dot(Vector2(GripSpec.exit_direction(spring).x,-GripSpec.exit_direction(spring).y))>.99,"while the spring is held the HUD arrow shows its throw on screen")
+	check(arrow==Vector2(0,-1),"while the spring is held the HUD arrow points straight up the screen")
+	# The gauge shows the rope as drawn, also while it hangs slack.
+	var taut_length: float = game.sim.length
+	game.sim.pos = game.sim.anchor+Vector2(0,-1.2)
+	game.hud.update_play()
+	check(game.hud.rope_gauge.meters==12 and absf(game.hud.rope_gauge.ratio-1.2/game.model.shot_range())<.001,"a slack rope reads its visible length (%d m of a %.1f rope)" % [game.hud.rope_gauge.meters,taut_length])
+	game.sim.pos = game.sim.anchor+Vector2(0,-taut_length)
+	game.hud.update_play()
+	check(game.hud.rope_gauge.meters==roundi(taut_length*10),"a taut rope reads its full length")
 	var start_pos: Vector2 = game.sim.pos
 	game.release_hook()
 	var thrown: Vector2 = game.sim.vel
 	game.release_hook()
-	check(thrown.dot(GripSpec.exit_direction(spring))>=GripSpec.SPRING_THROW and game.sim.vel==thrown,"a spring throws a still hero once (%.2f m/s)" % thrown.length())
+	check(thrown.x==0 and thrown.y>=GripSpec.SPRING_THROW and game.sim.vel==thrown,"a spring throws a still hero straight up, once (%.2f m/s)" % thrown.y)
 	check(game.world.find_child("Вспышка броска",true,false)!=null,"the throw bursts visibly from the spring")
 	var travel := 0.0
 	for frame in range(120):
 		step(game)
-		travel = maxf(travel,(game.sim.pos-start_pos).dot(GripSpec.exit_direction(spring)))
-	check(travel>=3.0,"a spring carries a still hero a long way along its exit (%.2f)" % travel)
+		travel = maxf(travel,game.sim.pos.y-start_pos.y)
+	check(travel>=3.0 and absf(game.sim.pos.x-start_pos.x)<.3,"a spring lifts a still hero high without carrying it sideways (%.2f up)" % travel)
 	check(game.world.layout.spring_lane_clear(spring["pos"],GripSpec.exit_direction(spring)),"the spring's throw lane is clear of rock and points away from the fall zone")
 	new_run(game,58273)
 	spring = game.world.anchor_by_id(spring_id)

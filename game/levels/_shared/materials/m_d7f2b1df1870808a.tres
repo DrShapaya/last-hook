@@ -1,0 +1,7 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_2ee3eedf0fc86aea.gdshader" id="1_nabhl"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_nabhl")

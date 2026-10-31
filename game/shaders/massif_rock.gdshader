@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_disabled, specular_disabled;
+render_mode cull_disabled;
 
 // Low-poly mountain stone. The mesh is piecewise planar over large facets
 // (see MassifVisuals); the flat normal is rebuilt from screen derivatives so
@@ -33,6 +33,13 @@ uniform float roughness_value : hint_range(0.0,1.0) = 0.95;
 uniform float strata_scale : hint_range(0.0,2.0) = 0.5;
 uniform float strata_contrast : hint_range(0.0,1.0) = 0.12;
 uniform float strata_fine : hint_range(0.0,1.0) = 0.0;
+// Worn grain of the stone, a tile laid across every facet at its own offset.
+uniform sampler2D grain_texture : repeat_enable, filter_linear_mipmap;
+uniform float grain_strength : hint_range(0.0,1.0) = 0.0;
+// 1 on the ultra preset: the sun models the rock, with fine relief and a
+// highlight, and the painted form light drops to a supporting role. A global, so the
+// baked materials keep working without a rebake.
+global uniform float light_quality;
 
 varying vec3 rock_position;
 varying vec3 rock_normal;
@@ -83,6 +90,11 @@ void fragment() {
 		float band=noise3(vec3(p.x*0.05,(p.y+wave)*2.3,p.z*0.1));
 		stone*=1.0-strata_fine*smoothstep(0.5,0.66,band)+strata_fine*0.5*smoothstep(0.42,0.3,band);
 	}
+	if(grain_strength>0.0){
+		vec2 facet_uv=p.xy+rock_normal.xy*3.0;
+		float grain_tile=texture(grain_texture,facet_uv*0.13).r*0.6+texture(grain_texture,facet_uv.yx*0.37+vec2(0.3)).r*0.4;
+		stone*=1.0+(grain_tile-0.5)*2.0*grain_strength;
+	}
 	// Broad warm and cool patches, a few metres across, so the massif is not
 	// one flat grey.
 	float patch=noise3(p*0.12+vec3(31.0));
@@ -111,13 +123,30 @@ void fragment() {
 	float form=dot(NORMAL,form_dir);
 	// Facets turned from the form light drop below the base tone and lit ones
 	// rise above it, so neighbouring planes separate without washing out.
-	ALBEDO*=mix(1.0,mix(form_shade,form_lit,smoothstep(-0.2,0.9,form)),form_strength);
+	ALBEDO*=mix(1.0,mix(form_shade,form_lit,smoothstep(-0.2,0.9,form)),form_strength*mix(1.0,0.6,light_quality));
 	ROUGHNESS=roughness_value;
+	SPECULAR=0.5*light_quality;
+	if(light_quality>0.5){
+		// Surface gradient of the stone's height, so grain catches the real sun.
+		float height=grain+bedding*0.5-crack*0.4;
+		vec3 dpx=dFdx(VERTEX);
+		vec3 dpy=dFdy(VERTEX);
+		vec3 r1=cross(dpy,NORMAL);
+		vec3 r2=cross(NORMAL,dpx);
+		float det=dot(dpx,r1);
+		vec3 gradient=sign(det)*(dFdx(height)*r1+dFdy(height)*r2);
+		NORMAL=normalize(abs(det)*NORMAL-0.05*gradient);
+	}
 }
 // Wrapped sun light: faces turned away from the sun stay mid-grey instead
 // of dropping to the ambient floor, like the soft shade sides of the
 // reference. Shadows still come through ATTENUATION.
 void light() {
 	float wrapped = mix(shade_floor,1.0,clamp((dot(NORMAL,LIGHT)+1.0)/2.0,0.0,1.0));
-	DIFFUSE_LIGHT += LIGHT_COLOR*ATTENUATION*wrapped/PI;
+	float direct = clamp((dot(NORMAL,LIGHT)+0.3)/1.3,0.0,1.0);
+	DIFFUSE_LIGHT += LIGHT_COLOR*ATTENUATION*mix(wrapped,direct,light_quality)/PI;
+	if(light_quality>0.5){
+		float gloss = mix(48.0,6.0,ROUGHNESS);
+		SPECULAR_LIGHT += LIGHT_COLOR*ATTENUATION*pow(clamp(dot(NORMAL,normalize(LIGHT+VIEW)),0.0,1.0),gloss)*(1.0-ROUGHNESS*0.8)*0.3;
+	}
 }

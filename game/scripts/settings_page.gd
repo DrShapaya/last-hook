@@ -7,7 +7,7 @@ extends RefCounted
 # setting in place; only a preset rewrites the whole list.
 const SECTIONS := ["graphics","controls","accessibility","about"]
 const SECTION_NAMES := ["Графика","Звук","Доступность","О нас"]
-const PRESET_KEYS := ["high","balanced","battery","custom"]
+const PRESET_KEYS := ["ultra","high","balanced","battery","custom"]
 const HEAD_HEIGHT := 176.0
 const ROW := 58.0
 const WIDE_ROW := 92.0
@@ -133,8 +133,9 @@ func _graphics_rows() -> Array:
 	lobby.sync_switches = {}
 	var fps_values := [30,60,120,0]
 	return [
-		wide_choice("Пресет","",["Высокая","Баланс","Экономия","Своя"],PRESET_KEYS.find(str(model.profile["graphics_quality"])),_pick_preset,true),
-		choice("Тени","",  "shadows",["Выкл","Средние","Высокие"],GameSettings.SHADOWS),
+		wide_choice("Пресет","",["Ультра","Высокая","Баланс","Экономия","Своя"],PRESET_KEYS.find(str(model.profile["graphics_quality"])),_pick_preset,true),
+		choice("Тени","",  "shadows",["Выкл","Сред.","Выс.","Ультра"],GameSettings.SHADOWS),
+		choice("Свет","Объём и блики на камне","lighting",["Обычный","Ультра"],GameSettings.LIGHTING),
 		choice("Дальность декора","","decor",["Низкая","Средняя","Высокая"],GameSettings.DETAIL),
 		choice("Качество неба","","sky",["Низкое","Среднее","Высокое"],GameSettings.DETAIL),
 		choice("Частицы","Блики находок и удар крюка","particles",["Выкл","Снижены","Полные"],GameSettings.PARTICLES),
@@ -143,7 +144,7 @@ func _graphics_rows() -> Array:
 		wide_choice("Ограничение FPS","Лимит ниже частоты экрана может мерцать",["30","60","120","Без лимита"],fps_values.find(int(settings()["fps_limit"])),func(index: int): _changed("fps_limit",fps_values[index]))]
 
 func _pick_preset(index: int) -> Variant:
-	if index>=3: return false
+	if index>=PRESET_KEYS.size()-1: return false
 	game.set_graphics_preset(PRESET_KEYS[index])
 	_sync_rows()
 	return true

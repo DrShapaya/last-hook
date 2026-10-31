@@ -19,6 +19,12 @@ const ROW_STEP := .5
 const REACH := 5.15
 const CORRIDOR_MARGIN := .45
 const DEFAULT_HALF := 3.0
+# Half sizes a cave may take, the rock it keeps round it, the room it leaves to
+# objects and the height between two caves.
+const CAVE_SIZES := [Vector2(3.0,2.7),Vector2(2.4,2.2),Vector2(1.9,1.7)]
+const CAVE_ROCK := .3
+const CAVE_CLEAR := 1.2
+const CAVE_SPACING := 12.0
 const KINDS := {"stone":GripSpec.STONE,"root":GripSpec.ROOT,"spring":GripSpec.SPRING,"ice":GripSpec.ICE,"crystal":GripSpec.CRYSTAL}
 
 var source: LevelSource
@@ -31,6 +37,8 @@ var relief: Array = []
 var rock_form: String = "boulder"
 # What a location's rock marks on its face (winter: its shelves).
 var rock_marks: Array = []
+# Dark hollows of a location's rock: [x, y, half width, half height].
+var rock_caves: Array = []
 # Rocks wedged over gaps for the route: stone the mask itself does not have.
 var wedged_rocks: Array = []
 var rock_grid: PackedFloat32Array = PackedFloat32Array()
@@ -246,6 +254,51 @@ func _plan_relief() -> void:
 		var entry := [snappedf(at.x,.01),snappedf(at.y,.01),snappedf(radius,.01),snappedf(float(candidate[2]),.01),role]
 		placed.append(entry)
 	relief = placed
+
+# Caves of the desert, looked for up the mountain: the largest that fits in the
+# deepest rock of a height, clear of everything on the face.
+func _plan_caves() -> void:
+	rock_caves.clear()
+	if rock_form!="desert": return
+	var y := 8.0
+	var top := float(source.brief.get("height",120.0))-6.0
+	while y<top:
+		var cave := _cave_at(y)
+		if cave.is_empty(): y += 1.5
+		else:
+			rock_caves.append(cave)
+			y += CAVE_SPACING
+
+func _cave_at(y: float) -> Array:
+	for size: Vector2 in CAVE_SIZES:
+		var best := Vector2.INF
+		var deepest := 0.0
+		var x := LevelSource.X_MIN+2.0
+		while x<LevelSource.X_MAX-2.0:
+			var at := Vector2(x,y)
+			var depth := inside_distance(at)
+			if depth>deepest and depth>=size.y+CAVE_ROCK and depth>=size.x+CAVE_ROCK and _cave_clear(at,size):
+				deepest = depth
+				best = at
+			x += 1.0
+		if best.is_finite(): return [best.x,best.y,size.x,size.y]
+	return []
+
+func _cave_clear(at: Vector2, size: Vector2) -> bool:
+	var reach := size+Vector2(CAVE_CLEAR,CAVE_CLEAR)
+	for anchor in anchors:
+		if ((anchor["pos"]-at)/reach).length()<1.0: return false
+	for find in finds:
+		if ((find["pos"]-at)/reach).length()<1.0: return false
+	for obstacle in obstacles:
+		if ((obstacle["pos"]-at)/reach).length()<1.0: return false
+	for ledge in ledges:
+		var deck := Vector2(clampf(at.x,float(ledge["left"]),float(ledge["right"])),float(ledge["top"]))
+		if ((deck-at)/(reach+Vector2(0,1.6))).length()<1.0: return false
+	# A cave lies under a ledge of the rock, never through one.
+	for shelf in rock_marks:
+		if absf(at.x-float(shelf[3]))<float(shelf[2]) and at.y+size.y>float(shelf[0]) and at.y-size.y<float(shelf[1]): return false
+	return true
 
 # The mask as a coarse distance field: all a RockSurface needs of it, kept in
 # the bake with the layout.
@@ -787,6 +840,7 @@ func generate_to(height: float, is_finite: bool, summit_height: float) -> void:
 	_settle_on_stone()
 	_seat_ledges()
 	_store_rock_grid()
+	_plan_caves()
 	_note_objects_in_sky()
 
 # Side grips and finds the generator left over painted sky move to the

@@ -18,6 +18,15 @@ const FAMILY_HEIGHTS := {"pine":4.8,"spire":2.4,"column":2.4,"ice_needles":3.4,"
 	"bones":3.3,"cactus_grove":2.0,"wagon":3.3,"sail":3.4,"mirror_mast":3.4,"lens_ring":3.4,
 	"snow_pines":4.8,"ice_columns":3.8,"chains":3.4,"tower_ring":2.4,"signal_light":3.4}
 
+# Families on two poles stand on these spots from their centre, for any span
+# of _flag_gate.
+const GATES := ["stele","flag_line","post_gate"]
+const GATE_LEGS := [-1.25,-1.0,1.0,1.25]
+const TREES := ["pine","root_bridge","root_arch","snow_pines"]
+
+static func family_legs(family: String) -> Array:
+	return GATE_LEGS if family in GATES else []
+
 static func height_for(zone: int) -> float:
 	return HEIGHTS[clampi(zone,0,5)]
 
@@ -30,16 +39,16 @@ static func build(visuals: MassifVisuals, zone: int, holder: Node3D, random: Ran
 static func build_family(visuals: MassifVisuals, family: String, holder: Node3D, random: RandomNumberGenerator, shadows: bool) -> void:
 	var profile := visuals.profile_at(holder.position.y)
 	match family:
-		"pine", "root_bridge", "root_arch": _tree(holder,random,profile,shadows)
-		"snow_pines": _snow_pines(holder,random,shadows)
+		"pine", "root_bridge", "root_arch": _tree(visuals,holder,random,profile,shadows)
+		"snow_pines": _snow_pines(visuals,holder,random,shadows)
 		"spire", "column", "basalt", "tower_ring": _outcrop(visuals,holder,random,profile,shadows)
-		"ice_needles", "ice_columns", "chains", "lens_ring": _crystals(holder,random,profile,shadows)
-		"stele", "flag_line", "post_gate": _flag_gate(holder,random,shadows)
-		"hanging_frame", "mirror_mast", "sail", "signal_light": _signal_mast(holder,random,shadows,family)
-		"signal_flags": _signal_flags(holder,random,profile,shadows)
-		"bones", "wagon": _bones(holder,random,shadows)
-		"cactus_grove": _cactus_grove(holder,random,shadows)
-		_: _flag_gate(holder,random,shadows)
+		"ice_needles", "ice_columns", "chains", "lens_ring": _crystals(visuals,holder,random,profile,shadows)
+		"stele", "flag_line", "post_gate": _flag_gate(visuals,holder,random,shadows)
+		"hanging_frame", "mirror_mast", "sail", "signal_light": _signal_mast(visuals,holder,random,shadows,family)
+		"signal_flags": _signal_flags(visuals,holder,random,profile,shadows)
+		"bones", "wagon": _bones(visuals,holder,random,shadows)
+		"cactus_grove": _cactus_grove(visuals,holder,random,shadows)
+		_: _flag_gate(visuals,holder,random,shadows)
 
 # A sprite on a child of the holder at `at`, its foot there.
 static func _sprite(holder: Node3D, item: Array, at: Vector3, shadows: bool, scale: float = 1.0) -> void:
@@ -49,20 +58,26 @@ static func _sprite(holder: Node3D, item: Array, at: Vector3, shadows: bool, sca
 	holder.add_child(node)
 	FloraModels.plant(node,item,shadows,scale)
 
+# A sprite beside the main piece, on the stone there; none where there is no
+# stone.
+static func _beside(visuals: MassifVisuals, holder: Node3D, item: Array, at: Vector3, shadows: bool, scale: float = 1.0) -> void:
+	var ground := visuals.ground_beside(holder,at.x,at.y)
+	if not is_nan(ground): _sprite(holder,item,Vector3(at.x,ground,at.z),shadows,scale)
+
 static func _side(random: RandomNumberGenerator) -> float:
 	return 1.0 if random.randf()<.5 else -1.0
 
 # --- Families -----------------------------------------------------------------------
 
 # The place's own tree - leafy, snowy or dead - with a plant at its foot.
-static func _tree(holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, shadows: bool) -> void:
+static func _tree(visuals: MassifVisuals, holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, shadows: bool) -> void:
 	_sprite(holder,FloraModels.pick_tree(profile,random),Vector3.ZERO,shadows)
-	_sprite(holder,FloraModels.pick_top(profile,random),Vector3(random.randf_range(.5,.7)*_side(random),-.04,.1),shadows)
+	_beside(visuals,holder,FloraModels.pick_top(profile,random),Vector3(random.randf_range(.5,.7)*_side(random),-.04,.1),shadows)
 
 # A snowy fir, now and then with a younger one beside it.
-static func _snow_pines(holder: Node3D, random: RandomNumberGenerator, shadows: bool) -> void:
+static func _snow_pines(visuals: MassifVisuals, holder: Node3D, random: RandomNumberGenerator, shadows: bool) -> void:
 	_sprite(holder,FloraModels.pick("tree_snow",random),Vector3.ZERO,shadows)
-	if random.randf()<.5: _sprite(holder,FloraModels.pick("tree_snow",random),Vector3(random.randf_range(.55,.75)*_side(random),-.04,.08),shadows,.55)
+	if random.randf()<.5: _beside(visuals,holder,FloraModels.pick("tree_snow",random),Vector3(random.randf_range(.55,.75)*_side(random),-.04,.08),shadows,.55)
 
 # A big boulder of the place with scree at its foot and, on the cliffs, a
 # crystal grown beside it.
@@ -70,56 +85,71 @@ static func _outcrop(visuals: MassifVisuals, holder: Node3D, random: RandomNumbe
 	var kinds: Array = FloraModels.STONES[FloraModels.climate(profile)]
 	_sprite(holder,FloraModels.pick(kinds[0],random),Vector3.ZERO,shadows,2.3)
 	var side := _side(random)
-	_sprite(holder,FloraModels.pick(kinds[1],random),Vector3(side*random.randf_range(.75,.95),-.04,.12),shadows,1.1)
+	_beside(visuals,holder,FloraModels.pick(kinds[1],random),Vector3(side*random.randf_range(.75,.95),-.04,.12),shadows,1.1)
 	if random.randf()<.6:
-		var crystal := Node3D.new()
-		crystal.position = Vector3(-side*random.randf_range(.8,1.0),-.04,.1)
-		holder.add_child(crystal)
-		visuals._crystal_sprite(crystal,random,profile,shadows,1.0)
+		var spot := Vector3(-side*random.randf_range(.8,1.0),-.04,.1)
+		spot.y = visuals.ground_beside(holder,spot.x,spot.y)
+		if not is_nan(spot.y):
+			var crystal := Node3D.new()
+			crystal.position = spot
+			holder.add_child(crystal)
+			visuals._crystal_sprite(crystal,random,profile,shadows,1.0)
 
 # A large crystal cluster of the place's kind - ice, quartz or amber - and a
 # smaller one in front of it.
-static func _crystals(holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, shadows: bool) -> void:
+static func _crystals(visuals: MassifVisuals, holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, shadows: bool) -> void:
 	_sprite(holder,FloraModels.pick_crystal(profile,random),Vector3.ZERO,shadows,2.4)
-	_sprite(holder,FloraModels.pick_crystal(profile,random),Vector3(random.randf_range(.65,.85)*_side(random),-.04,.12),shadows,1.05)
+	_beside(visuals,holder,FloraModels.pick_crystal(profile,random),Vector3(random.randf_range(.65,.85)*_side(random),-.04,.12),shadows,1.05)
 
 # Two masts with a string of flags between their tops: a gate of the post, a
 # wind line or the flags of a stele.
-static func _flag_gate(holder: Node3D, random: RandomNumberGenerator, shadows: bool) -> void:
+static func _flag_gate(visuals: MassifVisuals, holder: Node3D, random: RandomNumberGenerator, shadows: bool) -> void:
 	var span := random.randf_range(1.0,1.25)
 	var colours := FloraModels.COLORS
+	var tops: Array = []
 	for side in [-1.0,1.0]:
-		FloraModels.flag(holder,"mast",colours[random.randi_range(0,colours.size()-1)],Vector3(side*span,-.05,.05),2.4,side,shadows)
-	FloraModels.flag_string(holder,Vector3(-span,2.25,.12),Vector3(span,2.25,.12),5,.3,random.randi(),shadows)
+		var ground := visuals.ground_beside(holder,side*span,-.05)
+		if is_nan(ground): ground = -.05
+		FloraModels.flag(holder,"mast",colours[random.randi_range(0,colours.size()-1)],Vector3(side*span,ground,.05),2.4,side,shadows)
+		tops.append(ground+2.3)
+	FloraModels.flag_string(holder,Vector3(-span,tops[0],.12),Vector3(span,tops[1],.12),5,.3,random.randi(),shadows)
 
 # A high mast with its pennant and a short flag beside it, a string of flags
 # between them: a wind gauge, a mirror mast, a sail or a signal.
-static func _signal_mast(holder: Node3D, random: RandomNumberGenerator, shadows: bool, family: String) -> void:
+static func _signal_mast(visuals: MassifVisuals, holder: Node3D, random: RandomNumberGenerator, shadows: bool, family: String) -> void:
 	var colour: String = {"sail":"white","signal_light":"orange","mirror_mast":"yellow"}.get(family,"red")
 	var side := _side(random)
 	FloraModels.flag(holder,FloraModels.HIGH_MASTS[random.randi_range(0,1)],colour,Vector3(0,-.05,.05),3.2,side,shadows)
 	var short := Vector3(-side*random.randf_range(1.2,1.5),-.05,.1)
-	FloraModels.flag(holder,FloraModels.SMALL_FLAGS[random.randi_range(0,2)],FloraModels.COLORS[random.randi_range(0,FloraModels.COLORS.size()-1)],short,1.0,-side,shadows)
-	FloraModels.flag_string(holder,Vector3(0,2.6,.12),short+Vector3(0,.9,.02),4,.15,random.randi(),shadows)
+	short.y = visuals.ground_beside(holder,short.x,short.y)
+	var cloth: String = FloraModels.SMALL_FLAGS[random.randi_range(0,2)]
+	var tint: String = FloraModels.COLORS[random.randi_range(0,FloraModels.COLORS.size()-1)]
+	var string_seed := random.randi()
+	# With no stone for the short flag the mast stands alone.
+	if is_nan(short.y): return
+	FloraModels.flag(holder,cloth,tint,short,1.0,-side,shadows)
+	FloraModels.flag_string(holder,Vector3(0,2.6,.12),short+Vector3(0,.9,.02),4,.15,string_seed,shadows)
 
 # A tall signal mast in a cairn of the place's stones, a small flag beside it.
-static func _signal_flags(holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, shadows: bool) -> void:
+static func _signal_flags(visuals: MassifVisuals, holder: Node3D, random: RandomNumberGenerator, profile: GripBiomeProfile, shadows: bool) -> void:
 	var side := _side(random)
 	FloraModels.flag(holder,FloraModels.HIGH_MASTS[random.randi_range(0,1)],["red","yellow","orange"][random.randi_range(0,2)],Vector3(0,-.05,.05),2.9,side,shadows)
 	var kinds: Array = FloraModels.STONES[FloraModels.climate(profile)]
 	_sprite(holder,FloraModels.pick(kinds[1],random),Vector3(0,-.06,.14),shadows,.9)
-	FloraModels.flag(holder,FloraModels.SMALL_FLAGS[random.randi_range(0,2)],"white",Vector3(-side*.6,-.05,.18),1.0,-side,shadows)
+	var cloth: String = FloraModels.SMALL_FLAGS[random.randi_range(0,2)]
+	var ground := visuals.ground_beside(holder,-side*.6,-.05)
+	if not is_nan(ground): FloraModels.flag(holder,cloth,"white",Vector3(-side*.6,ground,.18),1.0,-side,shadows)
 
 # A dead tree over the bleached skulls of large animals.
-static func _bones(holder: Node3D, random: RandomNumberGenerator, shadows: bool) -> void:
+static func _bones(visuals: MassifVisuals, holder: Node3D, random: RandomNumberGenerator, shadows: bool) -> void:
 	_sprite(holder,FloraModels.pick("tree_dead",random),Vector3(random.randf_range(-.2,.2),-.05,.02),shadows,.78)
 	for index in range(2):
-		_sprite(holder,FloraModels.pick("skull",random),Vector3((index*2-1)*random.randf_range(.45,.6),-.05,.12+index*.04),shadows)
+		_beside(visuals,holder,FloraModels.pick("skull",random),Vector3((index*2-1)*random.randf_range(.45,.6),-.05,.12+index*.04),shadows)
 
 # Three cacti of different kinds, the tallest in the middle.
-static func _cactus_grove(holder: Node3D, random: RandomNumberGenerator, shadows: bool) -> void:
+static func _cactus_grove(visuals: MassifVisuals, holder: Node3D, random: RandomNumberGenerator, shadows: bool) -> void:
 	for index in range(3):
-		_sprite(holder,FloraModels.pick_cactus(random),Vector3((index-1)*.55+random.randf_range(-.08,.08),-.05,.05+(1-absi(index-1))*.06),shadows,1.25 if index==1 else 1.0)
+		_beside(visuals,holder,FloraModels.pick_cactus(random),Vector3((index-1)*.55+random.randf_range(-.08,.08),-.05,.05+(1-absi(index-1))*.06),shadows,1.25 if index==1 else 1.0)
 
 # --- Shared faceted helper (hazard posts) -------------------------------------------
 

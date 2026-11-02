@@ -771,11 +771,32 @@ func mount_contract_checks() -> void:
 				var flagged := false
 				var node: Node = mesh
 				while node!=holder and node!=null:
-					if String(node.name) in ["Флаг на древке","Гирлянда флагов"]: flagged = true
+					if String(node.name) in ["Древко","Полотно","Гирлянда флагов"]: flagged = true
 					node = node.get_parent()
 				crafted = crafted and (mesh.mesh is QuadMesh or flagged)
 		chunk.free()
 	check(landmarks>0 and crafted,"landmarks are built of painted sprites and flag models only (%d)" % landmarks)
+	# Decor sits on the outline the player sees: stone right under each
+	# standing piece, open air over its foot, no two pieces close together.
+	var feet_ok := true
+	var spaced := true
+	var feet: Array[Vector2] = []
+	for index in range(0,5):
+		var chunk := Node3D.new()
+		a.add_child(chunk)
+		massif.build_chunk(index,chunk)
+		for holder in chunk.get_children():
+			if not String(holder.name).begins_with("Декор_") or holder.get_child_count()==0: continue
+			var parts := String(holder.get_child(0).name).split("_")
+			var kind := "_".join(parts.slice(1,parts.size()-1))
+			var at := Vector2((holder as Node3D).position.x,(holder as Node3D).position.y)
+			if not FloraModels.CATALOGUE.has(kind) or FloraModels.mode_of(kind,int(parts[parts.size()-1]))!="stand": continue
+			feet_ok = feet_ok and not massif.open_at(at-Vector2(0,.1)) and massif.open_at(at+Vector2(0,.2))
+			for other in feet: spaced = spaced and other.distance_to(at)>.8
+			feet.append(at)
+		chunk.free()
+	check(feet_ok and feet.size()>8,"standing decor rests on the outline it is seen on (%d)" % feet.size())
+	check(spaced,"decor keeps apart: no heaps of pieces in one place")
 	check(snow_caps>0,"the snow zone grows snow plants and snowy stones instead of grass (%d)" % snow_caps)
 	# Location slots 1 and 2 use the same masses and mount contract.
 	for location in [1,2]:

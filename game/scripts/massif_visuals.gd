@@ -657,6 +657,7 @@ func finds_without_pedestal() -> bool:
 func build_chunk(index: int, parent: Node3D) -> void:
 	query_cache.clear()
 	decor_rects.erase(index)
+	decor_kin.erase(index)
 	await _build_masses(index,parent)
 	if not await pause(parent): return
 	# Landmarks claim their place first; small decor fits round them.
@@ -904,15 +905,33 @@ func _take(index: int, rect: Rect2) -> void:
 	if not decor_rects.has(index): decor_rects[index] = []
 	decor_rects[index].append(rect)
 
+# The same thing never stands twice in one place: how far apart pieces of a
+# family keep, in metres.
+const KIN_GAPS := {"crystal":9.0,"flag":9.0,"ribbon":9.0,"pebbles":4.5,"stones":4.5,"block":4.5,"crate":4.5,"mechanism":4.5,"tracks":4.5,"hanging":3.5,"climb":3.5,"insects":6.0}
+var decor_kin: Dictionary = {}
+
+func _kin_near(index: int, family: String, point: Vector2) -> bool:
+	var reach := float(KIN_GAPS.get(family,2.2))
+	for band in [index-1,index,index+1]:
+		for other: Array in decor_kin.get(band,[]):
+			if other[0]==family and (other[1] as Vector2).distance_to(point)<reach: return true
+	return false
+
+func _take_kin(index: int, family: String, point: Vector2) -> void:
+	if not decor_kin.has(index): decor_kin[index] = []
+	decor_kin[index].append([family,point])
+
 # A standing piece needs stone under both sides of its foot, a hanging one
 # stone where it hangs from, a climbing one a wall behind it; none may cover
 # a grip, find, hazard or rest platform anywhere along its height.
 func _decor_fits(rect: Rect2, hanging: bool, climbing: bool = false) -> bool:
-	if hanging:
-		if stone_field(Vector2(rect.get_center().x,rect.end.y+.1))<0: return false
-	else:
-		for share in [.2,.5,.8]:
-			if stone_field(Vector2(rect.position.x+rect.size.x*share,rect.position.y-.15))<0: return false
+	# On the boulder mountain the seat has already settled what holds the piece.
+	if not _seats_on_view():
+		if hanging:
+			if stone_field(Vector2(rect.get_center().x,rect.end.y+.1))<0: return false
+		else:
+			for share in [.2,.5,.8]:
+				if stone_field(Vector2(rect.position.x+rect.size.x*share,rect.position.y-.15))<0: return false
 	# A climbing vine needs a wall to climb: visible stone behind most of its
 	# height, never a stalk standing up into the sky.
 	if climbing:
@@ -929,6 +948,183 @@ func _underside_above(point: Vector2) -> Vector2:
 		var probe := point+Vector2(0,step*.03)
 		if not open_at(probe): return probe+Vector2(0,.06)
 	return Vector2.INF
+
+# --- Seats ---------------------------------------------------------------------------
+
+# On the boulder mountain decor sits by the outline the player sees, not by the
+# contour of a mass: a contour's rim runs round a side or a pebble as well as
+# over a top. A location's own rock places its plants by its masks.
+func _seats_on_view() -> bool:
+	return not (layout is MaskLayout and (layout as MaskLayout).rock_form!="boulder")
+
+# Clear air kept round a piece, thinner decor on the lighter presets.
+func _decor_gap() -> float:
+	return {"high":.75,"balanced":.95}.get(quality,1.5)
+
+# The top of the stone seen in a column, walking down from open air: -INF where
+# the column starts in stone or meets none within `reach`.
+func _ground_under(x: float, from: float, reach: float) -> float:
+	if not open_at(Vector2(x,from)): return -INF
+	var y := from
+	while y>from-reach:
+		y -= .1
+		if open_at(Vector2(x,y)): continue
+		for step in range(3):
+			if not open_at(Vector2(x,y+.03)): y += .03
+		return y
+	return -INF
+
+# The underside of the stone seen in a column, walking up from open air.
+func _ceiling_over(x: float, from: float, reach: float) -> float:
+	if not open_at(Vector2(x,from)): return INF
+	var y := from
+	while y<from+reach:
+		y += .1
+		if open_at(Vector2(x,y)): continue
+		for step in range(3):
+			if not open_at(Vector2(x,y-.03)): y -= .03
+		return y
+	return INF
+
+# The foot of a piece standing on the top near `at`, or INF. Its `foot` wide
+# footing lies on stone with open air over it and no step in it; the rock it
+# stands on is `host` wide just under the foot and `thick` deep, so a large
+# piece never perches on a pebble. The foot sits a little into the stone.
+func _top_seat(at: Vector2, foot: float, host: float, thick: float, rise: float) -> Vector2:
+	var low := INF
+	var high := -INF
+	for column in range(7):
+		var top := _ground_under(at.x+foot*(column/6.0-.5),at.y+.3,.9)
+		if top==-INF: return Vector2.INF
+		low = minf(low,top)
+		high = maxf(high,top)
+	if high-low>rise: return Vector2.INF
+	for side in [-.5,.5]:
+		if open_at(Vector2(at.x+host*side,low-.35)): return Vector2.INF
+	for share in [.25,.6,1.0]:
+		if open_at(Vector2(at.x,low-thick*share)): return Vector2.INF
+	return Vector2(at.x,low-.06)
+
+# The root of a piece hanging under the stone near `at`, or INF: a real
+# overhang over it, open air all down its length.
+func _hang_seat(at: Vector2, size: Vector2) -> Vector2:
+	var root := -INF
+	var lowest := INF
+	for offset in [-.2,0.0,.2]:
+		var ceiling := _ceiling_over(at.x+offset,at.y-.4,1.0)
+		if ceiling==INF: return Vector2.INF
+		root = maxf(root,ceiling)
+		lowest = minf(lowest,ceiling)
+	if root-lowest>.3: return Vector2.INF
+	for side in [-.6,.6]:
+		if open_at(Vector2(at.x+side,root+.3)): return Vector2.INF
+	if open_at(Vector2(at.x,root+.7)): return Vector2.INF
+	for share in [.25,.5,.75,1.0]:
+		for side in [-.3,.3]:
+			if not open_at(Vector2(at.x+size.x*side,lowest-size.y*share)): return Vector2.INF
+	return Vector2(at.x,root+.06)
+
+# A vine climbs from the crack where its stone rests on another, and all of it
+# lies on the wall: none hangs its foot in the air.
+func _climb_seat(foot: Vector2, size: Vector2) -> Vector2:
+	if open_at(foot-Vector2(0,.3)): return Vector2.INF
+	for share in [.1,.4,.7,1.0]:
+		for side in [-.3,.3]:
+			if open_at(foot+Vector2(size.x*side,size.y*share)): return Vector2.INF
+	return foot
+
+# Every top and underside of the outline in a band, as decor candidates: the
+# whole face offers its spots, whatever mass makes them.
+func _outline_spots(index: int, random: RandomNumberGenerator, parent: Node3D, candidates: Array) -> void:
+	var x := -24.0
+	while x<24.0:
+		if not await pause(parent): return
+		var column := x+random.randf_range(0,.45)
+		var open := open_at(Vector2(column,index*BAND))
+		var y := float(index*BAND)
+		while y<(index+1)*BAND:
+			y += .2
+			var here := open_at(Vector2(column,y))
+			if here!=open:
+				var edge := Vector2(column,y-.1)
+				if here:
+					var roll := random.randf()
+					candidates.append([null,edge,"grass" if roll<.6 else "pebbles" if roll<.85 else "crystal",edge,1.6])
+				else:
+					candidates.append([null,edge,"hanging",edge,1.6,edge])
+			open = here
+		x += .6
+
+# Where a piece of decor goes near a rim of its mass.
+func _decor_seat(kind: String, rim: Vector2, foot: Vector2, size: Vector2, hangs: bool) -> Vector2:
+	if hangs: return _hang_seat(rim,size)
+	if kind=="climb": return _climb_seat(foot,size)
+	var width := clampf(size.x*.45,.25,.8)
+	return _top_seat(rim,width,maxf(size.x*.8,minf(size.y*.5,2.2)),clampf(size.y*.6,.6,2.4),maxf(.25,width*.35))
+
+# A landmark's seat: under its main piece, or under both poles of a gate, which
+# may stand on two stones at different heights.
+func _landmark_seat(top: Vector2, family: String) -> Vector2:
+	var legs := LandmarkVisuals.family_legs(family)
+	if legs.is_empty():
+		var height := LandmarkVisuals.family_height(family)
+		return _top_seat(top,.7,1.4,clampf(height*.4,1.0,2.0),.4)
+	var low := INF
+	var high := -INF
+	for leg: float in legs:
+		var ground := _ground_under(top.x+leg,top.y+1.0,2.0)
+		if ground==-INF: return Vector2.INF
+		var seat := _top_seat(Vector2(top.x+leg,ground),.3,.6,.7,.35)
+		if not seat.is_finite(): return Vector2.INF
+		low = minf(low,seat.y)
+		high = maxf(high,seat.y)
+	return Vector2(top.x,low) if high-low<.9 else Vector2.INF
+
+# The height, on a landmark's holder, of the stone `offset` metres from its
+# centre: what stands beside the main piece stands on real stone. `fallback`
+# on a location's own rock; NAN where no stone takes it.
+func ground_beside(holder: Node3D, offset: float, fallback: float) -> float:
+	if not _seats_on_view(): return fallback
+	var at := Vector2(holder.position.x+offset,holder.position.y)
+	var seat := _top_seat(at+Vector2(0,.6),.3,.6,.6,.3)
+	return seat.y-at.y if seat.is_finite() else NAN
+
+# The nearest top round `at` that takes a landmark and passes `clear`.
+func _landmark_spot(at: Vector2, family: String, reach: float, clear: Callable, index: int) -> Vector2:
+	var height := LandmarkVisuals.family_height(family)
+	var tops: Array = []
+	for column in range(-int(reach/.4),int(reach/.4)+1):
+		var x := at.x+column*.4
+		var y := at.y+reach*.8
+		while y>at.y-reach*.8:
+			var top := _ground_under(x,y,reach*1.2)
+			if top==-INF:
+				y -= .4
+				continue
+			tops.append(Vector2(x,top))
+			y = top-.4
+	tops.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.distance_squared_to(at)<b.distance_squared_to(at))
+	for top: Vector2 in tops:
+		var seat := _landmark_seat(top,family)
+		if not seat.is_finite() or _taken(index,_landmark_rect(seat,family).grow(1.6)): continue
+		if clear.call(seat,height): return seat
+	return Vector2.INF
+
+# Stands a landmark on its seat, in front of every stone it covers. A tree's
+# root flare is wider than a boulder's crown: it grows from behind the stone at
+# its foot, which hides the roots.
+func _stand_landmark(index: int, holder: Node3D, family: String, seat: Vector2, random: RandomNumberGenerator) -> void:
+	var rect := _landmark_rect(seat,family)
+	var rooted: bool = family in LandmarkVisuals.TREES
+	holder.position = Vector3(seat.x,seat.y-(.28 if rooted else 0.0),_front_over(rect.grow_individual(0,0,0,-.5) if rooted else rect)+.05)
+	LandmarkVisuals.build_family(self,family,holder,random,quality!="battery")
+	_take(index,rect.grow(.8))
+
+# Where the summit mast stands: on the top nearest its place by the last grip.
+func summit_foot(near: Vector2) -> Vector2:
+	if not _seats_on_view(): return near
+	var seat := _landmark_spot(near,"signal_flags",4.0,func(_a: Vector2, _b: float) -> bool: return true,int(floor(near.y/BAND)))
+	return seat if seat.is_finite() else near
 
 # The sprite a decor spot gets in the place's climate.
 func _decor_entry(kind: String, profile: GripBiomeProfile, random: RandomNumberGenerator) -> Array:
@@ -948,6 +1144,8 @@ func _build_decor(index: int, parent: Node3D) -> void:
 	# undersides over open space: ivy, seed pods, icicles. Every piece is a painted sprite (FloraModels) placed so it rests
 	# on stone, covers no gameplay object and overlaps no other piece; it sits
 	# in front of the stone it covers. Everything is drawn, nothing collides.
+	var seated := _seats_on_view()
+	var gap := _decor_gap() if seated else .06
 	var budget := 40 if quality=="high" else 28 if quality=="balanced" else 10
 	var crystal_budget := 3 if quality=="high" else 2 if quality=="balanced" else 1
 	# Vines are a green place's: a desert keeps a few dry ones, the snow
@@ -967,12 +1165,13 @@ func _build_decor(index: int, parent: Node3D) -> void:
 			var j := (i+1)%count
 			var span: float = mass.outer_contour[i].distance_to(mass.outer_contour[j])
 			# Longer edges offer a few spots along them.
-			var spots := clampi(int(span/1.2),1,3)
+			var spots := clampi(int(span/.7),1,4) if seated else clampi(int(span/1.2),1,3)
 			for spot in range(spots):
 				var t := (spot+random.randf_range(.25,.75))/spots
 				var rim: Vector2 = mass.outer_contour[i].lerp(mass.outer_contour[j],t)
 				var ring: Vector2 = mass.inner_contour[i].lerp(mass.inner_contour[j],t)
 				if mass.top_edges.has(i):
+					if seated: continue
 					var roll := random.randf()
 					candidates.append([mass,rim.lerp(ring,.4),"grass" if roll<.6 else "pebbles" if roll<.85 else "crystal",rim,span/spots])
 				elif mass.bottom_edges.has(i) and mass.role!="shelf":
@@ -980,7 +1179,11 @@ func _build_decor(index: int, parent: Node3D) -> void:
 					# mass rests on another, a climbing vine roots in the seam and
 					# goes up its face.
 					var below := open_at(rim+(rim-ring).normalized()*.4)
+					if seated and below: continue
 					candidates.append([mass,rim.lerp(ring,.1),"hanging" if below else "climb",rim,span/spots,ring])
+	if seated:
+		await _outline_spots(index,random,parent,candidates)
+		if not is_instance_valid(parent): return
 	for i in range(candidates.size()-1,0,-1):
 		var j := random.randi_range(0,i)
 		var swap = candidates[i]
@@ -998,10 +1201,10 @@ func _build_decor(index: int, parent: Node3D) -> void:
 		var point: Vector2 = candidate[1]
 		var kind: String = candidate[2]
 		var rim: Vector2 = candidate[3]
-		var hit := _on_face(mass,point)
-		if hit==null: continue
+		var hit := _on_face(mass,point) if mass!=null else surface_query(point+Vector2(0,.3 if kind=="hanging" else -.3))
+		if hit==null or not hit.valid(): continue
 		var outward := (rim-point).normalized()
-		if kind!="climb" and not open_at(rim+outward*.4): continue
+		if mass!=null and kind!="climb" and not open_at(rim+outward*.4): continue
 		if kind=="crystal" and crystals>=crystal_budget: continue
 		if kind=="hanging" and hanging>=hanging_budget: continue
 		if kind=="climb" and climbing>=climb_budget: continue
@@ -1039,18 +1242,27 @@ func _build_decor(index: int, parent: Node3D) -> void:
 			if not anchor.is_finite(): continue
 		var rect := Rect2(anchor.x-size.x*.5,anchor.y-size.y if hangs else anchor.y,size.x,size.y)
 		var climbs := not entry.is_empty() and FloraModels.climbs(entry)
-		if _taken(index,rect.grow(.06)) or not _decor_fits(rect,hangs,climbs): continue
+		var family := prop if not prop.is_empty() else kind
+		if seated:
+			if _taken(index,rect.grow(gap)) or _kin_near(index,family,rim): continue
+			anchor = _decor_seat(kind,rim,anchor,size,hangs)
+			if not anchor.is_finite(): continue
+			rect.position = Vector2(anchor.x-size.x*.5,anchor.y-size.y if hangs else anchor.y)
+		if _taken(index,rect.grow(gap)) or not _decor_fits(rect,hangs,climbs): continue
 		if kind=="crystal": crystals += 1
 		if kind=="hanging": hanging += 1
 		if kind=="climb": climbing += 1
 		var holder := Node3D.new()
 		holder.name = "Декор_%d" % placed
 		parent.add_child(holder)
-		# In front of every stone the piece covers, never inside one.
-		holder.position = Vector3(anchor.x,anchor.y,maxf(hit.position.z,_front_over(rect))+.03)
+		# In front of every stone the piece covers, never inside one. A vine
+		# stays behind the stone at its foot.
+		var covered := rect.grow_individual(0,0,0,-.35) if seated and climbs else rect
+		holder.position = Vector3(anchor.x,anchor.y,maxf(hit.position.z,_front_over(covered))+.03)
 		if not prop.is_empty(): ActProps.build(self,prop,holder,random,profile,detail)
 		else: FloraModels.plant(holder,entry,quality!="battery",scale)
 		_take(index,rect)
+		if seated: _take_kin(index,family,anchor)
 		placed += 1
 
 func _build_plant(holder: Node3D, random: RandomNumberGenerator, rim: float, profile: GripBiomeProfile, _detail: bool) -> void:
@@ -1091,12 +1303,35 @@ func _mark_clear(point: Vector2, height: float) -> bool:
 		if _decor_blocked(probe,.45) or not _decor_route_clear(probe,2.0): return false
 	return true
 
+# Act landmarks take the best tops: they carry the climb's story, the pieces on
+# the islands only fill the view.
+func _build_act_marks(index: int, parent: Node3D) -> void:
+	for mark in layout.landmarks:
+		var at: Vector2 = mark["pos"]
+		if int(floor(at.y/BAND))!=index: continue
+		var family := str(mark["family"])
+		var seat := _landmark_spot(at,family,12.0,_mark_clear,index)
+		# A place with no top for its gate still gets its mast.
+		if not seat.is_finite() and family in LandmarkVisuals.GATES:
+			family = "signal_flags"
+			seat = _landmark_spot(at,family,12.0,_mark_clear,index)
+		if not seat.is_finite(): continue
+		var stand := Node3D.new()
+		stand.name = "Ориентир акта_%s_%d" % [family,roundi(at.y)]
+		parent.add_child(stand)
+		_stand_landmark(index,stand,family,seat,layout.rng(int(roundf(at.y*10)),978))
+		mark["built_at"] = seat
+
 func _build_landmarks(index: int, parent: Node3D) -> void:
 	# One large themed piece standing on the top face of a side island.
 	front_band(index)
 	var budget := 1 if quality=="battery" else 2
 	var random := layout.rng(index,977)
 	var placed := 0
+	if _seats_on_view() and layout.summit_added and absi(int(floor(layout.summit/BAND))-index)<=1:
+		var foot := summit_foot(world.summit_flag_point())
+		_take(index,Rect2(foot.x-.6,foot.y,3.0,3.4).grow(1.0))
+	if _seats_on_view(): _build_act_marks(index,parent)
 	for members in band_islands.get(index,[]):
 		if placed>=budget: break
 		if not await pause(parent): return
@@ -1115,6 +1350,15 @@ func _build_landmarks(index: int, parent: Node3D) -> void:
 		var hit := _on_face(best,point)
 		if hit==null: continue
 		var family := landmark_family(point,random)
+		if _seats_on_view():
+			var seat := _landmark_spot(rim,family,5.0,_landmark_clear,index)
+			if not seat.is_finite(): continue
+			var stand := Node3D.new()
+			stand.name = "Крупный элемент_%d" % placed
+			parent.add_child(stand)
+			_stand_landmark(index,stand,family,seat,random)
+			placed += 1
+			continue
 		if not _landmark_clear(point,LandmarkVisuals.family_height(family)): continue
 		if not _landmark_unhidden(point,family,hit.position.z+.05): continue
 		var holder := Node3D.new()
@@ -1124,6 +1368,7 @@ func _build_landmarks(index: int, parent: Node3D) -> void:
 		LandmarkVisuals.build_family(self,family,holder,random,quality!="battery")
 		_take(index,_landmark_rect(point,family))
 		placed += 1
+	if _seats_on_view(): return
 	# Act landmarks (v14) mark a fork or the way into the next act; they take
 	# the nearest clear spot of the face around their planned point.
 	for mark in layout.landmarks:

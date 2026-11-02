@@ -940,9 +940,14 @@ func _build_chunk_objects(key: int, chunk: Node3D) -> void:
 		if not await build_pause(chunk): return
 		await _build_find(find,chunk)
 	if layout.summit_added and int(floor(layout.summit/24))==key:
-		var p: Vector2 = anchors[main_route[-1]]["pos"]
+		var p := summit_flag_point()
+		if visuals is MassifVisuals: p = (visuals as MassifVisuals).summit_foot(p)
 		# The summit flag: a tall mast with the expedition's hook on its cloth.
-		FloraModels.flag(chunk,"mast_high","yellow",Vector3(p.x+.8,layout.summit,2),3.0,1.0,visual_quality!="battery","hook")
+		FloraModels.flag(chunk,"mast_high","yellow",Vector3(p.x,p.y,2),3.0,1.0,visual_quality!="battery","hook")
+
+# Where the summit flag belongs: beside the last grip.
+func summit_flag_point() -> Vector2:
+	return Vector2(anchors[main_route[-1]]["pos"].x+.8,layout.summit)
 
 func _update_dynamic_visibility(center_y: float) -> void:
 	for object in nearby_anchors(center_y-40,center_y+40):

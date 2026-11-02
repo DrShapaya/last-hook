@@ -34,6 +34,22 @@ func _draw() -> void:
 	draw_set_transform(size*.5,0,Vector2.ONE*minf(size.x,size.y)/32)
 	var soft := Color(tint,.18)
 	match kind:
+		40: # RuStore: a blue tile with a white rounded R.
+			plate(Rect2(-14,-14,28,28),Color("0077ff"),8)
+			stroke([Vector2(-5,9),Vector2(-5,-8),Vector2(2,-8)],3.4,Color.WHITE)
+			draw_arc(Vector2(2,-3.5),4.6,-PI*.5,PI*.5,12,Color.WHITE,3.4,true)
+			stroke([Vector2(-5,1),Vector2(2,1),Vector2(7,9)],3.4,Color.WHITE)
+		41: # GitHub: the dark round badge with a cat's head and ears.
+			draw_circle(Vector2.ZERO,14,Color("181717"))
+			draw_circle(Vector2(0,1),7.2,Color.WHITE)
+			draw_colored_polygon(PackedVector2Array([Vector2(-7,-1),Vector2(-7.5,-9),Vector2(-2.5,-5.5)]),Color.WHITE)
+			draw_colored_polygon(PackedVector2Array([Vector2(7,-1),Vector2(7.5,-9),Vector2(2.5,-5.5)]),Color.WHITE)
+			draw_rect(Rect2(-2.6,7,5.2,5.5),Color.WHITE)
+			stroke([Vector2(-2.6,10),Vector2(-6,9),Vector2(-8,6)],1.8,Color.WHITE)
+		42: # Telegram: a paper plane on a light blue disc.
+			draw_circle(Vector2.ZERO,14,Color("29a9eb"))
+			draw_colored_polygon(PackedVector2Array([Vector2(-8,-0.5),Vector2(8,-7),Vector2(5,8),Vector2(0,4),Vector2(-3,7),Vector2(-3,2.5)]),Color.WHITE)
+			stroke([Vector2(-3,2.5),Vector2(6,-5)],1.4,Color("c8e6f7"))
 		30: # Swing: a pendulum between two arrows.
 			draw_arc(Vector2(0,-11),15,.5,PI-.5,18,tint,2.2,true)
 			stroke([Vector2(0,-11),Vector2(5,3)],2.2)

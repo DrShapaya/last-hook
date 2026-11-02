@@ -71,14 +71,28 @@ class RouteLine extends Control:
 		return 32.0
 
 	func x_of(meters: float) -> float:
-		return 6+(size.x-34)*clampf(meters/maxf(1,summit),0,1)
+		return 6+(trail_end()-6)*clampf(meters/maxf(1,summit),0,1)
+
+	# The groove ends at the foot of a small summit; the flag stands on top.
+	func trail_end() -> float:
+		return size.x-34
+
+	func peak() -> Vector2:
+		return Vector2(size.x-14,track_y()-16)
 
 	func _draw() -> void:
 		var ink := STONE if on_dark else MenuSurface.INK
 		var soft := Color("c9d2d8") if on_dark else MenuSurface.INK_SOFT
 		var y := track_y()
 		var left := 6.0
-		var right := size.x-28
+		var right := trail_end()
+		var top := peak()
+		# The summit rises from the end of the groove: one silhouette with a
+		# snow cap, so the path climbs into the flag instead of stopping short.
+		var hill := PackedVector2Array([Vector2(right-6,y+5),Vector2(right+4,y-1),top+Vector2(-4,2),top,top+Vector2(5,3),Vector2(size.x-1,y+5)])
+		draw_colored_polygon(hill,Color(SLATE_LIP if not on_dark else STONE,.32))
+		draw_polyline(hill,Color(ink,.7),1.6,true)
+		draw_colored_polygon(PackedVector2Array([top+Vector2(-4,2),top,top+Vector2(5,3),top+Vector2(2,5),top+Vector2(-1,4)]),Color(STONE,.95))
 		# Bed of the path: a recessed groove the rope lies in.
 		draw_line(Vector2(left,y),Vector2(right,y),Color(SLATE_LIP if not on_dark else Color.BLACK,.22),9,true)
 		draw_line(Vector2(left,y+1),Vector2(right,y+1),Color(STONE,.35 if not on_dark else .08),5,true)
@@ -86,6 +100,9 @@ class RouteLine extends Control:
 		while x<right-4:
 			draw_circle(Vector2(x,y),1.4,Color(soft,.6))
 			x += 8
+		# The last stretch climbs the slope as a dotted trail.
+		for step in range(1,5):
+			draw_circle(Vector2(right,y).lerp(top,step/5.0),1.4,Color(soft,.7))
 		var zone_count := int(summit/maxf(1,zone))
 		for index in range(1,zone_count):
 			var tick := x_of(index*zone)
@@ -99,28 +116,26 @@ class RouteLine extends Control:
 			while twist<rope_end-3:
 				draw_line(Vector2(twist,y+2),Vector2(twist+3,y-3),Color("e0a15a",.8),1.2,true)
 				twist += 5
-		draw_circle(Vector2(left,y),4.5,ink)
-		draw_circle(Vector2(left,y),2,MenuSurface.HOLD)
-		# Summit flag at the end of the path.
-		var peak := Vector2(size.x-16,y)
-		draw_colored_polygon(PackedVector2Array([peak+Vector2(-9,4),peak+Vector2(0,-6),peak+Vector2(9,4)]),Color(ink,.85))
-		draw_line(peak+Vector2(0,-4),peak+Vector2(0,-27),ink,2,true)
-		draw_colored_polygon(PackedVector2Array([peak+Vector2(1,-27),peak+Vector2(15,-23),peak+Vector2(13,-19),peak+Vector2(1,-16)]),MenuSurface.HOLD)
+		# Base camp: a small ring where the route starts, under the crown until
+		# there is a record to carry it up the path.
+		if record>0:
+			draw_circle(Vector2(left,y),4.5,ink)
+			draw_circle(Vector2(left,y),2.2,Color(STONE,.9))
+		PlayGauges.draw_flag(self,top+Vector2(0,1))
 		var taken: Array[Rect2] = []
 		if current>=0:
 			var at := Vector2(x_of(current),y)
-			draw_circle(at,8,ink)
-			draw_circle(at,5,MenuSurface.HOLD)
-			taken.append(tag("%d м" % roundi(current),at.x,strong,MenuSurface.HOLD,MenuSurface.INK,15))
+			PlayGauges.draw_head(self,at+Vector2(0,-2),1.25)
+			taken.append(tag("%d м" % roundi(current),at.x,strong,MenuSurface.HOLD,MenuSurface.INK,15,-16))
+		# The record: a gold crown on the path, faint at the start until there is one.
+		var crown_at := x_of(maxf(record,0.0))
+		if current<0 or absf(crown_at-x_of(current))>12: PlayGauges.draw_crown(self,Vector2(crown_at+(4 if record<=0 else 0),y+2),1.05)
 		if record>0:
-			var at := x_of(record)
-			# The record is a hold: a little faceted pebble on the path.
-			draw_colored_polygon(PackedVector2Array([Vector2(at-6,y+1),Vector2(at-3,y-5),Vector2(at+4,y-5),Vector2(at+6,y+1),Vector2(at+2,y+5),Vector2(at-4,y+5)]),HOLD_LIP)
-			draw_colored_polygon(PackedVector2Array([Vector2(at-5,y),Vector2(at-2,y-4),Vector2(at+3,y-4),Vector2(at+5,y),Vector2(at+1,y+3),Vector2(at-3,y+3)]),MenuSurface.HOLD)
-			var rect := tag_rect("Рекорд %d м" % roundi(record),at,font,13)
+			var top_y := -16.0 if current>=0 else 0.0
+			var rect := tag_rect("Рекорд %d м" % roundi(record),crown_at,font,13,top_y)
 			var free := true
 			for other in taken: free = free and not other.grow(4).intersects(rect)
-			if free: tag("Рекорд %d м" % roundi(record),at,font,Color(SLATE,.9) if not on_dark else Color(STONE,.92),STONE if not on_dark else MenuSurface.INK,13)
+			if free: tag("Рекорд %d м" % roundi(record),crown_at,font,Color(SLATE,.9) if not on_dark else Color(STONE,.92),STONE if not on_dark else MenuSurface.INK,13,top_y)
 		var use := font if font!=null else ThemeDB.fallback_font
 		if not caption.is_empty():
 			draw_string(use,Vector2(left-2,y+24),caption,HORIZONTAL_ALIGNMENT_LEFT,size.x*.6,13,soft)
@@ -143,14 +158,14 @@ class RouteLine extends Control:
 	func text_width(value: String, use: Font, font_size: int) -> float:
 		return (use if use!=null else ThemeDB.fallback_font).get_string_size(value,HORIZONTAL_ALIGNMENT_LEFT,-1,font_size).x
 
-	func tag_rect(value: String, center: float, use: Font, font_size: int) -> Rect2:
+	func tag_rect(value: String, center: float, use: Font, font_size: int, top: float = 0.0) -> Rect2:
 		var width := text_width(value,use,font_size)+16
 		var left := clampf(center-width*.5,0,size.x-width)
-		return Rect2(left,0,width,22)
+		return Rect2(left,top,width,22)
 
 	# A small chamfered tag above the path with a notch pointing at its spot.
-	func tag(value: String, center: float, use: Font, face: Color, color: Color, font_size: int) -> Rect2:
-		var rect := tag_rect(value,center,use,font_size)
+	func tag(value: String, center: float, use: Font, face: Color, color: Color, font_size: int, top: float = 0.0) -> Rect2:
+		var rect := tag_rect(value,center,use,font_size,top)
 		var box := StyleBoxFlat.new()
 		box.bg_color = face
 		box.set_corner_radius_all(5)
@@ -350,6 +365,8 @@ func route(parent: Node, at: Vector2, width: float, current: float = -1.0, on_da
 	line.on_dark = on_dark
 	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(line)
+	# A climb lays its rope up to the height it reached.
+	if current>0: line.animate_progress.call_deferred(current)
 	return line
 
 # Segmented control: a recessed track with a raised slate thumb under the

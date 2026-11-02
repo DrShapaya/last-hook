@@ -20,6 +20,42 @@ static func slab(ci: CanvasItem, rect: Rect2, face: Color, lip: Color, lip_size:
 	box.corner_detail = 1
 	ci.draw_style_box(box,rect)
 
+# The climber's cube head, its bottom centre at `at`: the same face on every
+# route bar.
+static func draw_head(ci: CanvasItem, at: Vector2, scale: float = 1.0) -> void:
+	var head := Rect2(at+Vector2(-7,-13)*scale,Vector2(14,13)*scale)
+	ci.draw_rect(Rect2(head.position+Vector2(1.5,2)*scale,head.size),Color("0b1218",.35))
+	ci.draw_rect(head.grow(1.2*scale),MenuSurface.SLATE_LIP)
+	ci.draw_rect(head,Color("f7a72b"))
+	ci.draw_rect(Rect2(head.position,Vector2(head.size.x,3.5*scale)),Color("ffd45f"))
+	ci.draw_rect(Rect2(head.position+Vector2(3.5,5)*scale,Vector2(2.2,4.5)*scale),MenuSurface.SLATE_LIP)
+	ci.draw_rect(Rect2(head.position+Vector2(8.3,5)*scale,Vector2(2.2,4.5)*scale),MenuSurface.SLATE_LIP)
+
+# The record: a small gold crown standing on the route, `at` its base centre.
+static func draw_crown(ci: CanvasItem, at: Vector2, scale: float = 1.0, dim: bool = false) -> void:
+	var shape := PackedVector2Array()
+	for point in [Vector2(-8,0),Vector2(-8,-9),Vector2(-4,-4.5),Vector2(0,-11),Vector2(4,-4.5),Vector2(8,-9),Vector2(8,0)]:
+		shape.append(at+point*scale)
+	var rim := PackedVector2Array()
+	for point in [Vector2(-9.6,1.4),Vector2(-9.6,-11.4),Vector2(-4,-6.4),Vector2(0,-13.6),Vector2(4,-6.4),Vector2(9.6,-11.4),Vector2(9.6,1.4)]:
+		rim.append(at+point*scale)
+	ci.draw_colored_polygon(rim,Color(MenuSurface.SLATE_LIP,.55 if dim else 1.0))
+	ci.draw_colored_polygon(shape,Color(MenuSurface.HOLD,.55) if dim else MenuSurface.HOLD)
+	ci.draw_rect(Rect2(at+Vector2(-8,-3)*scale,Vector2(16,3)*scale),Color(MenuSurface.HOLD_LIP,.6 if dim else 1.0))
+	for tip in [Vector2(-8,-9),Vector2(0,-11),Vector2(8,-9)]:
+		ci.draw_circle(at+tip*scale,1.7*scale,Color("fff2c0",.6 if dim else 1.0))
+
+# The summit flag on its pole, `pole` at the foot of the pole.
+static func draw_flag(ci: CanvasItem, pole: Vector2, time: float = 0.0, near: float = 0.0) -> void:
+	if near>0: ci.draw_circle(pole+Vector2(6,-19),9+sin(time*4)*1.5,Color(MenuSurface.HOLD,.18*near))
+	ci.draw_line(pole+Vector2(1,0),pole+Vector2(1,-24),MenuSurface.SLATE_LIP,3)
+	ci.draw_line(pole,pole+Vector2(0,-24),MenuSurface.STONE,2)
+	ci.draw_circle(pole+Vector2(0,-25),1.8,MenuSurface.HOLD)
+	var wave := sin(time*3)*1.2
+	var cloth := PackedVector2Array([pole+Vector2(1,-23),pole+Vector2(8,-22+wave),pole+Vector2(14,-20),pole+Vector2(8,-16+wave),pole+Vector2(1,-15)])
+	ci.draw_colored_polygon(cloth,Color("c98a12"))
+	ci.draw_colored_polygon(PackedVector2Array([cloth[0],cloth[1],cloth[2],pole+Vector2(1,-19)]),MenuSurface.HOLD)
+
 # Route from start to summit: zone ticks, record marker, the hero's head at
 # the current height and the summit flag. Crossing a zone flashes its tick.
 class RouteGauge extends Control:
@@ -86,25 +122,9 @@ class RouteGauge extends Control:
 			draw_colored_polygon(PackedVector2Array([Vector2(x,y-14),Vector2(x+8,y-11.5),Vector2(x,y-9)]),Color("b88a12"))
 			draw_colored_polygon(PackedVector2Array([Vector2(x,y-13.5),Vector2(x+6.5,y-11.5),Vector2(x,y-10)]),HOLD)
 		# The climber's cube head rides the end of the rope.
-		var bob := sin(time*5)*1.0
-		var head := Rect2(fill_x-7,y-21+bob,14,13)
-		draw_rect(Rect2(head.position+Vector2(1.5,2),head.size),Color("0b1218",.35))
-		draw_rect(head.grow(1.2),SLATE_LIP)
-		draw_rect(head,Color("f7a72b"))
-		draw_rect(Rect2(head.position,Vector2(head.size.x,3.5)),Color("ffd45f"))
-		draw_rect(Rect2(head.position+Vector2(3.5,5),Vector2(2.2,4.5)),SLATE_LIP)
-		draw_rect(Rect2(head.position+Vector2(8.3,5),Vector2(2.2,4.5)),SLATE_LIP)
+		PlayGauges.draw_head(self,Vector2(fill_x,y-8+sin(time*5)*1.0))
 		# The summit: a flag on its pole, catching the light as it nears.
-		var pole := Vector2(size.x-13,y+6)
-		var near := smoothstep(.85,1.0,share)
-		if near>0: draw_circle(pole+Vector2(6,-19),9+sin(time*4)*1.5,Color(HOLD,.18*near))
-		draw_line(pole+Vector2(1,0),pole+Vector2(1,-24),SLATE_LIP,3)
-		draw_line(pole,pole+Vector2(0,-24),STONE,2)
-		draw_circle(pole+Vector2(0,-25),1.8,HOLD)
-		var wave := sin(time*3)*1.2
-		var cloth := PackedVector2Array([pole+Vector2(1,-23),pole+Vector2(8,-22+wave),pole+Vector2(14,-20),pole+Vector2(8,-16+wave),pole+Vector2(1,-15)])
-		draw_colored_polygon(cloth,Color("c98a12"))
-		draw_colored_polygon(PackedVector2Array([cloth[0],cloth[1],cloth[2],pole+Vector2(1,-19)]),HOLD)
+		PlayGauges.draw_flag(self,Vector2(size.x-13,y+6),time,smoothstep(.85,1.0,share))
 
 	func _pill(rect: Rect2, color: Color) -> void:
 		var box := StyleBoxFlat.new()

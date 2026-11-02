@@ -1,5 +1,21 @@
 {
-	"socials": [],
+	"socials": [
+		{
+			"name": "RuStore",
+			"url": "https://www.rustore.ru/catalog/app/com.lasthook.prototype",
+			"icon": "rustore"
+		},
+		{
+			"name": "GitHub",
+			"url": "https://github.com/DrShapaya/last-hook",
+			"icon": "github"
+		},
+		{
+			"name": "Telegram",
+			"url": "https://t.me/SanTeamDS",
+			"icon": "telegram"
+		}
+	],
 	"privacy_url": "",
 	"contact_email": ""
 }

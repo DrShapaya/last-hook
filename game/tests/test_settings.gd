@@ -291,6 +291,13 @@ func test_accessibility(game) -> void:
 	game.set_setting("persistent_hints",false)
 	game.model.profile["learned_controls"] = learned
 
+func test_route_fill(game) -> void:
+	await open_section(game,"graphics")
+	var line: MenuSurface.RouteLine = game.hud.lobby_view.route(game.hud.content,Vector2.ZERO,300,348.0)
+	await create_timer(1.3).timeout
+	check(is_equal_approx(line.progress,348.0),"a result bar lays its rope up to the height reached")
+	line.queue_free()
+
 func test_small_plates(game) -> void:
 	await open_section(game,"graphics")
 	var badge: Panel = game.hud.lobby_view.soon_badge
@@ -316,6 +323,11 @@ func test_about(game) -> void:
 	await process_frame
 	await process_frame
 	check(not all_buttons(game).has("Закрыть"),"the news window closes")
+	var links := {"RuStore":"https://www.rustore.ru/catalog/app/com.lasthook.prototype","GitHub":"https://github.com/DrShapaya/last-hook","Telegram":"https://t.me/SanTeamDS"}
+	for label in links.keys():
+		var link: Button = names.get(label)
+		check(link!=null and str(link.get_meta("url",""))==links[label],"the about page links to "+label)
+		check(link!=null and link.find_children("*","UiSymbol",true,false).size()==1,label+" has its own icon")
 	var page := SettingsPage.new(game.hud.lobby_view)
 	check(page.link_rows({"socials":[{"name":"VK","url":"https://vk.com/x"}],"privacy_url":"","contact_email":""}).size()==1,"one address gives one button")
 	check(page.link_rows({"socials":[{"name":"Пусто","url":""}],"privacy_url":"https://a.b","contact_email":"a@b.c"}).size()==2,"an empty social link is skipped")
@@ -432,6 +444,7 @@ func run_tests() -> void:
 	await test_accessibility(game)
 	await test_about(game)
 	await test_small_plates(game)
+	await test_route_fill(game)
 	test_resume(game,directory)
 	game.queue_free()
 	await process_frame

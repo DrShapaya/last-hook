@@ -293,19 +293,46 @@ func _identity_row() -> Dictionary:
 func link_rows(about: Dictionary) -> Array:
 	var rows: Array = []
 	var socials: Variant = about.get("socials",[])
+	var shown: Array = []
 	if socials is Array:
 		for entry in socials:
-			if entry is Dictionary and not str(entry.get("url","")).is_empty():
-				rows.append(_link_row(str(entry.get("name","Ссылка")),str(entry["url"])))
+			if entry is Dictionary and not str(entry.get("url","")).is_empty(): shown.append(entry)
+	if not shown.is_empty(): rows.append(_socials_row(shown))
 	if not str(about.get("privacy_url","")).is_empty():
 		rows.append(_link_row("Политика конфиденциальности",str(about["privacy_url"])))
 	if not str(about.get("contact_email","")).is_empty():
 		rows.append(_link_row("Написать разработчикам","mailto:%s?subject=%s" % [str(about["contact_email"]),("Last Hook "+GameModel.build_version()).uri_encode()]))
 	return rows
 
+const SOCIAL_ICONS := {"rustore":40,"github":41,"telegram":42}
+
+# The game's pages side by side, each a stone key with its own badge.
+func _socials_row(entries: Array) -> Dictionary:
+	return {"height":ROW+6,"build":func(slab: Control, y: float, width: float):
+		var gap := 10.0
+		var each: float = (width-40-gap*(entries.size()-1))/entries.size()
+		for index in range(entries.size()):
+			var entry: Dictionary = entries[index]
+			var address := str(entry["url"])
+			var button := lobby.action(slab,str(entry.get("name","Ссылка")),Vector2(20+index*(each+gap),y),Vector2(each,50),OS.shell_open.bind(address),"secondary")
+			button.set_meta("url",address)
+			button.add_theme_font_size_override("font_size",14)
+			button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			for state_name in ["normal","hover","pressed","disabled"]:
+				var box := button.get_theme_stylebox(state_name).duplicate() as StyleBoxFlat
+				box.content_margin_left = 44
+				button.add_theme_stylebox_override(state_name,box)
+			var badge := UiSymbol.new()
+			badge.kind = int(SOCIAL_ICONS.get(str(entry.get("icon","")),40))
+			badge.position = Vector2(10,9)
+			badge.size = Vector2(28,28)
+			badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			button.add_child(badge)}
+
 func _link_row(label_text: String, address: String) -> Dictionary:
 	return {"height":ROW,"build":func(slab: Control, y: float, width: float):
 		var button := lobby.action(slab,label_text,Vector2(20,y),Vector2(width-40,46),OS.shell_open.bind(address),"secondary")
+		button.set_meta("url",address)
 		button.add_theme_font_size_override("font_size",15)}
 
 func _version_row(entry: Dictionary) -> Dictionary:

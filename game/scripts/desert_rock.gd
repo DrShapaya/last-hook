@@ -14,11 +14,15 @@ const ROLL := 2.4
 # side, then what a wall, a bed's swell and a ledge rise over it.
 const EDGE_Z := -7.5
 const WALL_RISE := 5.1
-const BED_RISE := 1.2
+const BED_RISE := 2.1
+# Sand lies on what faces the sky; cracks run down the faces.
+const SAND := Color("c4945c")
+const SAND_DARK := Color("a8763f")
+const CRACK := Color("4a2614")
 const LEDGE_RISE := 8.5
 # The hollow under a ledge: how far down it reaches and how deep it goes.
 const HOLLOW_FALL := 2.6
-const HOLLOW_DEPTH := 1.3
+const HOLLOW_DEPTH := 1.8
 # The far wall of a cave, behind the face at its edge, and the size of its facets.
 const CAVE_WALL_Z := -8.6
 const CAVE_FACET := .8
@@ -32,6 +36,7 @@ var warp := FastNoiseLite.new()
 var relief := FastNoiseLite.new()
 var bands := FastNoiseLite.new()
 var blocks := FastNoiseLite.new()
+var cracks := FastNoiseLite.new()
 # Bed borders bottom-up, in warped height.
 var beds := PackedFloat32Array()
 
@@ -51,6 +56,9 @@ func _init(level: MaskLayout) -> void:
 	blocks.cellular_return_type = FastNoiseLite.RETURN_CELL_VALUE
 	blocks.frequency = .07
 	blocks.fractal_type = FastNoiseLite.FRACTAL_NONE
+	cracks.seed = random_seed+16
+	cracks.frequency = .5
+	cracks.fractal_octaves = 2
 	var random := RandomNumberGenerator.new()
 	random.seed = random_seed+14
 	var y := origin.y-8.0
@@ -155,7 +163,11 @@ func lumps(low: float, high: float) -> Array:
 		var at := Vector2(spot.x,spot.y)
 		if not _clear_of_grips(at,1.7) or _near_cave(at): continue
 		var roll := random.randf()
-		if roll<.12:
+		if roll<.22:
+			# A heap of sand drifted against the wall behind the ledge.
+			var wide := random.randf_range(1.0,2.0)
+			result.append([Vector3(at.x,at.y+wide*.12,spot.z-.1),Vector3(wide,wide*.28,wide*.6)])
+		elif roll<.34:
 			var size := random.randf_range(.55,1.1)
 			result.append([Vector3(at.x,at.y+size*.62,spot.z+.2),Vector3(size*1.15,size*.85,size)])
 		else:
@@ -190,10 +202,10 @@ func height(point: Vector2) -> float:
 	var bed := _in_bed(_warped(point))
 	# Each bed swells to a lens: the crease between two is its low line.
 	# Thick beds swell far; thin ones are hardly more than a line.
-	var lens := pow(sin(PI*bed.x),.5)*clampf(bed.y*.28,.3,1.0)
+	var lens := pow(sin(PI*bed.x),.38)*clampf(bed.y*.28,.3,1.0)
 	# Walls stand well back and swell slowly as whole masses.
 	var swell := warp.get_noise_2d(point.x+200.0,point.y*.7)*1.2
-	var z := EDGE_Z+body*(WALL_RISE+lens*BED_RISE+swell)+relief.get_noise_2d(point.x,point.y*1.6)*.42
+	var z := EDGE_Z+body*(WALL_RISE+lens*BED_RISE+swell)+relief.get_noise_2d(point.x,point.y*1.6)*.26
 	# A ledge stands out of the wall: it leans back to a flat top and overhangs
 	# a hollow cut away underneath it.
 	var ledge := _on_ledge(point)
@@ -214,14 +226,23 @@ func facet_color(center: Vector3, normal: Vector3) -> Color:
 	var up := clampf(normal.y,-1,1)
 	if up>0: color = color.lerp(Color("b98a58"),smoothstep(.1,.7,up)*.75)
 	else: color = color.lerp(Color("5a3119"),smoothstep(.05,.7,-up)*.9)
-	# The crease between two beds lies in shade.
+	# A bed's lens catches the light along its upper half and goes into shade
+	# towards the crease under it.
 	var bed := _in_bed(wave)
 	var crease := 1.0-sin(PI*bed.x)
-	color = color.lerp(Color("5f351c"),smoothstep(.6,1.0,crease)*clampf(bed.y*.14,.12,.6))
+	color = color.lerp(Color("c48f58"),smoothstep(.45,.85,bed.x)*(1.0-smoothstep(.88,1.0,bed.x))*.35)
+	color = color.lerp(Color("5f351c"),smoothstep(.55,1.0,crease)*clampf(bed.y*.16,.15,.7))
+	# Cracks run down the faces that look at the viewer.
+	var line := absf(cracks.get_noise_2d(at.x*1.6,at.y*.22))
+	if line<.035 and normal.z>.6 and absf(normal.y)<.5: color = color.lerp(CRACK,.55*(1.0-line/.035))
 	color = color.lerp(Color("6e4226"),clampf((RIM_Z+1.2-center.z)/2.6,0,.55))
 	# The hollow under a ledge lies in deep shade, shadow map or not.
 	color = color.lerp(Color("4c2815"),_on_ledge(at).z*.75)
 	# Faces turning away to the side fall into shade, so the edge reads round.
 	color = color.lerp(Color("6b3f22"),(1.0-smoothstep(.3,.85,normal.z))*.35)
+	# Sand settles on whatever faces the sky.
+	if up>.45 and _on_ledge(at).z<.3:
+		var drift := bands.get_noise_2d(at.x*.4,at.y*.4)*.5+.5
+		color = color.lerp(SAND_DARK.lerp(SAND,drift),smoothstep(.45,.8,up)*.85)
 	var shake := float(hash(Vector3i(roundi(center.x*9.0),roundi(center.y*9.0),3))%1000)/1000.0-.5
-	return color.lightened(shake*.09) if shake>0 else color.darkened(-shake*.09)
+	return color.lightened(shake*.06) if shake>0 else color.darkened(-shake*.06)

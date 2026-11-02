@@ -607,6 +607,9 @@ func surface_normal(point: Vector2) -> Vector3:
 	return hit.normal if hit.valid() else Vector3.BACK
 
 func open_at(point: Vector2) -> bool:
+	# On a location's own rock the edge the player sees is that rock's.
+	var rock := _seen_rock()
+	if rock!=null: return rock.distance(point)<=0.0
 	return not surface_query(point).valid()
 
 func support_root_of(object: Dictionary) -> Vector2:
@@ -679,6 +682,11 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 	var rock := RockSurface.make(layout as MaskLayout)
 	var random := layout.rng(index,905)
 	var budget := 46 if quality=="high" else 30 if quality=="balanced" else 12
+	# Seated on the outline the player sees, the pieces keep clear air round
+	# them; the ordinary decor already fills the tops, so these add fewer.
+	var seated := _seats_on_view()
+	if seated: budget = roundi(budget*1.2)
+	var gap := _decor_gap() if seated else .06
 	var placed := 0
 	for spot: Vector3 in rock.perches(index*BAND,(index+1)*BAND,random,budget*8):
 		if placed>=budget: break
@@ -687,14 +695,29 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 		if not _decor_route_clear(point,.9) or _in_cave(point,.4): continue
 		var entry := _decor_entry("grass" if random.randf()<.6 else "pebbles",profile_at(point.y),random)
 		if entry.is_empty(): continue
-		var size := FloraModels.size_of(entry,1.0)
+		var scale := random.randf_range(.95,1.4)
+		var size := FloraModels.size_of(entry,scale)
+		var on_lens := false
+		if seated:
+			# On the top of a bed's lens inside the face, or on the top of the
+			# outline: climb from the perch to the air over it.
+			if rock.normal_at(point).y>.4 and open_at(point) == false and rock.distance(point)>1.0: on_lens = true
+			else:
+				var rise := 0
+				while not open_at(point) and rise<25:
+					point.y += .1
+					rise += 1
+				if rise>=25: continue
+				point = _top_seat(point+Vector2(0,.2),size.x*.6,size.x,.6,.3)
+				if not point.is_finite(): continue
 		var rect := Rect2(point.x-size.x*.5,point.y,size.x,size.y)
-		if _taken(index,rect.grow(.06)): continue
+		if _taken(index,rect.grow(gap)) or (seated and not on_lens and not _decor_fits(rect,false)): continue
 		var holder := Node3D.new()
 		holder.name = "Растение_%d" % placed
 		parent.add_child(holder)
-		holder.position = Vector3(point.x,point.y,spot.z+.05)
-		FloraModels.plant(holder,entry,quality!="battery",random.randf_range(.95,1.4))
+		# In front of all the stone the piece covers, never inside it.
+		holder.position = Vector3(point.x,point.y,(_front_over(rect) if seated else spot.z)+.05)
+		FloraModels.plant(holder,entry,quality!="battery",scale)
 		_take(index,rect)
 		placed += 1
 	# Crystals stand on the crests of the cold rock.
@@ -728,6 +751,10 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 		var entry := _decor_entry("hanging",profile_at(point.y),random)
 		if entry.is_empty(): continue
 		var size := FloraModels.size_of(entry,1.0)
+		if seated and not cold:
+			point = _hang_seat(point,size)
+			if not point.is_finite(): continue
+			spot.z = _front_over(Rect2(point.x-.2,point.y,.4,.3))
 		var rect := Rect2(point.x-size.x*.5,point.y-size.y,size.x,size.y)
 		if _taken(index,rect.grow(.04)): continue
 		for piece in range(3 if cold else 1):
@@ -807,6 +834,39 @@ func _build_rock_surface(index: int, parent: Node3D) -> void:
 	instance.material_override = rock_material_at(index*BAND+BAND*.5)
 	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if quality!="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(instance)
+	if (layout as MaskLayout).rock_form=="desert" and quality!="battery": _add_dust(index,parent)
+
+# Fine sand blowing across the desert face in the wind, a few grains per band.
+func _add_dust(index: int, parent: Node3D) -> void:
+	var dust := GPUParticles3D.new()
+	dust.name = "Пыль_%d" % index
+	dust.amount = 48 if quality=="high" else 24
+	dust.lifetime = 6.0
+	dust.preprocess = 6.0
+	dust.position = Vector3(0,index*BAND+BAND*.5,-.4)
+	dust.visibility_aabb = AABB(Vector3(-24,-BAND*.6,-2),Vector3(48,BAND*1.2,4))
+	dust.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var process := ParticleProcessMaterial.new()
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	process.emission_box_extents = Vector3(22,BAND*.5,.6)
+	process.direction = Vector3(1,.12,0)
+	process.spread = 12.0
+	process.initial_velocity_min = .5
+	process.initial_velocity_max = 1.4
+	process.gravity = Vector3(0,-.05,0)
+	process.scale_min = .5
+	process.scale_max = 1.2
+	dust.process_material = process
+	var grain := QuadMesh.new()
+	grain.size = Vector2(.07,.07)
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	material.albedo_color = Color(.96,.82,.58,.55)
+	grain.material = material
+	dust.draw_pass_1 = grain
+	parent.add_child(dust)
 
 # --- Ledges -------------------------------------------------------------------------
 
@@ -951,11 +1011,13 @@ func _underside_above(point: Vector2) -> Vector2:
 
 # --- Seats ---------------------------------------------------------------------------
 
-# On the boulder mountain decor sits by the outline the player sees, not by the
-# contour of a mass: a contour's rim runs round a side or a pebble as well as
-# over a top. A location's own rock places its plants by its masks.
+# Decor sits by the outline the player sees, not by the contour of a mass: a
+# contour's rim runs round a side or a pebble as well as over a top. That is
+# the boulder mountain's outline, or a location's own rock where it holds
+# objects (the desert); other rock still places its plants by its masks.
 func _seats_on_view() -> bool:
-	return not (layout is MaskLayout and (layout as MaskLayout).rock_form!="boulder")
+	if not (layout is MaskLayout and (layout as MaskLayout).rock_form!="boulder"): return true
+	return _seen_rock()!=null
 
 # Clear air kept round a piece, thinner decor on the lighter presets.
 func _decor_gap() -> float:

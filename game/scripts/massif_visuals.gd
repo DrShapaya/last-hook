@@ -666,6 +666,9 @@ func build_chunk(index: int, parent: Node3D) -> void:
 	# Landmarks claim their place first; small decor fits round them.
 	await _build_landmarks(index,parent)
 	if not await pause(parent): return
+	if layout is MaskLayout and (layout as MaskLayout).rock_form=="winter":
+		await _build_crystals(index,parent)
+		if not await pause(parent): return
 	await _build_decor(index,parent)
 	if layout is MaskLayout and (layout as MaskLayout).rock_form!="boulder":
 		if not await pause(parent): return
@@ -712,6 +715,8 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 				if not point.is_finite(): continue
 		var rect := Rect2(point.x-size.x*.5,point.y,size.x,size.y)
 		if _taken(index,rect.grow(gap)) or (seated and not on_lens and not _decor_fits(rect,false)): continue
+		# On the snow peak the ice comes later and needs its room too.
+		if (layout as MaskLayout).rock_form=="winter" and _would_crowd(index,rect.get_center()): continue
 		var holder := Node3D.new()
 		holder.name = "Растение_%d" % placed
 		parent.add_child(holder)
@@ -720,28 +725,13 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 		FloraModels.plant(holder,entry,quality!="battery",scale)
 		_take(index,rect)
 		placed += 1
-	# Crystals stand on the crests of the cold rock.
-	if (layout as MaskLayout).rock_form=="winter":
-		var grown := 0
-		for spot: Vector3 in rock.crests(index*BAND,(index+1)*BAND,random,600):
-			if grown>=2: break
-			var point := Vector2(spot.x,spot.y)
-			if not _decor_route_clear(point,1.4): continue
-			var entry := _decor_entry("crystal",profile_at(point.y),random)
-			if entry.is_empty(): continue
-			var size := FloraModels.size_of(entry,1.3)
-			var rect := Rect2(point.x-size.x*.5,point.y,size.x,size.y)
-			if _taken(index,rect.grow(.2)): continue
-			var holder := Node3D.new()
-			holder.name = "Кристалл_%d" % grown
-			parent.add_child(holder)
-			holder.position = Vector3(point.x,point.y,spot.z+.05)
-			FloraModels.plant(holder,entry,quality!="battery",1.3)
-			_take(index,rect)
-			grown += 1
-	# Roots and ice hang under the overhangs, ice in clusters.
-	var hanging := 0
 	var cold := (layout as MaskLayout).rock_form=="winter"
+	# Ice hangs in rows from the front of every snow shelf, over the hollow
+	# under it.
+	var hanging := 0
+	if cold and seated: hanging = await _shelf_icicles(index,parent,random)
+	if not is_instance_valid(parent): return
+	# Roots and ice hang under the overhangs.
 	var hanging_budget := budget if cold else budget/3
 	for spot: Vector3 in rock.hangs(index*BAND,(index+1)*BAND,random,budget*40):
 		if hanging>=hanging_budget: break
@@ -751,21 +741,97 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 		var entry := _decor_entry("hanging",profile_at(point.y),random)
 		if entry.is_empty(): continue
 		var size := FloraModels.size_of(entry,1.0)
-		if seated and not cold:
+		if seated:
 			point = _hang_seat(point,size)
 			if not point.is_finite(): continue
 			spot.z = _front_over(Rect2(point.x-.2,point.y,.4,.3))
 		var rect := Rect2(point.x-size.x*.5,point.y-size.y,size.x,size.y)
-		if _taken(index,rect.grow(.04)): continue
-		for piece in range(3 if cold else 1):
-			var at := point+Vector2(piece*.55-(.55 if cold else 0.0),0)
-			var holder := Node3D.new()
-			holder.name = "Подвес_%d_%d" % [hanging,piece]
-			parent.add_child(holder)
-			holder.position = Vector3(at.x,at.y,spot.z+.05)
-			FloraModels.plant(holder,entry,quality!="battery",random.randf_range(.7,1.1))
+		if _taken(index,rect.grow(gap*.5 if cold and seated else .04)) or (cold and seated and (_would_crowd(index,rect.get_center()) or not _decor_fits(rect,true))): continue
+		var holder := Node3D.new()
+		holder.name = "Подвес_%d_0" % hanging
+		parent.add_child(holder)
+		holder.position = Vector3(point.x,point.y,spot.z+.05)
+		FloraModels.plant(holder,entry,quality!="battery",random.randf_range(.8,1.1) if cold else random.randf_range(.7,1.1))
 		_take(index,rect)
 		hanging += 1
+
+# Crystals stand on the crests of the cold rock, the ends of its shelves
+# first, where they stand out of the tower. They claim their place before the
+# small decor, which fits round them.
+func _build_crystals(index: int, parent: Node3D) -> void:
+	var rock := RockSurface.make(layout as MaskLayout)
+	var random := layout.rng(index,906)
+	var seated := _seats_on_view()
+	var gap := _decor_gap() if seated else .2
+	var grown := 0
+	var spots: Array = []
+	for shelf in (layout as MaskLayout).rock_marks:
+		for end: float in [-1.0,1.0]:
+			var x: float = float(shelf[0])+end*(float(shelf[2])-random.randf_range(.8,1.6))
+			var y: float = float(shelf[1])+float(shelf[3])*(x-float(shelf[0]))-.3
+			if y>=index*BAND and y<(index+1)*BAND: spots.append(Vector3(x,y,0))
+	spots.append_array(rock.crests(index*BAND,(index+1)*BAND,random,1500 if seated else 600))
+	for spot: Vector3 in spots:
+		if grown>=3: break
+		if not await pause(parent): return
+		var point := Vector2(spot.x,spot.y)
+		if not _decor_route_clear(point,1.4): continue
+		var entry := _decor_entry("crystal",profile_at(point.y),random)
+		if entry.is_empty(): continue
+		var size := FloraModels.size_of(entry,1.3)
+		if seated:
+			var rise := 0
+			while not open_at(point) and rise<12:
+				point.y += .1
+				rise += 1
+			# A crystal grows from a small top: a narrow footing will do.
+			point = _top_seat(point+Vector2(0,.2),.5,.9,.6,.35)
+			if not point.is_finite() or _kin_near(index,"crystal",point): continue
+		var rect := Rect2(point.x-size.x*.5,point.y,size.x,size.y)
+		if _taken(index,rect.grow(gap)) or (seated and not _decor_fits(rect,false)): continue
+		var holder := Node3D.new()
+		holder.name = "Кристалл_%d" % grown
+		parent.add_child(holder)
+		holder.position = Vector3(point.x,point.y,(_front_over(rect) if seated else spot.z)+.05)
+		FloraModels.plant(holder,entry,quality!="battery",1.3)
+		_take(index,rect)
+		if seated: _take_kin(index,"crystal",point)
+		grown += 1
+
+# Icicles along the foot of each snow shelf's front in a band, a piece every
+# metre and a half, hanging in front of the hollow under the shelf.
+func _shelf_icicles(index: int, parent: Node3D, random: RandomNumberGenerator) -> int:
+	var placed := 0
+	var spacing := 1.5 if quality!="battery" else 2.6
+	for shelf in (layout as MaskLayout).rock_marks:
+		var x0 := float(shelf[0])
+		var half := float(shelf[2])
+		var slope := float(shelf[3])
+		var thick := float(shelf[4])
+		var foot_y := float(shelf[1])-thick
+		if foot_y<index*BAND or foot_y>=(index+1)*BAND: continue
+		var x := x0-half+.7+random.randf_range(0,.5)
+		while x<x0+half-.7:
+			if not await pause(parent): return placed
+			var root := Vector2(x,foot_y+slope*(x-x0)+.12)
+			x += spacing*random.randf_range(.85,1.15)
+			# The shelf has stone where the ice hangs from; the ice must not
+			# cover the route or a grip.
+			if open_at(root+Vector2(0,.15)) or not _decor_route_clear(root,.9): continue
+			var entry := FloraModels.pick("icicle",random,"hang")
+			if entry.is_empty(): continue
+			var scale := random.randf_range(.8,1.15)
+			var size := FloraModels.size_of(entry,scale)
+			var rect := Rect2(root.x-size.x*.5,root.y-size.y,size.x,size.y)
+			if _taken(index,rect.grow(.45)) or _would_crowd(index,rect.get_center()) or not _decor_fits(rect,true): continue
+			var holder := Node3D.new()
+			holder.name = "Подвес_полки_%d" % placed
+			parent.add_child(holder)
+			holder.position = Vector3(root.x,root.y,_front_over(Rect2(root.x-.3,root.y,.6,.35))+.05)
+			FloraModels.plant(holder,entry,quality!="battery",scale)
+			_take(index,rect)
+			placed += 1
+	return placed
 
 func _palette(profile: GripBiomeProfile, height: float, mass: RockMassSpec) -> Dictionary:
 	var rock: Dictionary = profile.rock_material
@@ -835,6 +901,9 @@ func _build_rock_surface(index: int, parent: Node3D) -> void:
 	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if quality!="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(instance)
 	if (layout as MaskLayout).rock_form=="desert" and quality!="battery": _add_dust(index,parent)
+	if (layout as MaskLayout).rock_form=="winter" and quality!="battery":
+		_add_snowfall(index,parent)
+		_add_blown_snow(index,parent,rock)
 
 # Fine sand blowing across the desert face in the wind, a few grains per band.
 func _add_dust(index: int, parent: Node3D) -> void:
@@ -868,6 +937,121 @@ func _add_dust(index: int, parent: Node3D) -> void:
 	dust.draw_pass_1 = grain
 	parent.add_child(dust)
 
+# A soft round flake, shared by all snow of the peak.
+static var flake_material: StandardMaterial3D
+
+static func snow_flake(size: float) -> QuadMesh:
+	if flake_material==null:
+		var gradient := Gradient.new()
+		gradient.set_color(0,Color(1,1,1,1))
+		gradient.set_color(1,Color(1,1,1,0))
+		var texture := GradientTexture2D.new()
+		texture.gradient = gradient
+		texture.fill = GradientTexture2D.FILL_RADIAL
+		texture.fill_from = Vector2(.5,.5)
+		texture.fill_to = Vector2(.5,0)
+		texture.width = 32
+		texture.height = 32
+		flake_material = StandardMaterial3D.new()
+		flake_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		flake_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		flake_material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		flake_material.albedo_texture = texture
+		flake_material.albedo_color = Color(.96,.98,1.0,1.0)
+		flake_material.vertex_color_use_as_albedo = true
+	var flake := QuadMesh.new()
+	flake.size = Vector2(size,size)
+	flake.material = flake_material
+	return flake
+
+# A streak of snow torn along the wind, for gusts: the flake stretched out
+# and turned along `angle` (radians).
+static func snow_streak(length: float, angle: float) -> QuadMesh:
+	snow_flake(.1)
+	var material: StandardMaterial3D = flake_material.duplicate()
+	material.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	material.albedo_color = Color(.97,.99,1.0,.9)
+	var streak := QuadMesh.new()
+	streak.size = Vector2(length,length*.22)
+	streak.material = material
+	return streak
+
+# Snow falling over the whole climb, in front of the rock and the hero, as on
+# the screen: big slow flakes near the viewer, small ones behind them.
+func _add_snowfall(index: int, parent: Node3D) -> void:
+	for layer in range(2):
+		var near := layer==0
+		var snow := GPUParticles3D.new()
+		snow.name = "Снегопад_%d_%d" % [index,layer]
+		snow.amount = (130 if near else 120) if quality=="high" else (85 if near else 75)
+		snow.lifetime = 14.0
+		snow.preprocess = 14.0
+		snow.position = Vector3(0,index*BAND+BAND*.5,3.2 if near else 1.6)
+		snow.visibility_aabb = AABB(Vector3(-26,-BAND,-1),Vector3(52,BAND*2.0,2))
+		snow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var process := ParticleProcessMaterial.new()
+		process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+		process.emission_box_extents = Vector3(24,BAND*.5,.4)
+		# Down and a little with the wind; each flake drifts at its own pace.
+		process.direction = Vector3(.35,-1,0)
+		process.spread = 14.0
+		process.initial_velocity_min = .7 if near else .45
+		process.initial_velocity_max = 1.3 if near else .8
+		process.gravity = Vector3.ZERO
+		process.scale_min = .7
+		process.scale_max = 1.3
+		var fade := Gradient.new()
+		fade.set_color(0,Color(1,1,1,0))
+		fade.add_point(.12,Color(1,1,1,1))
+		fade.add_point(.85,Color(1,1,1,1))
+		fade.set_color(fade.get_point_count()-1,Color(1,1,1,0))
+		var ramp := GradientTexture1D.new()
+		ramp.gradient = fade
+		process.color_ramp = ramp
+		snow.process_material = process
+		snow.draw_pass_1 = snow_flake(.42 if near else .2)
+		parent.add_child(snow)
+
+# Wind lifts snow off the tops of the rock in puffs, along the wind.
+func _add_blown_snow(index: int, parent: Node3D, rock: RockSurface) -> void:
+	var random := layout.rng(index,907)
+	var puffs := 0
+	for spot: Vector3 in rock.crests(index*BAND,(index+1)*BAND,random,400):
+		if puffs>=(4 if quality=="high" else 3): break
+		if rock.distance(Vector2(spot.x,spot.y))>.6: continue
+		var blown := GPUParticles3D.new()
+		blown.name = "Сдув_%d_%d" % [index,puffs]
+		blown.amount = 24 if quality=="high" else 14
+		blown.lifetime = 1.8
+		blown.preprocess = 2.0
+		blown.explosiveness = .1
+		blown.randomness = .5
+		blown.position = Vector3(spot.x,spot.y+.1,spot.z+.3)
+		blown.visibility_aabb = AABB(Vector3(-2,-2,-1),Vector3(10,5,2))
+		blown.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var process := ParticleProcessMaterial.new()
+		process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+		process.emission_box_extents = Vector3(.8,.1,.2)
+		process.direction = Vector3(1,.35,0)
+		process.spread = 18.0
+		process.initial_velocity_min = 1.6
+		process.initial_velocity_max = 3.2
+		process.gravity = Vector3(0,-.6,0)
+		process.damping_min = .6
+		process.damping_max = 1.2
+		process.scale_min = .6
+		process.scale_max = 1.4
+		var fade := Gradient.new()
+		fade.set_color(0,Color(1,1,1,.9))
+		fade.set_color(1,Color(1,1,1,0))
+		var ramp := GradientTexture1D.new()
+		ramp.gradient = fade
+		process.color_ramp = ramp
+		blown.process_material = process
+		blown.draw_pass_1 = snow_flake(.2)
+		parent.add_child(blown)
+		puffs += 1
+
 # --- Ledges -------------------------------------------------------------------------
 
 func build_ledge(object: Dictionary, parent: Node3D) -> void:
@@ -888,6 +1072,55 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	object["visual"] = holder
 	object["mount"] = mount
 	_place_platform(holder,object,mount)
+
+# On the snow peak a rest is a slab of its own rock: a snow top on the walking
+# line, a dark stone front and ice hanging under it, as the shelves of the
+# face are. Other places keep their timber platforms.
+func _place_platform(holder: Node3D, object: Dictionary, mount: SurfaceMount) -> Node3D:
+	if not (layout is MaskLayout and (layout as MaskLayout).rock_form=="winter"): return super._place_platform(holder,object,mount)
+	var left: float = object["left"]
+	var right: float = object["right"]
+	var top: float = object["top"]
+	var width := right-left+.5
+	var thick := .7
+	var back := _front_over(Rect2(left-.25,top-thick,width,thick))+PLATFORM_GAP
+	var front := maxf(PLATFORM_FRONT,back+.6)
+	var model := Node3D.new()
+	model.name = "Снежная плита"
+	holder.add_child(model)
+	model.position = Vector3((left+right)*.5,top,(back+front)*.5)-holder.position
+	var depth := front-back
+	var stone := StandardMaterial3D.new()
+	stone.albedo_color = Color("5f6d86")
+	stone.roughness = .9
+	var snow := StandardMaterial3D.new()
+	snow.albedo_color = Color("e6edf6")
+	snow.roughness = .8
+	for part in [["Камень плиты",Vector3(0,-thick*.5-.06,0),Vector3(width,thick-.12,depth),stone],["Снег плиты",Vector3(0,-.07,.02),Vector3(width+.14,.14,depth+.06),snow]]:
+		var mesh := BoxMesh.new()
+		mesh.size = part[2]
+		var piece := MeshInstance3D.new()
+		piece.name = part[0]
+		piece.mesh = mesh
+		piece.material_override = part[3]
+		piece.position = part[1]
+		piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if quality!="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		model.add_child(piece)
+	# Ice along the front edge, short enough to stay clear of what is below.
+	var random := layout.rng(int(roundf(top*10)),908)
+	var room := _room_under_ledge(object)
+	var count := int(width/.7)
+	for k in range(count):
+		var entry := FloraModels.pick("icicle",random,"hang")
+		if entry.is_empty() or room<1.0: break
+		var scale := clampf(random.randf_range(.6,.9),.4,room*.5)
+		var hang := Node3D.new()
+		hang.name = "Сосульки плиты_%d" % k
+		hang.position = Vector3(-width*.5+(k+.5)*width/count,-thick,depth*.5-.02)
+		model.add_child(hang)
+		FloraModels.plant(hang,entry,quality!="battery",scale)
+	object["platform_style"] = "snow"
+	return model
 
 # --- Decor --------------------------------------------------------------------------
 
@@ -959,6 +1192,23 @@ func _taken(index: int, rect: Rect2) -> bool:
 	for band in [index-1,index,index+1]:
 		for other: Rect2 in decor_rects.get(band,[]):
 			if other.intersects(rect): return true
+	return false
+
+# How many pieces already stand within `reach` of a point.
+func _crowd_near(index: int, point: Vector2, reach: float = 2.6) -> int:
+	var count := 0
+	for band in [index-1,index,index+1]:
+		for other: Rect2 in decor_rects.get(band,[]):
+			if other.get_center().distance_to(point)<reach: count += 1
+	return count
+
+# Whether a piece at `point` would stand among more than three others, or
+# put one of its neighbours among more than three.
+func _would_crowd(index: int, point: Vector2, reach: float = 2.6) -> bool:
+	if _crowd_near(index,point,reach)>=3: return true
+	for band in [index-1,index,index+1]:
+		for other: Rect2 in decor_rects.get(band,[]):
+			if other.get_center().distance_to(point)<reach and _crowd_near(index,other.get_center(),reach)>=4: return true
 	return false
 
 func _take(index: int, rect: Rect2) -> void:

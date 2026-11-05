@@ -111,6 +111,7 @@ func run_tests() -> void:
 	designer_tests()
 	split_tests()
 	style_tests()
+	await winter_decor_tests()
 	print("MASKS_TESTS ",checks," checks, ",failures.size()," failures")
 	quit(0 if failures.is_empty() else 1)
 
@@ -156,6 +157,10 @@ func style_tests() -> void:
 			var a := rock.build(24.0,48.0,1.0).get_faces()
 			check(a==mesh.get_faces(),"the rock face of location %d is the same every time" % location)
 		if location==1: desert_depth_tests(world,layout)
+		if location==2:
+			winter_depth_tests(world,layout)
+			winter_outline_tests(designer,layout)
+			winter_play_tests(layout)
 		world.free()
 	# A climb has a rhythm, and the far way has its risk.
 	var sample := LevelDesigner.make(1,0,int(LevelCatalog.route(1,0)["seed"])*31)
@@ -276,6 +281,201 @@ func desert_depth_tests(world: MountainWorld, layout: MaskLayout) -> void:
 		var point: Vector2 = layout.anchors[id]["pos"]
 		if rock.distance(point)>0 and absf(visuals.wall_depth(point)-rock.height(point))>.01: off_face += 1
 	check(off_face==0,"grips take their depth from the rock in view (%d do not)" % off_face)
+
+# The snow tower has real depth: columns and the cracks between them, an edge
+# rolling far back, shelves standing out over a hollow, and grips on the rock
+# in view.
+func winter_depth_tests(world: MountainWorld, layout: MaskLayout) -> void:
+	var rock := RockSurface.make(layout)
+	var depths: Array = []
+	var edges: Array = []
+	var sides: Array = []
+	var y := 10.0
+	while y<130.0:
+		var x := -16.0
+		while x<=16.0:
+			var inside := rock.distance(Vector2(x,y))
+			if inside>3.0: depths.append(rock.height(Vector2(x,y)))
+			elif inside>.05 and inside<.3: edges.append(rock.height(Vector2(x,y)))
+			if inside>.3 and inside<.9: sides.append(rock.normal_at(Vector2(x,y)).z)
+			x += .5
+		y += .5
+	depths.sort()
+	edges.sort()
+	sides.sort()
+	var low: float = depths[int(depths.size()*.05)]
+	var high: float = depths[int(depths.size()*.95)]
+	var middle: float = depths[depths.size()/2]
+	var edge: float = edges[edges.size()/2]
+	var side: float = sides[sides.size()/2]
+	print("WINTER_DEPTH ",low," .. ",high," middle ",middle," edge ",edge," side ",side)
+	check(high-low>=3.0,"the tower's face spans 3 units of depth (%.2f .. %.2f)" % [low,high])
+	check(middle-edge>=4.0,"the tower stands well out from its own edge (%.2f over %.2f)" % [middle,edge])
+	check(side<=.55,"the tower turns away from the viewer at its edge (normal z %.2f)" % side)
+	# A shelf stands out of the tower over a hollow cut under it.
+	var outs: Array = []
+	for shelf in layout.rock_marks:
+		var at := Vector2(float(shelf[0]),float(shelf[1])-float(shelf[4])*.7)
+		if rock.distance(at)<3.0 or rock.distance(at+Vector2(0,-float(shelf[4])))<3.0: continue
+		outs.append(rock.height(at)-rock.height(at-Vector2(0,float(shelf[4])*.5+.6)))
+	outs.sort()
+	print("WINTER_SHELVES ",outs)
+	check(outs.size()>=2 and float(outs[outs.size()/2])>=1.5,"a shelf stands out over the hollow under it %s" % str(outs))
+	var visuals := MassifVisuals.new(world,layout)
+	var off_face := 0
+	for id in layout.main_route:
+		var point: Vector2 = layout.anchors[id]["pos"]
+		if rock.distance(point)>0 and absf(visuals.wall_depth(point)-rock.height(point))>.01: off_face += 1
+	check(off_face==0,"grips take their depth from the rock in view (%d do not)" % off_face)
+
+# The peak's outline after winter_4k.png: shelves wind one way round the
+# tower, cones stand only on the loops and the crown, and the tower's own
+# flanks are rough but carry no sharp tips.
+func winter_outline_tests(designer: LevelDesigner, layout: MaskLayout) -> void:
+	var winter := designer as WinterDesigner
+	var rising := 0
+	var falling := 0
+	for shelf in winter.shelves:
+		if float(shelf[3])>0.0: rising += 1
+		else: falling += 1
+	check(winter.shelves.size()>=6 and mini(rising,falling)==0,"the shelves wind one way up the tower (%d up, %d down)" % [rising,falling])
+	var loose := 0
+	for tooth in winter.get("teeth") if "teeth" in winter else []:
+		var y: float = (tooth[0] as Vector2).y
+		if winter._split_near(y).is_empty() and y<winter.height-10.0: loose += 1
+	check("teeth" in winter and (winter.get("teeth") as Array).size()>=8 and loose==0,"cones stand on the loops and the crown only (%d elsewhere)" % loose)
+	# Tips are counted away from the cones, horns and islands, which are
+	# pointed on purpose.
+	var rock := RockSurface.make(layout)
+	var pointed: Array = []
+	for tooth in winter.get("teeth") if "teeth" in winter else []: pointed.append([tooth[0],4.0])
+	for shard in winter.shards: pointed.append([Vector2(float(shard[0]),float(shard[1])),4.5])
+	for horn in winter.horns: pointed.append([Vector2(float(horn[0]),(float(horn[1])+float(horn[2]))*.5),(float(horn[2])-float(horn[1]))*.6])
+	var stone := 0
+	var tips := 0
+	var y := 6.0
+	while y<winter.height-10.0:
+		var x := -19.0
+		while x<=19.0:
+			var at := Vector2(x,y)
+			if rock.distance(at)>0:
+				var spared := false
+				for spot in pointed:
+					if at.distance_to(spot[0])<float(spot[1]):
+						spared = true
+						break
+				if not spared:
+					stone += 1
+					var deepest := rock.distance(at)
+					for turn in range(12): deepest = maxf(deepest,rock.distance(at+Vector2.RIGHT.rotated(TAU*turn/12.0)*.9))
+					if deepest<.75: tips += 1
+			x += .5
+		y += .5
+	var share := float(tips)/stone
+	print("WINTER_TIPS ",share)
+	check(share<=.01,"the tower's own outline has no sharp tips (%.3f of the stone)" % share)
+
+# The baked snow peak dresses its own rock: rows of ice under the shelves,
+# crystals on its tops, every piece seated on the outline the player sees and
+# none in a heap.
+func winter_decor_tests() -> void:
+	var level := ResourceLoader.load(LevelBake.layout_path(2,0),"",ResourceLoader.CACHE_MODE_IGNORE) as LevelBake
+	var world := MountainWorld.new()
+	world.visuals_enabled = false
+	root.add_child(world)
+	world.setup(level.seed_value,2,MountainWorld.generation_version_for(2),false,0,true)
+	world.set_visual_quality("balanced")
+	world.load_bake(level)
+	var visuals: MassifVisuals = world.visuals
+	var shelf_ice := 0
+	var crystals := 0
+	var hung := true
+	var stood := true
+	var spots: Array[Vector2] = []
+	var snowing := 0
+	var blowing := 0
+	var chunks := world._ready_chunk()+1
+	for key in range(chunks):
+		var scenery := Node3D.new()
+		world.add_child(scenery)
+		await visuals.build_chunk(key,scenery)
+		if not scenery.find_children("Снегопад_*","GPUParticles3D",true,false).is_empty(): snowing += 1
+		blowing += scenery.find_children("Сдув_*","GPUParticles3D",true,false).size()
+		for holder: Node3D in scenery.get_children():
+			var name := String(holder.name)
+			var at := Vector2(holder.position.x,holder.position.y)
+			if name.begins_with("Подвес_"):
+				hung = hung and not visuals.open_at(at+Vector2(0,.12))
+				if name.begins_with("Подвес_полки"): shelf_ice += 1
+			elif name.begins_with("Кристалл_"):
+				crystals += 1
+				# A foot may rest on a top that rises up to .35 under it.
+				stood = stood and not visuals.open_at(at-Vector2(0,.1)) and visuals.open_at(at+Vector2(0,.45))
+			else: continue
+			spots.append(at)
+		scenery.free()
+	var heaped := 0
+	for spot in spots:
+		var near := 0
+		for other in spots: if other!=spot and other.distance_to(spot)<1.0: near += 1
+		if near>=2: heaped += 1
+	var slabs := 0
+	var rests := Node3D.new()
+	world.add_child(rests)
+	for ledge in world.layout.ledges:
+		visuals.build_ledge(ledge,rests)
+		if is_instance_valid(ledge.get("visual")) and (ledge["visual"] as Node).find_child("Снежная плита",false,false)!=null: slabs += 1
+	check(slabs>0 and slabs==world.layout.ledges.size(),"every rest on the peak is a snow slab of its rock (%d of %d)" % [slabs,world.layout.ledges.size()])
+	rests.free()
+	print("WINTER_DECOR shelf ice ",shelf_ice," crystals ",crystals," heaped ",heaped)
+	check(shelf_ice>=8,"ice hangs in rows under the snow shelves (%d)" % shelf_ice)
+	check(crystals>=2,"crystals stand on the tops of the snow peak (%d)" % crystals)
+	check(hung,"all ice hangs from the stone the player sees")
+	check(stood,"every crystal stands on the stone the player sees, open air over it")
+	check(heaped==0,"ice and crystals never pile up in one place (%d do)" % heaped)
+	# Snow falls over the whole climb and the wind lifts it off the tops; the
+	# battery preset goes without.
+	print("WINTER_WEATHER snowing ",snowing," of ",chunks," blowing ",blowing)
+	check(snowing==chunks,"snow falls over every band of the peak (%d of %d)" % [snowing,chunks])
+	check(blowing>=chunks,"the wind lifts snow off the tops (%d puffs)" % blowing)
+	world.set_visual_quality("battery")
+	var light := Node3D.new()
+	world.add_child(light)
+	await visuals.build_chunk(1,light)
+	check(light.find_children("Снегопад_*","GPUParticles3D",true,false).is_empty() and light.find_children("Сдув_*","GPUParticles3D",true,false).is_empty(),"the battery preset draws no snow particles")
+	light.free()
+	world.free()
+
+# The snow peak plays its own way: its far ways are glazed with ice, whose
+# slide always leaves the next grip in reach; falling ice hangs over the
+# crevasse act's far way; the main route never needs either.
+func winter_play_tests(layout: MaskLayout) -> void:
+	var main := {}
+	for id in layout.main_route: main[id] = true
+	var far_ice := 0
+	var main_ice := 0
+	var stuck := 0
+	for split in layout.splits_built:
+		var grips: Array = split["grips"]
+		for k in range(grips.size()):
+			var grip: Dictionary = layout.anchors[grips[k]]
+			if GripSpec.kind_of(grip)!=GripSpec.ICE: continue
+			far_ice += 1
+			var next: Vector2 = layout.anchors[grips[k+1]]["pos"] if k+1<grips.size() else layout.anchors[split["exit"]]["pos"]
+			if not RouteGraph.exit_after_effect(layout,grip,next): stuck += 1
+	for id in layout.main_route:
+		if GripSpec.kind_of(layout.anchors[id])==GripSpec.ICE: main_ice += 1
+	var icicles := 0
+	var far_icicles := 0
+	for hazard in layout.hazards:
+		if str(hazard["def"])!="icicle": continue
+		icicles += 1
+		for split in layout.splits_built:
+			if int(hazard.get("branch_anchor",-1)) in split["grips"]: far_icicles += 1
+	print("WINTER_PLAY far ice ",far_ice," main ice ",main_ice," stuck ",stuck," icicles ",icicles," on far ways ",far_icicles)
+	check(far_ice>=6 and main_ice==0,"the far ways are glazed with ice, the main route never (%d far, %d main)" % [far_ice,main_ice])
+	check(stuck==0,"every ice grip slides to where the next grip is in reach (%d do not)" % stuck)
+	check(icicles>=2 and far_icicles>=1,"falling ice hangs over the climb and over a far way (%d, %d on far ways)" % [icicles,far_icicles])
 
 # Rock has no ruled edges: no long dead-level rim and no long straight wall on
 # any route of the canyon. The very top is left out, its cap carries the summit.

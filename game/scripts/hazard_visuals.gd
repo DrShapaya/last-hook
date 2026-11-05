@@ -143,7 +143,7 @@ func _build_field(hazard: Dictionary, entry: Dictionary, random: RandomNumberGen
 	material.set_shader_parameter("speed",1.2 if marker!="snow" else 2.2)
 	entry["streak"] = material
 	# Streaks fill the zone; a main-path storm keeps them thin and sparse.
-	var count := 7 if not bool(hazard.get("affects_main",false)) else 12
+	var count := (7 if not bool(hazard.get("affects_main",false)) else 12)*(2 if marker=="snow" else 1)
 	var width := minf(rect.size.x,14.0) if bool(hazard.get("affects_main",false)) else rect.size.x
 	for index in range(count):
 		var at := Vector2(rect.position.x+(rect.size.x-width)*.5+random.randf()*width,rect.position.y+random.randf()*rect.size.y)
@@ -151,6 +151,34 @@ func _build_field(hazard: Dictionary, entry: Dictionary, random: RandomNumberGen
 		var length := random.randf_range(1.4,2.6)
 		var streak := _quad(node,Vector2(length,random.randf_range(.05,.09)),material,Vector3(at.x,at.y,2.75+random.randf()*.15),direction.angle())
 		streak.name = "Поток_%d" % index
+	# A blizzard gust carries a cloud of snow across its zone: thin in the
+	# calm, thick while it blows (update).
+	if marker=="snow" and world.visual_quality!="battery":
+		var cloud := GPUParticles3D.new()
+		cloud.name = "Метель"
+		cloud.amount = 220 if world.visual_quality=="high" else 150
+		cloud.lifetime = 1.4
+		cloud.preprocess = 1.4
+		cloud.position = Vector3(rect.get_center().x-direction.x*rect.size.x*.5,rect.get_center().y,2.4)
+		cloud.visibility_aabb = AABB(Vector3(-4,-rect.size.y*.6,-1.5),Vector3(rect.size.x+8,rect.size.y*1.2,3))
+		cloud.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var process := ParticleProcessMaterial.new()
+		process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+		process.emission_box_extents = Vector3(1.0,rect.size.y*.5,.6)
+		process.direction = Vector3(direction.x,direction.y,0)
+		process.spread = 8.0
+		process.initial_velocity_min = rect.size.x*.6
+		process.initial_velocity_max = rect.size.x*.95
+		process.gravity = Vector3(0,-.4,0)
+		process.scale_min = .6
+		process.scale_max = 1.5
+		# Streaks lie along the wind.
+		process.angle_min = -rad_to_deg(direction.angle())
+		process.angle_max = process.angle_min
+		cloud.process_material = process
+		cloud.draw_pass_1 = MassifVisuals.snow_streak(.75,direction.angle())
+		node.add_child(cloud)
+		entry["cloud"] = cloud
 	# Markers stand at the pocket's edges and point where it blows.
 	var markers: Array = []
 	var spots: Array = [Vector2(rect.position.x+.4,rect.end.y-.3),Vector2(rect.end.x-.4,rect.end.y-.3),Vector2(rect.get_center().x,rect.position.y+.5)]
@@ -333,6 +361,8 @@ func update(time: float, hero: Vector2, haze_amount: float, camera: Vector2) -> 
 				if not is_inf(float(hazard["active_time"])):
 					strength = .06 if name=="calm" else lerpf(.12,.5,progress) if name=="telegraph" else .75
 				(entry["streak"] as ShaderMaterial).set_shader_parameter("strength",strength)
+				if entry.has("cloud") and is_instance_valid(entry["cloud"]):
+					(entry["cloud"] as GPUParticles3D).amount_ratio = clampf(strength*1.3,.08,1.0)
 				var flap := (.25 if name=="calm" and not is_inf(float(hazard["active_time"])) else 1.0)
 				if not entry.has("cloths"):
 					var cloths: Array[Node3D] = []

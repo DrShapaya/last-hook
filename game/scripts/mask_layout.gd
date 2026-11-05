@@ -673,6 +673,7 @@ func _build_split(index: int, spec: Dictionary) -> void:
 		from_id = id
 		ids.append(id)
 	_add_edge(Vector2i(from_id,main_route[exit_row]))
+	if rock_form=="winter": _glaze_split(ids,points,exit,(anchors[main_route[entry_row]]["pos"].x+exit.x)*.5)
 	# The crystal at the parting points at both ways.
 	var fork: Dictionary = anchors[main_route[entry_row]]
 	fork["kind"] = GripSpec.CRYSTAL
@@ -682,6 +683,27 @@ func _build_split(index: int, spec: Dictionary) -> void:
 	if economy_loot: _stock_split(entry_row,exit_row,points)
 	_add_split_risk(str(spec.get("risk","")),entry_row,exit_row,ids,points)
 	splits_built.append({"entry":main_route[entry_row],"exit":main_route[exit_row],"grips":ids,"style":style})
+
+# The snow peak's far ways are glazed: every other grip out across the sky is
+# ice, wherever its slide still leaves the next grip within reach. The first
+# and last grips stay stone, so the way is entered and left on sure holds.
+func _glaze_split(ids: Array[int], points: PackedVector2Array, exit: Vector2, axis: float) -> void:
+	var k := 1
+	while k<ids.size()-1:
+		var grip: Dictionary = anchors[ids[k]]
+		if absf(points[k].x-axis)<ISOLATION*.6:
+			k += 1
+			continue
+		grip["kind"] = GripSpec.ICE
+		grip["slide_dir"] = slide_direction_at(points[k])
+		var next: Vector2 = points[k+1] if k+1<points.size() else exit
+		if RouteGraph.exit_after_effect(self,grip,next):
+			network_anchor_ids.erase(ids[k])
+			k += 2
+		else:
+			grip["kind"] = GripSpec.STONE
+			grip.erase("slide_dir")
+			k += 1
 
 # A hazard over the far part of the second way: the long way pays better and
 # costs more, while the direct way stays quiet.
@@ -699,10 +721,21 @@ func _add_split_risk(hazard_id: String, entry_row: int, exit_row: int, ids: Arra
 		box = box.expand(points[k]) if found else Rect2(points[k],Vector2.ZERO)
 		found = true
 	if not found: return
-	var outward := int(signf(points[far].x-axis))
-	var hazard := _plan_hazard(hazard_id,row_of(entry_row),points[far],entry,exit,outward,entry_row)
-	if hazard.is_empty() or not hazard.has("rect"): return
-	hazard["rect"] = box.grow(1.4)
+	# The far turn first, then the other grips out across the sky.
+	var order: Array[int] = [far]
+	for k in range(points.size()):
+		if k!=far and absf(points[k].x-axis)>=ISOLATION*.6: order.append(k)
+	var hazard := {}
+	for k in order:
+		hazard = _plan_hazard(hazard_id,row_of(entry_row),points[k],entry,exit,int(signf(points[k].x-axis)),entry_row)
+		if not hazard.is_empty():
+			far = k
+			break
+	if hazard.is_empty(): return
+	# A falling hazard hangs over the far turn itself; a field covers the
+	# whole far part.
+	if hazard.has("rect"): hazard["rect"] = box.grow(1.4)
+	elif not hazard.has("x"): return
 	_commit_hazard(hazard,{"anchor":ids[far],"hazards":[]})
 
 # The second way is where the reward is. The valuables of the main stretch

@@ -52,7 +52,7 @@ static func climb_route(game, count: int, log: Array = [], route: Array = []) ->
 						goal = hit["pos"]
 						clear_shot = true
 				var toward: Vector2 = (goal-game.sim.pos).normalized()
-				if clear_shot and game.sim.pos.distance_to(goal)<5.2 and game.sim.vel.dot(toward)>.5:
+				if clear_shot and game.sim.pos.distance_to(goal)<5.2 and game.sim.vel.dot(toward)>.5 and stays_in_reach(game,goal):
 					touch_throw(game,goal)
 					fired = true
 			game._physics_process(1.0/120)
@@ -66,6 +66,16 @@ static func climb_route(game, count: int, log: Array = [], route: Array = []) ->
 			log.append("could not reach grip %d at %s from %s" % [route_index,str(target),str(game.sim.pos)])
 			return reached
 	return reached
+
+# The rope's reach is measured from the hero while the hook flies: a throw
+# near the limit while the swing carries the hero away runs out of rope
+# before the hook arrives (summer r2, its last hop). True when the goal is
+# still in reach where the hero, falling free once the throw lets go of the
+# rope, will be when the hook gets there.
+static func stays_in_reach(game, goal: Vector2) -> bool:
+	var flight: float = float(HookFlight.aim_solution(game.sim.pos,goal,float(game.model.throw_speed()),game.sim.vel)["time"])
+	var later: Vector2 = game.sim.pos+game.sim.vel*flight+Vector2(0,-game.sim.gravity)*(flight*flight*.5)
+	return later.distance_to(goal)<float(game.model.shot_range())-.25
 
 # The main route with every split taken instead of its main stretch.
 static func route_through_splits(world) -> Array:

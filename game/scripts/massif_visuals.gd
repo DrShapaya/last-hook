@@ -360,10 +360,20 @@ func _generate_band(band: int, owner: Object = null) -> void:
 			# Corners of a full boulder reach about 1.3 half-sizes out: this keeps
 			# them within the planned circle.
 			var size := Vector2(radius*1.55,radius*1.4)
+			if str(entry[4])=="bridge":
+				# A flat stone of a loop's bridge: wide, low, a little forward,
+				# its top level (MaskLayout._bridge_stones).
+				size = Vector2(radius*1.55,radius*1.55/MaskLayout.BRIDGE_SQUASH)
+				_block(list,band,"bridge","slab",at,size,random.randf_range(-.75,-.55),random,-3.4,null,.04)
+				continue
 			# Single boulders that keep inside their planned circle: a host's
 			# lobes would grow over the painted sky windows.
 			var role := "body" if str(entry[4])=="body" else "trunk" if radius>=2.4 else "island"
 			var z_rim := lerpf(-2.8,-1.2,depth) if radius>=2.4 else lerpf(-2.2,-1.0,depth)
+			# Summer boulders stand out by different amounts, so the joints
+			# between them fall into shadow (summerClose.png); the large ones
+			# lead, the small ones in the joints sit back.
+			if _summer_boulders(): z_rim += random.randf_range(-.4,.2)+clampf((radius-2.0)*.12,-.25,.3)
 			var mass := _block(list,band,role,"island",at,size,z_rim,random,-4.4 if radius>=2.4 else -3.4)
 			if mass!=null and role=="island": planned_islands.append([mass])
 	if not planned:
@@ -833,6 +843,78 @@ func _shelf_icicles(index: int, parent: Node3D, random: RandomNumberGenerator) -
 			placed += 1
 	return placed
 
+const SUMMER_STONE := Color("7d776c")
+const SUMMER_SHADE := Color("4a4850")
+
+const MOSS_TOP := Color("6b843a")
+const MOSS_DARK := Color("43562b")
+
+func _summer_boulders() -> bool:
+	return layout is MaskLayout and (layout as MaskLayout).rock_form=="boulder"
+
+# How much moss summer stone carries at a point (docs/SUMMER_LEVEL_PLAN.md,
+# stage 2): all the way up, thickest at the foot and by the rest ledges,
+# thinning towards the summit.
+func summer_moss(at: Vector2) -> float:
+	var top := maxf(layout.summit,40.0) if layout.finite else 120.0
+	var moss := lerpf(.8,.38,clampf(at.y/top,0,1))
+	moss += .2*(1.0-smoothstep(4.0,14.0,at.y))
+	for ledge in layout.ledges:
+		var deck := Vector2(clampf(at.x,float(ledge["left"]),float(ledge["right"])),float(ledge["top"]))
+		if deck.distance_to(at)<4.0: moss += .25*(1.0-deck.distance_to(at)/4.0)
+	# Thickest of all by the water (owner, 2026-11-05).
+	if layout is MaskLayout:
+		for place: Dictionary in (layout as MaskLayout).summer_places:
+			if str(place["kind"])!="waterfall": continue
+			var spring := Vector2(float(place["at"][0]),float(place["at"][1]))
+			if spring.distance_to(at)<6.0: moss += .45*(1.0-spring.distance_to(at)/6.0)
+	return clampf(moss,0,1.4)
+
+# A boulder whose foot hangs over open air: its underside gets a band of moss,
+# as under the shelves and islands on summerClose.png.
+func _hangs_over_air(mass: RockMassSpec) -> bool:
+	var foot := Vector2(INF,INF)
+	for point in mass.outer_contour:
+		if point.y<foot.y: foot = point
+	return open_at(foot-Vector2(0,.45)) and open_at(foot-Vector2(0,1.2))
+
+# Grass tufts along the top edges of summer boulders, mostly in the joints
+# where the next boulder rests above, never on a gameplay object or the
+# route spine. Built into the chunk's rock mesh.
+func _summer_tufts(index: int, surface: SurfaceTool) -> int:
+	var random := layout.rng(index,913)
+	var budget := 150 if quality=="high" else 110 if quality=="balanced" else 50
+	var emitted := 0
+	var placed := 0
+	var masses: Array = front_band(index).duplicate()
+	for mass: RockMassSpec in masses:
+		if placed>=budget: break
+		if mass.bounds.size.x<1.4: continue
+		var moss := summer_moss(mass.centroid())
+		var center := mass.centroid()
+		for edge in mass.top_edges:
+			var a: Vector2 = mass.outer_contour[edge]
+			var b: Vector2 = mass.outer_contour[(edge+1)%mass.outer_contour.size()]
+			var spots := clampi(int(a.distance_to(b)/.8),1,3)
+			for spot in range(spots):
+				if placed>=budget or random.randf()>.55*moss: continue
+				var rim := a.lerp(b,(spot+random.randf_range(.25,.75))/spots)
+				var at := rim.lerp(center,.12/maxf(rim.distance_to(center),.12))
+				# Joint: stone of another boulder just above the rim. An open top
+				# keeps some tufts too, fewer (the outline has its own decor).
+				var joint := not open_at(rim+Vector2(0,.35))
+				if not joint and random.randf()<.6: continue
+				var hit := surface_query(at)
+				if not hit.valid() or hit.mass!=mass: continue
+				if _objects_near(at,.55) or not _decor_route_clear(at,.5): continue
+				var height := random.randf_range(.3,.52)*(1.1 if joint else .9)
+				# In front of the stone its blades cover: in a joint they rise over
+				# the foot of the boulder above, which stands further forward.
+				var front := maxf(hit.position.z,_front_over(Rect2(at.x-.3,at.y,.6,height)))
+				emitted += RockMassBuilder.emit_tuft(surface,Vector3(at.x,at.y,front+.04),height,random.randf_range(.45,.75),MOSS_TOP.lightened(.12),MOSS_DARK,random.randi_range(0,9999))
+				placed += 1
+	return emitted
+
 func _palette(profile: GripBiomeProfile, height: float, mass: RockMassSpec) -> Dictionary:
 	var rock: Dictionary = profile.rock_material
 	# Each host body has its own shade of the zone's rock.
@@ -842,6 +924,20 @@ func _palette(profile: GripBiomeProfile, height: float, mass: RockMassSpec) -> D
 	var facets: Array = []
 	for color in rock["facet_palette"]: facets.append(base.lerp(color,.5))
 	var under: Color = base.lerp(rock["underside_tint"],.42).darkened(.16)
+	if _summer_boulders():
+		# Summer stone is light warm grey (summerClose.png), not the dark cold
+		# grey of the shared profiles; each boulder lit from above.
+		base = base.lerp(SUMMER_STONE,.7)
+		facets.clear()
+		for color in rock["facet_palette"]: facets.append(base.lerp(color.lerp(SUMMER_STONE,.6),.45))
+		under = base.lerp(SUMMER_SHADE,.5)
+		return {"base":base,"facets":facets,"rise":.36,
+			"top":base.lerp(rock["top_light_tint"],.3).lightened(.03),
+			"side":base.darkened(.06),
+			"under":under,
+			"inner":under.darkened(.12),
+			"moss":summer_moss(mass.centroid())+(.45 if mass.role=="bridge" else 0.0),"moss_top":MOSS_TOP,"moss_dark":MOSS_DARK,
+			"hang_moss":_hangs_over_air(mass)}
 	return {"base":base,"facets":facets,
 		"top":base.lerp(rock["top_light_tint"],.26).lightened(.06),
 		"side":base.lerp(rock["underside_tint"],.12).darkened(.04),
@@ -878,6 +974,7 @@ func _build_masses(index: int, parent: Node3D) -> void:
 		if not await pause(parent): return
 		var center: Vector2 = mass.centroid()
 		emitted += RockMassBuilder.emit(surface,mass,_palette(profile_at(center.y),center.y,mass),_cavity,walls)
+	if emitted>0 and _summer_boulders(): emitted += _summer_tufts(index,surface)
 	if emitted==0: return
 	var instance := MeshInstance3D.new()
 	instance.name = "Скальный массив_%d" % index
@@ -887,6 +984,7 @@ func _build_masses(index: int, parent: Node3D) -> void:
 	# the stone behind them. Battery has no shadow map at all.
 	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if quality!="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(instance)
+	if _summer_boulders(): _add_summer_air(index,parent)
 
 func _build_rock_surface(index: int, parent: Node3D) -> void:
 	var rock := RockSurface.make(layout as MaskLayout)
@@ -936,6 +1034,151 @@ func _add_dust(index: int, parent: Node3D) -> void:
 	grain.material = material
 	dust.draw_pass_1 = grain
 	parent.add_child(dust)
+
+# --- Summer air (docs/SUMMER_LEVEL_PLAN.md, stage 5) --------------------------------
+
+# Light summer weather of a chunk: a few leaves drifting on the breeze (none
+# on battery) and a pale haze round the foot, behind the stone.
+const SUMMER_BREEZE := Vector3(1.0,-.18,0)
+
+func _add_summer_air(index: int, parent: Node3D) -> void:
+	if quality!="battery":
+		var leaves := summer_leaves(10 if quality=="high" else 6,Vector3(22,BAND*.5,.4),SUMMER_BREEZE,Vector2(.5,1.1),8.0)
+		leaves.name = "Листья_%d" % index
+		leaves.position = Vector3(0,index*BAND+BAND*.5,2.6)
+		parent.add_child(leaves)
+	if index==0:
+		var haze := MeshInstance3D.new()
+		haze.name = "Дымка подножия"
+		var plane := QuadMesh.new()
+		plane.size = Vector2(56,11)
+		haze.mesh = plane
+		var material := ShaderMaterial.new()
+		var shader := Shader.new()
+		shader.code = HAZE_CODE
+		material.shader = shader
+		haze.material_override = material
+		haze.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		haze.position = Vector3(0,2.5,-5.6)
+		parent.add_child(haze)
+
+const HAZE_CODE := """shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled, depth_draw_never;
+void fragment(){
+	float low = 1.0-smoothstep(0.0,1.0,1.0-UV.y);
+	float sides = smoothstep(0.0,.12,UV.x)*smoothstep(1.0,.88,UV.x);
+	ALBEDO = vec3(.86,.93,.95);
+	ALPHA = low*low*sides*.5;
+}"""
+
+# Leaves on the wind: soft green and gold flecks turning as they go. `drift`
+# is the wind's way, `speed` its range; shared by the breeze, the wind
+# pockets (HazardVisuals) and nothing else.
+static var leaf_mesh: QuadMesh
+
+static func summer_leaves(amount: int, extents: Vector3, drift: Vector3, speed: Vector2, lifetime: float) -> GPUParticles3D:
+	var leaves := GPUParticles3D.new()
+	leaves.amount = maxi(1,amount)
+	leaves.lifetime = lifetime
+	leaves.preprocess = lifetime
+	leaves.visibility_aabb = AABB(-extents-Vector3(6,6,1),extents*2.0+Vector3(12,12,2))
+	leaves.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var process := ParticleProcessMaterial.new()
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	process.emission_box_extents = extents
+	process.direction = drift.normalized()
+	process.spread = 14.0
+	process.initial_velocity_min = speed.x
+	process.initial_velocity_max = speed.y
+	process.gravity = Vector3(0,-.12,0)
+	process.angle_min = -180.0
+	process.angle_max = 180.0
+	process.angular_velocity_min = -160.0
+	process.angular_velocity_max = 160.0
+	process.turbulence_enabled = true
+	process.turbulence_noise_strength = .6
+	process.turbulence_noise_scale = 4.0
+	process.scale_min = .7
+	process.scale_max = 1.25
+	var colors := Gradient.new()
+	# Greens only: a gold fleck would read as a coin.
+	colors.set_color(0,Color("6f9a3c"))
+	colors.set_color(1,Color("a3bb52"))
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = colors
+	process.color_initial_ramp = ramp
+	var fade := Gradient.new()
+	fade.offsets = PackedFloat32Array([0.0,.12,.85,1.0])
+	fade.colors = PackedColorArray([Color(1,1,1,0),Color.WHITE,Color.WHITE,Color(1,1,1,0)])
+	var alpha := GradientTexture1D.new()
+	alpha.gradient = fade
+	process.color_ramp = alpha
+	leaves.process_material = process
+	if leaf_mesh==null:
+		leaf_mesh = QuadMesh.new()
+		leaf_mesh.size = Vector2(.36,.2)
+		var material := StandardMaterial3D.new()
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		material.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		material.vertex_color_use_as_albedo = true
+		var shape := GradientTexture2D.new()
+		shape.fill = GradientTexture2D.FILL_RADIAL
+		shape.fill_from = Vector2(.5,.5)
+		shape.fill_to = Vector2(.5,0.0)
+		var edge := Gradient.new()
+		edge.offsets = PackedFloat32Array([0.0,.75,1.0])
+		edge.colors = PackedColorArray([Color.WHITE,Color.WHITE,Color(1,1,1,0)])
+		shape.gradient = edge
+		shape.width = 32
+		shape.height = 32
+		material.albedo_texture = shape
+		leaf_mesh.material = material
+	leaves.draw_pass_1 = leaf_mesh
+	return leaves
+
+# A few butterflies wandering round a tree's crown.
+func _summer_butterflies(parent: Node3D, crown: Vector3) -> void:
+	if quality=="battery": return
+	var flight := GPUParticles3D.new()
+	flight.name = "Бабочки_%d" % roundi(crown.x*10.0+crown.y*1000.0)
+	flight.amount = 3
+	flight.lifetime = 9.0
+	flight.preprocess = 9.0
+	flight.position = crown
+	flight.visibility_aabb = AABB(Vector3(-4,-4,-1),Vector3(8,8,2))
+	flight.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var process := ParticleProcessMaterial.new()
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	process.emission_box_extents = Vector3(1.4,1.0,.2)
+	process.direction = Vector3(1,.3,0)
+	process.spread = 180.0
+	process.initial_velocity_min = .2
+	process.initial_velocity_max = .5
+	process.gravity = Vector3.ZERO
+	process.turbulence_enabled = true
+	process.turbulence_noise_strength = 1.4
+	process.turbulence_noise_scale = 2.2
+	process.turbulence_noise_speed = Vector3(.3,.3,0)
+	process.scale_min = .8
+	process.scale_max = 1.1
+	var colors := Gradient.new()
+	colors.set_color(0,Color("fff6d8"))
+	colors.set_color(1,Color("f2b53c"))
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = colors
+	process.color_initial_ramp = ramp
+	flight.process_material = process
+	var wing := QuadMesh.new()
+	wing.size = Vector2(.26,.18)
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	material.vertex_color_use_as_albedo = true
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.albedo_texture = leaf_mesh.material.albedo_texture if leaf_mesh!=null else null
+	wing.material = material
+	flight.draw_pass_1 = wing
+	parent.add_child(flight)
 
 # A soft round flake, shared by all snow of the peak.
 static var flake_material: StandardMaterial3D
@@ -1577,6 +1820,155 @@ func _build_decor(index: int, parent: Node3D) -> void:
 		if seated: _take_kin(index,family,anchor)
 		placed += 1
 
+# --- Summer places (docs/SUMMER_LEVEL_PLAN.md, stage 4) -----------------------------
+
+# Every summer island is a place: a tree, flags, bushes or a waterfall on top
+# and a vine under it; big trees also stand on the hills of the foot
+# (MaskLayout.summer_places).
+func _build_summer_places(index: int, parent: Node3D) -> void:
+	var random := layout.rng(index,979)
+	var count := 0
+	for place: Dictionary in (layout as MaskLayout).summer_places:
+		var at := Vector2(float(place["at"][0]),float(place["at"][1]))
+		if int(floor(at.y/BAND))!=index: continue
+		if not await pause(parent): return
+		var island: Array = place["island"]
+		match str(place["kind"]):
+			"tree": _summer_piece(index,parent,"pine",at,count,random,island.is_empty())
+			"flags": _summer_piece(index,parent,"flag_line",at,count,random,false)
+			"bush": _summer_bushes(index,parent,at,count,random)
+			"waterfall":
+				_summer_waterfall(index,parent,at,island)
+				_summer_bushes(index,parent,at,count,random)
+		if not island.is_empty(): _summer_vine(index,parent,island,count,random)
+		count += 1
+
+func _summer_piece(index: int, parent: Node3D, family: String, at: Vector2, count: int, random: RandomNumberGenerator, roomy: bool) -> void:
+	var seat := _landmark_spot(at,family,4.0,_landmark_clear,index)
+	# A crowded hill of the foot: the nearest top that keeps an act landmark's
+	# clearance. An island keeps its piece on itself or goes without.
+	if not seat.is_finite() and roomy: seat = _landmark_spot(at,family,5.5,_mark_clear,index)
+	if not seat.is_finite(): return
+	var stand := Node3D.new()
+	stand.name = "Крупный элемент_место_%d" % count
+	parent.add_child(stand)
+	_stand_landmark(index,stand,family,seat,random)
+	if family in LandmarkVisuals.TREES: _summer_butterflies(parent,Vector3(seat.x,seat.y+3.2,stand.position.z+.6))
+
+func _summer_bushes(index: int, parent: Node3D, at: Vector2, count: int, random: RandomNumberGenerator) -> void:
+	var profile := profile_at(at.y)
+	for bush in range(3):
+		var entry := FloraModels.pick("bush",random) if bush==0 else FloraModels.pick_top(profile,random)
+		if entry.is_empty(): continue
+		var size := FloraModels.size_of(entry,1.0)
+		var rim := at+Vector2((bush-1)*1.1+random.randf_range(-.3,.3),.6)
+		var seat := _decor_seat("grass",rim,rim,size,false)
+		if not seat.is_finite() or not _decor_route_clear(seat,1.2) or _decor_blocked(seat,.4): continue
+		var rect := Rect2(seat.x-size.x*.5,seat.y,size.x,size.y)
+		if _taken(index,rect.grow(.1)) or not _decor_fits(rect,false,false): continue
+		var holder := Node3D.new()
+		holder.name = "Декор_место_%d_%d" % [count,bush]
+		parent.add_child(holder)
+		holder.position = Vector3(seat.x,seat.y,_front_over(rect)+.03)
+		FloraModels.plant(holder,entry,quality!="battery",1.0)
+		_take(index,rect)
+
+# A vine hanging from the island's underside, over open air.
+func _summer_vine(index: int, parent: Node3D, island: Array, count: int, random: RandomNumberGenerator) -> void:
+	var entry := FloraModels.pick_hanging(profile_at(float(island[2])),random)
+	if entry.is_empty(): return
+	var size := FloraModels.size_of(entry,1.0)
+	var middle := (float(island[0])+float(island[1]))*.5
+	for attempt in range(5):
+		var x := middle+random.randf_range(-1.2,1.2)
+		var under := _ceiling_over(x,float(island[2])-1.5,3.0)
+		if under==INF: continue
+		var anchor := _hang_seat(Vector2(x,under-.5),size)
+		if not anchor.is_finite(): continue
+		var rect := Rect2(anchor.x-size.x*.5,anchor.y-size.y,size.x,size.y)
+		if _taken(index,rect.grow(.1)) or not _decor_fits(rect,true,false): continue
+		var holder := Node3D.new()
+		holder.name = "Декор_лоза_%d" % count
+		parent.add_child(holder)
+		holder.position = Vector3(anchor.x,anchor.y,_front_over(rect)+.03)
+		FloraModels.plant(holder,entry,quality!="battery",1.0)
+		_take(index,rect)
+		return
+
+# A root grip is a root of the mountain (docs/SUMMER_LEVEL_PLAN.md, stage 6):
+# a hanging root trails down from under it, behind the grip and on the stone,
+# so what holds the hero and what grows there look the same.
+func _summer_root_vines(index: int, parent: Node3D) -> void:
+	var random := layout.rng(index,981)
+	for id in layout.nearby_ids(index*BAND,(index+1)*BAND):
+		var grip: Dictionary = layout.anchors[id]
+		if GripSpec.kind_of(grip)!=GripSpec.ROOT: continue
+		var at: Vector2 = grip["pos"]
+		if int(floor(at.y/BAND))!=index: continue
+		var entry := FloraModels.pick("vine_root",random,"hang")
+		if entry.is_empty(): continue
+		var size := FloraModels.size_of(entry,.85)
+		var dims: Vector2 = grip.get("dimensions",Vector2(1.6,.65))
+		var anchor := Vector2(at.x+random.randf_range(-.2,.2),at.y-dims.y*.35)
+		var rect := Rect2(anchor.x-size.x*.5,anchor.y-size.y,size.x,size.y)
+		# All of it on stone: a root does not dangle into the sky.
+		var on_stone := true
+		for share in [.3,.6,.95]:
+			if open_at(Vector2(anchor.x,anchor.y-size.y*share)): on_stone = false
+		if not on_stone or _taken(index,rect): continue
+		var holder := Node3D.new()
+		holder.name = "Декор_корень_%d" % id
+		parent.add_child(holder)
+		holder.position = Vector3(anchor.x,anchor.y,_front_over(rect)+.03)
+		FloraModels.plant(holder,entry,quality!="battery",.85)
+		_take(index,rect)
+
+# Water pours over the outer edge of an island and falls into the haze below.
+const WATERFALL_FALL := 9.0
+static var waterfall_shader: Shader
+
+func _summer_waterfall(index: int, parent: Node3D, at: Vector2, island: Array) -> void:
+	var middle := (float(island[0])+float(island[1]))*.5
+	var side := signf(middle-_route_x(at.y)) if absf(middle-_route_x(at.y))>.5 else 1.0
+	var edge := at.x
+	while not open_at(Vector2(edge+side*.25,at.y-.4)) and absf(edge-at.x)<6.0: edge += side*.25
+	var x := edge-side*.45
+	var top := _ground_under(x,at.y+1.5,3.0)
+	if top==-INF: return
+	var bottom := float(island[2])-WATERFALL_FALL
+	var rect := Rect2(x-.45,bottom,.9,top-bottom)
+	var shape := QuadMesh.new()
+	shape.size = Vector2(.9,top-bottom)
+	if waterfall_shader==null:
+		waterfall_shader = Shader.new()
+		waterfall_shader.code = WATERFALL_CODE
+	var material := ShaderMaterial.new()
+	material.shader = waterfall_shader
+	material.set_shader_parameter("length_units",top-bottom)
+	var water := MeshInstance3D.new()
+	water.name = "Водопад"
+	water.mesh = shape
+	water.material_override = material
+	water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	water.position = Vector3(x,(top+bottom)*.5,_front_over(Rect2(x-.45,top-3.0,.9,3.0))+.06)
+	parent.add_child(water)
+	_take(index,rect.grow(.2))
+
+const WATERFALL_CODE := """shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled, depth_draw_never;
+uniform float length_units = 10.0;
+void fragment(){
+	float y = UV.y*length_units;
+	float side = abs(UV.x-.5)*2.0;
+	float body = 1.0-smoothstep(.55,1.0,side);
+	float flow = fract(y*.42-TIME*1.4+sin(UV.x*19.0)*.25);
+	float streak = smoothstep(.0,.12,flow)*(1.0-smoothstep(.35,.7,flow));
+	float lip = 1.0-smoothstep(.0,.6,y);
+	vec3 water = mix(vec3(.42,.68,.88),vec3(.9,.96,1.0),clamp(streak*.65+lip*.8,0.0,1.0));
+	float fade = 1.0-smoothstep(length_units*.5,length_units,y);
+	ALBEDO = water;
+	ALPHA = body*fade*(.72+.25*streak);
+}"""
+
 func _build_plant(holder: Node3D, random: RandomNumberGenerator, rim: float, profile: GripBiomeProfile, _detail: bool) -> void:
 	# The plant a place grows on a lit top: grass and bushes, desert plants
 	# and cacti, or snow plants (FloraModels).
@@ -1644,6 +2036,11 @@ func _build_landmarks(index: int, parent: Node3D) -> void:
 		var foot := summit_foot(world.summit_flag_point())
 		_take(index,Rect2(foot.x-.6,foot.y,3.0,3.4).grow(1.0))
 	if _seats_on_view(): _build_act_marks(index,parent)
+	if _summer_boulders() and not (layout as MaskLayout).summer_places.is_empty():
+		# Summer: the places planned from the mask take the island pieces' part.
+		await _build_summer_places(index,parent)
+		_summer_root_vines(index,parent)
+		return
 	for members in band_islands.get(index,[]):
 		if placed>=budget: break
 		if not await pause(parent): return

@@ -179,6 +179,14 @@ func _build_field(hazard: Dictionary, entry: Dictionary, random: RandomNumberGen
 		cloud.draw_pass_1 = MassifVisuals.snow_streak(.75,direction.angle())
 		node.add_child(cloud)
 		entry["cloud"] = cloud
+	# A summer wind pocket carries leaves across it, the way it pushes
+	# (docs/SUMMER_LEVEL_PLAN.md, stage 5); fewer on battery.
+	if marker=="flag":
+		var leaves := MassifVisuals.summer_leaves(6 if world.visual_quality=="battery" else 18 if world.visual_quality=="high" else 12,
+			Vector3(1.0,rect.size.y*.45,.4),Vector3(direction.x,direction.y,0),Vector2(rect.size.x*.25,rect.size.x*.4),3.2)
+		leaves.name = "Листья ветра"
+		leaves.position = Vector3(rect.get_center().x-direction.x*rect.size.x*.5,rect.get_center().y,2.7)
+		node.add_child(leaves)
 	# Markers stand at the pocket's edges and point where it blows.
 	var markers: Array = []
 	var spots: Array = [Vector2(rect.position.x+.4,rect.end.y-.3),Vector2(rect.end.x-.4,rect.end.y-.3),Vector2(rect.get_center().x,rect.position.y+.5)]

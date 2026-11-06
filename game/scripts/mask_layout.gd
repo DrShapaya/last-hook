@@ -41,6 +41,10 @@ var rock_marks: Array = []
 var rock_caves: Array = []
 # Rocks wedged over gaps for the route: stone the mask itself does not have.
 var wedged_rocks: Array = []
+# Summer set pieces planned from the mask (docs/SUMMER_LEVEL_PLAN.md, stage 4):
+# {"kind": tree|flags|bush|waterfall, "at": top point, "island": [left, right,
+# bottom] or []}. MassifVisuals seats them on the stone in view.
+var summer_places: Array = []
 var rock_grid: PackedFloat32Array = PackedFloat32Array()
 var rock_grid_size: Vector2i = Vector2i.ZERO
 var rock_grid_origin: Vector2 = Vector2.ZERO
@@ -69,6 +73,7 @@ func use_source(level: LevelSource) -> void:
 	_corridor = _corridor_rows()
 	_build_edges()
 	_plan_relief()
+	_plan_summer_places()
 	for component in _components("rest"):
 		var bounds := Rect2(component[0],Vector2.ZERO)
 		for point in component: bounds = bounds.expand(point)
@@ -238,6 +243,9 @@ func _plan_relief() -> void:
 			var jitter := Vector2(random.randf_range(-.4,.4),random.randf_range(-.4,.4))
 			candidates.append([inside,source.to_world(Vector2(x,y))+jitter,depth[y*_width+x]/255.0])
 	candidates.sort_custom(func(a: Array, b: Array) -> bool: return a[0]>b[0])
+	if rock_form=="boulder":
+		relief = _boulder_relief(candidates,random)
+		return
 	var placed: Array = []
 	for candidate in candidates:
 		var at: Vector2 = candidate[1]
@@ -254,6 +262,220 @@ func _plan_relief() -> void:
 		var entry := [snappedf(at.x,.01),snappedf(at.y,.01),snappedf(radius,.01),snappedf(float(candidate[2]),.01),role]
 		placed.append(entry)
 	relief = placed
+
+# Summer boulders (docs/SUMMER_LEVEL_PLAN.md, stage 1): a size hierarchy, as
+# on references/location/summerClose.png. The deepest rock takes large load-
+# bearing boulders; each later one only gets the room its neighbours leave,
+# so medium ones gather round the large and small ones fall into the joints.
+# The edge is made of medium boulders set back into the mass, not a string of
+# pebbles along the painted outline.
+const BOULDER_MAX := 5.4
+const BOULDER_MIN := 1.0
+# A boulder's radius against the depth of its centre: its contour reaches
+# about one radius out, so it keeps (nearly) inside the painted mass.
+const BOULDER_FIT := 1.0
+const BOULDER_SPILL := .45
+const BOULDER_REACH := .95
+const BOULDER_OVERLAP := .45
+
+func _boulder_relief(candidates: Array, random: RandomNumberGenerator) -> Array:
+	var placed: Array = _bridge_stones(random)
+	for candidate in candidates:
+		var point: Vector2 = candidate[1]
+		# A boulder covers about its radius round its centre (corners of a full
+		# contour reach 1.3 half sizes, see MassifVisuals._generate_band).
+		var covered := false
+		for other in placed:
+			if _boulder_covers(other,point):
+				covered = true
+				break
+		if covered: continue
+		# The largest boulder that still covers this point: its centre may move
+		# a little into the mass or along the edge, away from its neighbours,
+		# so the outline is made of medium boulders and not of pebbles.
+		var at := point
+		var radius := 0.0
+		var phase := random.randf()*TAU
+		for ring in range(4):
+			for turn in range(1 if ring==0 else 7):
+				var angle := phase+turn*TAU/7.0
+				var spot := point+Vector2(cos(angle),sin(angle))*ring*.75
+				var size := minf(minf(_boulder_fit(inside_distance(spot)),BOULDER_MAX),_boulder_room(placed,spot))
+				if size>radius and spot.distance_to(point)<=size*BOULDER_REACH*.92:
+					radius = size
+					at = spot
+		# Variety in size, but never so small the point falls outside.
+		var smaller := radius*random.randf_range(.84,1.0)
+		if at.distance_to(point)<=smaller*BOULDER_REACH*.92: radius = smaller
+		if radius<BOULDER_MIN:
+			at = point
+			radius = BOULDER_MIN
+		var deep := inside_distance(at)
+		var role := "body" if deep>3.2 else "island"
+		placed.append([snappedf(at.x,.01),snappedf(at.y,.01),snappedf(radius,.01),snappedf(float(candidate[2]),.01),role])
+	return placed
+
+# Radius a boulder may take at a depth. Thin arms of the mask would only hold
+# pebbles; there a boulder may stand a little proud of the painted outline.
+func _boulder_fit(depth: float) -> float:
+	if depth<=0.0: return 0.0
+	return depth*BOULDER_FIT+clampf(2.4-depth,0,BOULDER_SPILL)
+
+# Largest radius a boulder at a point may take beside those already placed.
+# A flat bridge stone only reaches a third of its radius up and down.
+func _boulder_room(placed: Array, at: Vector2) -> float:
+	var room := INF
+	for other in placed:
+		var offset := at-Vector2(other[0],other[1])
+		if str(other[4])=="bridge":
+			# Under a bridge a boulder keeps its crown below the top of the flat
+			# stones (they stand in front and hide the rest), so the bridge
+			# reads as a level way and nothing bulges over it.
+			var reach := float(other[2])
+			if absf(offset.x)<reach*1.2 and offset.y<0.0:
+				room = minf(room,(-offset.y+reach/BRIDGE_SQUASH*.8)/.95)
+				continue
+			offset.y *= 2.4
+		room = minf(room,offset.length()-float(other[2])*BOULDER_OVERLAP)
+	return room
+
+func _boulder_covers(entry: Array, point: Vector2) -> bool:
+	var offset := point-Vector2(entry[0],entry[1])
+	if str(entry[4])=="bridge": offset.y *= BRIDGE_SQUASH
+	return offset.length()<float(entry[2])*BOULDER_REACH
+
+# Summer loop bridges (brief "bridges", LevelDesigner.summer_bridges): a row
+# of flat stones along the top of the stone the way crosses back on, laid
+# before the boulders. Their contour is BRIDGE_SQUASH times wider than tall.
+const BRIDGE_SQUASH := 2.6
+
+func _bridge_stones(random: RandomNumberGenerator) -> Array:
+	var stones: Array = []
+	for bridge in source.brief.get("bridges",[]):
+		var left := float(bridge[0])-1.2
+		var right := float(bridge[1])+1.2
+		var top := float(bridge[2])
+		var x := left
+		while x<right:
+			var radius := random.randf_range(1.4,1.8)
+			# The stone lies on the top of the painted bridge where it is.
+			var surface := _top_near(x+radius*.8,top)
+			var at := Vector2(x+radius*.8,surface-radius/BRIDGE_SQUASH*.9)
+			if is_finite(surface) and inside_distance(at)>.25: stones.append([snappedf(at.x,.01),snappedf(at.y,.01),snappedf(radius,.01),1.0,"bridge"])
+			x += radius*1.55
+	return stones
+
+# The top of the painted stone in a column near `y`, or -INF.
+func _top_near(x: float, y: float) -> float:
+	var at := y+.3
+	while at>y-3.0:
+		if inside_distance(Vector2(x,at))>.05: return at
+		at -= .1
+	return -INF
+
+# Unit direction into the painted mass at a point (gradient of inside_distance).
+func _inward(point: Vector2) -> Vector2:
+	var step := .5
+	var gradient := Vector2(inside_distance(point+Vector2(step,0))-inside_distance(point-Vector2(step,0)),inside_distance(point+Vector2(0,step))-inside_distance(point-Vector2(0,step)))
+	return gradient.normalized() if gradient.length()>.001 else Vector2.ZERO
+
+# --- Summer places ------------------------------------------------------------------
+
+# Trees a summer level may carry in all (owner, 2026-11-05: 5-6, big ones away
+# from the route); the act landmarks of the first act bring theirs.
+const SUMMER_TREES := 6
+const SUMMER_MARK_TREES := 2
+
+func _plan_summer_places() -> void:
+	summer_places.clear()
+	if rock_form!="boulder": return
+	var islands := _floating_islands()
+	# Big trees first: on the hills of the foot, then on the islands farthest
+	# from the route; the other islands take flags or bushes, the largest of
+	# them the waterfall.
+	var trees := SUMMER_TREES-SUMMER_MARK_TREES
+	for side in [-1.0,1.0]:
+		var best := Vector2.INF
+		var x: float = side*12.0
+		while absf(x)<19.0:
+			var top := _top_near(x,4.0)
+			if not is_finite(top): top = _top_near(x,1.0)
+			# A real top: open air just over it (not a column of the mountain).
+			if is_finite(top) and inside_distance(Vector2(x,top+.15))<=.05 and (not best.is_finite() or top>best.y): best = Vector2(x,top)
+			x += side*.5
+		if best.is_finite() and trees>0:
+			summer_places.append({"kind":"tree","at":[snappedf(best.x,.01),snappedf(best.y,.01)],"island":[]})
+			trees -= 1
+	islands.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return absf(float(a["at"].x)-corridor_at(a["at"].y).x)>absf(float(b["at"].x)-corridor_at(b["at"].y).x))
+	var flowing := false
+	var largest := -1
+	for index in range(islands.size()):
+		if largest<0 or int(islands[index]["cells"])>int(islands[largest]["cells"]): largest = index
+	for index in range(islands.size()):
+		var island: Dictionary = islands[index]
+		var kind := "flags" if index%2==0 else "bush"
+		if trees>0 and index!=largest:
+			kind = "tree"
+			trees -= 1
+		elif index==largest and not flowing:
+			kind = "waterfall"
+			flowing = true
+		var at: Vector2 = island["at"]
+		summer_places.append({"kind":kind,"at":[snappedf(at.x,.01),snappedf(at.y,.01)],"island":[snappedf(float(island["left"]),.01),snappedf(float(island["right"]),.01),snappedf(float(island["bottom"]),.01)]})
+
+# Parts of the painted stone that do not touch the mountain: its islands, each
+# {"at": crown, "left", "right", "bottom", "cells"} on a one-unit grid.
+func _floating_islands() -> Array:
+	var cells := {}
+	var top := source.top()
+	var y := 1.0
+	while y<top:
+		var x := LevelSource.X_MIN+.5
+		while x<LevelSource.X_MAX:
+			# Well inside only: an island almost touching the mountain still
+			# reads as its own (a unit of sky between them).
+			if inside_distance(Vector2(x,y))>.6: cells[Vector2i(int(floor(x)),int(floor(y)))] = true
+			x += 1.0
+		y += 1.0
+	var main := Vector2i(int(floor(corridor_at(2.0).x)),2)
+	var seen := {}
+	var result: Array = []
+	for start: Vector2i in cells:
+		if seen.has(start): continue
+		var group: Array[Vector2i] = []
+		var queue: Array[Vector2i] = [start]
+		seen[start] = true
+		while not queue.is_empty():
+			var cell: Vector2i = queue.pop_back()
+			group.append(cell)
+			for step in [Vector2i(1,0),Vector2i(-1,0),Vector2i(0,1),Vector2i(0,-1)]:
+				var next: Vector2i = cell+step
+				if cells.has(next) and not seen.has(next):
+					seen[next] = true
+					queue.append(next)
+		if group.has(main) or group.size()<4: continue
+		# Stones of a second way are the way itself, not places.
+		var on_way := false
+		for cell in group:
+			if source.sample("branch",Vector2(cell.x+.5,cell.y+.5))>.3: on_way = true
+		if on_way: continue
+		var crown := group[0]
+		var left := INF
+		var right := -INF
+		var bottom := INF
+		for cell in group:
+			if cell.y>crown.y or (cell.y==crown.y and absf(cell.x-_group_mid(group))<absf(crown.x-_group_mid(group))): crown = cell
+			left = minf(left,cell.x)
+			right = maxf(right,cell.x+1.0)
+			bottom = minf(bottom,cell.y)
+		var crest := _top_near(crown.x+.5,crown.y+1.0)
+		result.append({"at":Vector2(crown.x+.5,crest if is_finite(crest) else crown.y+.5),"left":left,"right":right,"bottom":bottom,"cells":group.size()})
+	return result
+
+func _group_mid(group: Array[Vector2i]) -> float:
+	var total := 0.0
+	for cell in group: total += cell.x+.5
+	return total/maxf(1,group.size())
 
 # Caves of the desert, looked for up the mountain: the largest that fits in the
 # deepest rock of a height, clear of everything on the face.

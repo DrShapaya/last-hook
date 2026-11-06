@@ -156,6 +156,13 @@ func style_tests() -> void:
 			check(mesh.get_surface_count()==1 and mesh.get_faces().size()>300,"location %d builds one continuous rock face" % location)
 			var a := rock.build(24.0,48.0,1.0).get_faces()
 			check(a==mesh.get_faces(),"the rock face of location %d is the same every time" % location)
+		if location==0:
+			summer_boulder_tests(layout)
+			summer_moss_tests()
+			summer_outline_tests(designer,source,layout)
+			summer_places_tests(layout)
+			summer_air_tests()
+			summer_play_tests()
 		if location==1: desert_depth_tests(world,layout)
 		if location==2:
 			winter_depth_tests(world,layout)
@@ -183,6 +190,202 @@ func style_tests() -> void:
 	check(on_far>=1 or risky.splits_built.size()<3,"a storm stands over the second way (%d)" % on_far)
 	risky_world.free()
 	check(int(parted_rows[1])>0 and int(parted_rows[2])>0,"the canyon and the peak part into separate masses %s" % str(parted_rows))
+
+# Summer boulders after summerClose.png (docs/SUMMER_LEVEL_PLAN.md, stage 1):
+# large load-bearing boulders in the thick of the mountain, and no strings of
+# small ones along its outline.
+func summer_boulder_tests(layout: MaskLayout) -> void:
+	var thick := 0
+	var large := 0
+	var largest := 0.0
+	var edge: Array = []
+	for entry in layout.relief:
+		var at := Vector2(float(entry[0]),float(entry[1]))
+		var radius := float(entry[2])
+		largest = maxf(largest,radius)
+		if layout.inside_distance(at)>3.5:
+			thick += 1
+			if radius>=3.6: large += 1
+		if layout.inside_distance(at)<radius+.8: edge.append([at,radius])
+	check(largest>=4.5,"the summer mountain has large load-bearing boulders (largest radius %.1f)" % largest)
+	check(thick>0 and large*2>=thick,"most boulders in the thick of the summer mountain are large (%d of %d)" % [large,thick])
+	var small := 0
+	var in_rows := 0
+	for stone in edge:
+		if float(stone[1])>=1.3: continue
+		small += 1
+		var kin := 0
+		for other in edge:
+			if other!=stone and float(other[1])<1.3 and (other[0] as Vector2).distance_to(stone[0])<2.6: kin += 1
+		if kin>=2: in_rows += 1
+	check(small*2<=edge.size(),"medium and large boulders make the summer outline (%d small of %d)" % [small,edge.size()])
+	check(in_rows*10<=edge.size(),"small boulders on the summer outline stand in groups, not rows (%d in rows of %d)" % [in_rows,edge.size()])
+
+# Summer moss and grass (docs/SUMMER_LEVEL_PLAN.md, stage 2): green caps on the
+# top of a boulder in its own colour, bare stone below them, none without the
+# "moss" key (desert and snow), and grass tufts as part of the rock mesh.
+func _greenness(colors: PackedColorArray, vertices: PackedVector3Array, low: float, high: float) -> float:
+	var total := 0.0
+	var count := 0
+	for i in range(vertices.size()):
+		if vertices[i].y<low or vertices[i].y>high: continue
+		total += colors[i].g-(colors[i].r+colors[i].b)*.5
+		count += 1
+	return total/maxf(1,count)
+
+func _mossy_boulder(moss: float) -> Array:
+	var random := RandomNumberGenerator.new()
+	random.seed = 5
+	var mass := RockMassSpec.new()
+	mass.id = 7
+	mass.outer_contour = RockMassSpec.boulder_contour(Vector2(0,10),Vector2(4.6,4.0),random,0.0,Vector2(2.6,3.2))
+	mass.z_rim = -1.6
+	mass.z_back = -3.4
+	mass.facet_size = .6
+	mass.dome = .8
+	mass.z_limit = 1.95
+	mass.build(Vector3(.55,.45,.85),Vector3(.95,.9,1.1),0,0.0,random)
+	var stone := Color("8a8478")
+	var palette := {"base":stone,"facets":[stone,stone.darkened(.05),stone.lightened(.05)],"rise":.36,"top":stone.lightened(.1),"side":stone.darkened(.06),"under":stone.darkened(.2),"inner":stone.darkened(.3),
+		"moss":moss,"moss_top":Color("6b843a"),"moss_dark":Color("43562b"),"hang_moss":false}
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	RockMassBuilder.emit(surface,mass,palette,func(_m: RockMassSpec, _p: Vector3) -> float: return 0.0,true)
+	var arrays := surface.commit_to_arrays()
+	return [arrays[Mesh.ARRAY_VERTEX],arrays[Mesh.ARRAY_COLOR],mass.bounds]
+
+func summer_moss_tests() -> void:
+	var mossy := _mossy_boulder(1.0)
+	var bounds: Rect2 = mossy[2]
+	var top := _greenness(mossy[1],mossy[0],bounds.end.y-bounds.size.y*.22,bounds.end.y)
+	var foot := _greenness(mossy[1],mossy[0],bounds.position.y,bounds.position.y+bounds.size.y*.3)
+	check(top>.04 and top>foot+.03,"summer moss caps the top of a boulder, its foot stays stone (%.3f against %.3f)" % [top,foot])
+	var bare := _mossy_boulder(0.0)
+	var bare_top := _greenness(bare[1],bare[0],bounds.end.y-bounds.size.y*.22,bounds.end.y)
+	check(bare_top<.02,"stone without moss stays grey (%.3f)" % bare_top)
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var count := RockMassBuilder.emit_tuft(surface,Vector3(0,0,-1.0),.4,.6,Color("6b843a"),Color("43562b"),12)
+	var arrays := surface.commit_to_arrays()
+	var tuft_green := _greenness(arrays[Mesh.ARRAY_COLOR],arrays[Mesh.ARRAY_VERTEX],-1.0,1.0)
+	var tallest := 0.0
+	for point: Vector3 in arrays[Mesh.ARRAY_VERTEX]: tallest = maxf(tallest,point.y)
+	check(count>=12 and count%3==0 and tuft_green>.1 and tallest>.2,"a grass tuft is a fan of green blades in the rock mesh (%d vertices, %.2f tall)" % [count,tallest])
+
+# The summer outline after summer_4k.png (docs/SUMMER_LEVEL_PLAN.md, stage 3):
+# loops close with level bridges carrying flat stones, the foot is broad with
+# hills, islands are big enough to be places, and no spikes stick out.
+func summer_outline_tests(designer: LevelDesigner, source: LevelSource, layout: MaskLayout) -> void:
+	var bridges: Array = source.brief.get("bridges",[])
+	check(bridges.size()>=2,"summer loops close with level bridges (%d)" % bridges.size())
+	var worst := 0.0
+	for bridge in bridges:
+		var tops: Array = []
+		var x := float(bridge[0])+.5
+		while x<float(bridge[1])-.5:
+			# Where the bridge spans the loop's opening, sky below it.
+			var top := layout._top_near(x,float(bridge[2]))
+			if is_finite(top) and layout.inside_distance(Vector2(x,top-5.5))<0.0: tops.append(top)
+			x += .5
+		if tops.size()>=3: worst = maxf(worst,float(tops.max())-float(tops.min()))
+	check(worst<=1.0,"the top of every summer bridge is level (worst step %.2f)" % worst)
+	var stones := 0
+	for entry in layout.relief:
+		if str(entry[4])=="bridge": stones += 1
+	check(stones>=bridges.size()*2,"flat stones lie along the summer bridges (%d)" % stones)
+	var foot := 0
+	for x in range(-20,21):
+		if source.sample("silhouette",Vector2(x,.5))>.5: foot += 1
+	check(foot>=30,"the summer foot is broad (%d units)" % foot)
+	var smallest := INF
+	for section in designer.sections:
+		if str(section["form"])!="islands": continue
+		for feature in section["features"]:
+			if str(feature[0])=="add": smallest = minf(smallest,minf(feature[2].x,feature[2].y))
+	check(smallest==INF or smallest>=2.3,"summer islands are big enough to be places (smallest radius %.1f)" % smallest)
+	# Spikes: stone pixels with little stone round them, a thin tooth.
+	var mask: Image = source.masks["silhouette"]
+	var teeth := 0
+	for y in range(2,mask.get_height()-2,2):
+		for x in range(2,mask.get_width()-2,2):
+			if mask.get_pixel(x,y).r<.5: continue
+			var solid := 0
+			for dy in range(-2,3):
+				for dx in range(-2,3):
+					if mask.get_pixel(x+dx,y+dy).r>=.5: solid += 1
+			if solid<8: teeth += 1
+	check(teeth<=6,"the summer outline has no spikes (%d)" % teeth)
+
+# Summer places (docs/SUMMER_LEVEL_PLAN.md, stage 4): 5-6 trees with the act
+# landmarks, big ones on the hills of the foot and on islands away from the
+# route, one waterfall off an island, and the baked level really carries it.
+func summer_places_tests(layout: MaskLayout) -> void:
+	var trees := 0
+	var falls := 0
+	var near_route := 0
+	for place: Dictionary in layout.summer_places:
+		var at := Vector2(float(place["at"][0]),float(place["at"][1]))
+		if str(place["kind"])=="tree": trees += 1
+		if str(place["kind"])=="waterfall": falls += 1
+		var island: Array = place["island"]
+		if not island.is_empty():
+			var route := layout.corridor_at(at.y)
+			if float(island[0])<route.x+route.y+1.0 and float(island[1])>route.x-route.y-1.0: near_route += 1
+	check(trees>=2 and trees+MaskLayout.SUMMER_MARK_TREES<=MaskLayout.SUMMER_TREES,"a summer level grows 5-6 trees in all (%d planned + the act's)" % trees)
+	check(falls==1,"one waterfall pours off a summer island (%d)" % falls)
+	check(near_route==0,"summer places stand on islands off the route (%d near it)" % near_route)
+	var baked := ResourceLoader.load(LevelBake.layout_path(0,0),"",ResourceLoader.CACHE_MODE_IGNORE) as LevelBake
+	var water := 0
+	for place: Dictionary in baked.layout_data.get("summer_places",[]):
+		if str(place["kind"])!="waterfall": continue
+		var chunk := ResourceLoader.load(LevelBake.chunk_path(0,0,"balanced",int(floor(float(place["at"][1])/24.0))),"",ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+		if chunk==null: continue
+		var scenery := chunk.instantiate()
+		water += scenery.find_children("Водопад*","MeshInstance3D",true,false).size()
+		scenery.free()
+	check(water==1,"the baked first summer level shows its waterfall (%d)" % water)
+
+# Summer weather and life (docs/SUMMER_LEVEL_PLAN.md, stage 5): leaves on the
+# breeze in the baked chunks (none on battery), haze at the foot, butterflies
+# by the trees, and leaves that follow a wind pocket's push.
+func _baked_nodes(quality: String, pattern: String) -> int:
+	var found := 0
+	for key in range(6):
+		var chunk := ResourceLoader.load(LevelBake.chunk_path(0,0,quality,key),"",ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+		if chunk==null: continue
+		var scenery := chunk.instantiate()
+		found += scenery.find_children(pattern,"",true,false).size()
+		scenery.free()
+	return found
+
+func summer_air_tests() -> void:
+	check(_baked_nodes("balanced","Листья_*")>=5 and _baked_nodes("battery","Листья_*")==0,"summer leaves drift over the face, none on battery")
+	check(_baked_nodes("balanced","Дымка подножия")==1,"a haze lies round the summer foot")
+	check(_baked_nodes("balanced","Бабочки_*")>=2 and _baked_nodes("battery","Бабочки_*")==0,"butterflies wander round the summer trees")
+	var gust := MassifVisuals.summer_leaves(8,Vector3(1,2,.4),Vector3(-1,.2,0),Vector2(2,3),3.0)
+	var process := gust.process_material as ParticleProcessMaterial
+	check(process.direction.x<-.9 and process.initial_velocity_min>=2.0,"wind leaves go the way the pocket pushes")
+	gust.free()
+
+# Summer's own play (docs/SUMMER_LEVEL_PLAN.md, stage 6): the first mountain
+# stays gentle - its main route has stone, springs and crystals only and no
+# hazard on it - and every root grip grows out of a hanging root.
+func summer_play_tests() -> void:
+	var soft := true
+	var roots := 0
+	for route in range(3):
+		var baked := ResourceLoader.load(LevelBake.layout_path(0,route),"",ResourceLoader.CACHE_MODE_IGNORE) as LevelBake
+		var data: Dictionary = baked.layout_data
+		for id in data["main_route"]:
+			if GripSpec.kind_of(data["anchors"][int(id)]) in [GripSpec.ROOT,GripSpec.ICE]: soft = false
+		for hazard in data["hazards"]:
+			if bool(hazard.get("affects_main",false)): soft = false
+		if route==0:
+			for grip in data["anchors"]:
+				if GripSpec.kind_of(grip)==GripSpec.ROOT: roots += 1
+	check(soft,"the summer main routes stay gentle: no root, ice or hazard on them")
+	var vines := _baked_nodes("balanced","Декор_корень_*")
+	check(roots>0 and vines==roots,"every summer root grip hangs from a root (%d of %d)" % [vines,roots])
 
 # The canyon has real depth, and what stands on it stands on the rock in view.
 func desert_depth_tests(world: MountainWorld, layout: MaskLayout) -> void:

@@ -124,7 +124,8 @@ func plan() -> void:
 	var lean_act := -1
 	var spans := beat_spans()
 	# The ground floor: a broad base the start platform stands on.
-	sections.append({"form":"base","beat":"start","act":0,"y0":-2.0,"y1":3.0,"center0":0.0,"center1":0.0,"half":SECTION_HALF["base"],"corridor":CORRIDOR_DEFAULT,"bias":0.0,"features":[]})
+	sections.append({"form":"base","beat":"start","act":0,"y0":-2.0,"y1":3.0,"center0":0.0,"center1":0.0,"half":SECTION_HALF["base"]+(SUMMER_BASE_EXTRA if location==0 else 0.0),"corridor":CORRIDOR_DEFAULT,"bias":0.0,"features":[]})
+	if location==0: _summer_hills(sections[0])
 	for entry in spans:
 		var beat: String = entry[0]
 		var y0: float = maxf(3.0,float(entry[1])-1.0)
@@ -291,6 +292,11 @@ func _split_path(shape: String, main_x: float, side: float, gap: float, y0: floa
 			# A long slant out and up, then one level traverse back.
 			path.append(Vector2(far_x,y1-random.randf_range(4.5,6.0)))
 			path.append(Vector2(far_x-side*random.randf_range(.5,1.5),y1-2.6))
+	if location==0:
+		# Summer loops close with a level bridge of flat stones: the way climbs
+		# the far ridge to the top, then crosses back level (summer_4k.png).
+		var last: Vector2 = path[path.size()-1]
+		if absf(last.x-near_x)>3.0 and last.y<y1-1.6: path.append(Vector2(last.x,y1-1.0))
 	path.append(Vector2(near_x,y1-1.0))
 	return path
 
@@ -315,7 +321,14 @@ func _features(section: Dictionary) -> void:
 			for count in range(random.randi_range(2,3)):
 				var flank := side if count%2==0 else -side
 				var at := Vector2(center+flank*random.randf_range(9.0,12.5),lerpf(y0,y1,random.randf_range(.2,.8)))
-				features.append(["add",at,Vector2(random.randf_range(1.8,2.8),random.randf_range(1.6,2.4))])
+				if location==0:
+					# Summer islands are places (summerClose.png): broad enough for a
+					# tree, flags or a bush on top and a vine below.
+					# (No extra draws: the rest of the design keeps its seed.)
+					at.x = center+flank*maxf(10.0,absf(at.x-center))
+					features.append(["add",at,Vector2(random.randf_range(2.9,3.6),random.randf_range(2.3,2.9))])
+				else:
+					features.append(["add",at,Vector2(random.randf_range(1.8,2.8),random.randf_range(1.6,2.4))])
 		"overhang":
 			var at := Vector2(center+side*random.randf_range(8.0,10.0),mid+1.0)
 			features.append(["add",at,Vector2(random.randf_range(3.5,4.5),random.randf_range(1.4,1.8))])
@@ -428,11 +441,14 @@ func _split_inside(point: Vector2, split: Dictionary, top: float) -> float:
 	for k in range(1,path.size()):
 		var near := Geometry2D.get_closest_point_to_segment(point,path[k-1],path[k])
 		var here := width
-		if stones:
+		# A summer bridge stays one level band, calm along its top.
+		var bridge := location==0 and k==path.size()-1 and _is_bridge(path[k-1],path[k])
+		if stones and not bridge:
 			# Pinched every few units into a chain of separate stones.
 			var along: float = walked+near.distance_to(path[k-1])
 			here *= .55+.45*cos(along/4.2*TAU)
-		band = maxf(band,here+noise.get_noise_2d(point.x*1.6,point.y*1.6+90.0)*.9-near.distance_to(point))
+		var rough := .2 if bridge else .9
+		band = maxf(band,here+noise.get_noise_2d(point.x*1.6,point.y*1.6+90.0)*rough-near.distance_to(point))
 		walked += (path[k] as Vector2).distance_to(path[k-1])
 	var amount := maxf(maxf(main,route_rock),band)
 	amount = smooth_max(amount,_far_ridge(point,split),_split_blend())
@@ -445,6 +461,37 @@ func _split_inside(point: Vector2, split: Dictionary, top: float) -> float:
 static func _ellipse(point: Vector2, center: Vector2, radii: Vector2) -> float:
 	var local := (point-center)/radii
 	return (1.0-local.length())*minf(radii.x,radii.y)
+
+# --- Summer shapes (docs/SUMMER_LEVEL_PLAN.md, stage 3) ----------------------------
+
+# The summer foot is broader, with low hills to both sides (summer_4k.png).
+const SUMMER_BASE_EXTRA := 1.5
+
+func _summer_hills(base: Dictionary) -> void:
+	# Its own stream: the design's other draws keep their seed.
+	var hills := RandomNumberGenerator.new()
+	hills.seed = seed_value*7+311
+	for flank in [-1.0,1.0]:
+		var at := Vector2(flank*hills.randf_range(14.5,16.5),hills.randf_range(.2,1.0))
+		(base["features"] as Array).append(["add",at,Vector2(hills.randf_range(3.4,4.2),hills.randf_range(2.4,3.0))])
+
+# A loop's closing stretch that crosses back level: its bridge.
+static func _is_bridge(from: Vector2, to: Vector2) -> bool:
+	return absf(to.y-from.y)<.6 and absf(to.x-from.x)>3.0
+
+# Level bridges over the summer loops: [left x, right x, top y] of the stone
+# the way crosses on, for the flat stones laid along it (MaskLayout).
+func summer_bridges() -> Array:
+	var bridges: Array = []
+	for split in splits:
+		var path: Array = split["path"]
+		var from: Vector2 = path[path.size()-2]
+		var to: Vector2 = path[path.size()-1]
+		if not _is_bridge(from,to): continue
+		# The split's stretch ends a unit over its top: the band is cut level there.
+		var y := minf(maxf(from.y,to.y)+float(split["band"]),float(split["y1"])+1.0)
+		bridges.append([snappedf(minf(from.x,to.x),.01),snappedf(maxf(from.x,to.x),.01),snappedf(y,.01)])
+	return bridges
 
 # --- Masks --------------------------------------------------------------------------
 
@@ -497,6 +544,7 @@ func build(source_name: String = "") -> LevelSource:
 		for point in split["path"]: line.append([snappedf(point.x,.01),snappedf(point.y,.01)])
 		specs.append({"style":split["style"],"risk":split["risk"],"path":line,"from":snappedf(float(split["y0"]),.1),"to":snappedf(float(split["y1"]),.1)})
 	source.brief["splits"] = specs
+	if location==0: source.brief["bridges"] = summer_bridges()
 	var pace: Array = []
 	for section in sections:
 		var sway: float = SWAY.get(section["form"],1.0)

@@ -1,0 +1,8 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_e83c8b404786aae6.gdshader" id="1_5q545"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_5q545")
+shader_parameter/length_units = 14.259998474121176

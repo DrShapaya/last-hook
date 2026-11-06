@@ -6,6 +6,8 @@ extends SceneTree
 #   ... -- --tries=8      design seeds tried per level
 #   ... -- --variant=3    another family of design seeds (the editor's
 #                         «Новый вариант» counts this up)
+#   ... -- --first=4      start at this try (with --tries=1: redesign a level
+#                         from its own design seed, variant*1000+try)
 #   ... -- --no-bot       skip the movement bot
 #
 # Every candidate is generated from its masks and judged by LevelScore. Only
@@ -17,6 +19,7 @@ extends SceneTree
 var only := ""
 var tries := 8
 var variant := 0
+var first := 0
 var use_bot := true
 var baker: LevelBaker
 var game
@@ -26,6 +29,7 @@ func _initialize() -> void:
 		if argument.begins_with("--only="): only = argument.trim_prefix("--only=")
 		if argument.begins_with("--tries="): tries = int(argument.trim_prefix("--tries="))
 		if argument.begins_with("--variant="): variant = int(argument.trim_prefix("--variant="))
+		if argument.begins_with("--first="): first = int(argument.trim_prefix("--first="))
 		if argument=="--no-bot": use_bot = false
 	call_deferred("run")
 
@@ -48,7 +52,7 @@ func run() -> void:
 func design_level(location: int, route: int) -> bool:
 	var base_seed := int(LevelCatalog.route(location,route)["seed"])
 	var candidates: Array = []
-	for attempt in range(tries):
+	for attempt in range(first,first+tries):
 		var started := Time.get_ticks_msec()
 		var designer := LevelDesigner.make(location,route,base_seed*31+variant*1000+attempt)
 		var source := designer.build()

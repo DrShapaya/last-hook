@@ -25,10 +25,11 @@ var stride := 0.0 # Walk cycle advanced by distance, so steps match the ground.
 var walk_speed := 2.6
 # Stride phase per unit walked: one full leg cycle covers 2*PI/STRIDE_PER_UNIT.
 const STRIDE_PER_UNIT := 3.4
-# Walk starts above WALK_ENTER and ends below WALK_EXIT, so easing in and out
-# of a stop never flickers between idle and walk.
-const WALK_ENTER := .35
-const WALK_EXIT := .18
+# What the hero is doing comes from HeroState (events), not from guesses here.
+var hero := HeroState.new()
+# This frame's hook data from main.gd (aiming, shot counter, release reason);
+# ExplorerView sets it before animate().
+var flight_info: Dictionary = {}
 var last_vertical_speed := 0.0
 var previous_grounded := true
 var previous_attached := false
@@ -94,15 +95,8 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	previous_grounded = sim.grounded
 	previous_attached = sim.attached
 	impact *= exp(-dt*9)
-	if sim.attached:
-		state = "swing"
-	elif tether:
-		state = "throw"
-	elif sim.grounded:
-		var moving := absf(sim.vel.x)>(WALK_EXIT if state=="walk" else WALK_ENTER)
-		state = "land" if impact>.006 else "walk" if moving else "idle"
-	else:
-		state = "fall" if sim.vel.y<-.6 else "flight"
+	hero.update(dt,HeroState.observe(sim,tether,flight_info))
+	state = hero.sprite_pose()
 	var speed := clampf(sim.vel.length()/9,0,1)
 	if state=="walk": stride += absf(sim.vel.x)*dt*STRIDE_PER_UNIT
 	elif sim.grounded:

@@ -30,9 +30,12 @@ var impact_kind := ""
 var body_shadow: MeshInstance3D
 var visual_quality := "balanced"
 var effects_quality := "full"
+# The 3D hero (HeroModel, docs/CHARACTER_3D_PLAN.md) is the hero since the
+# owner accepted it on 2026-11-07; --hero2d brings back the painted one.
+static var use_3d_hero := not "--hero2d" in OS.get_cmdline_user_args()
 
 func setup(world: MountainWorld, tips: int = 1) -> void:
-	body = preload("res://scenes/player_sprite.tscn").instantiate() as ExplorerRig
+	body = HeroModel.new() if use_3d_hero else preload("res://scenes/player_sprite.tscn").instantiate() as ExplorerRig
 	add_child(body)
 	body.setup()
 	rope_material = world.mat("braided_rope",Color.WHITE,false)
@@ -154,6 +157,10 @@ func _update_body_shadow(sim: RopeSim) -> void:
 		body_shadow.position = Vector3(.06,-.62,-.18)
 		body_shadow.scale = Vector3.ONE
 
+# Events the frame data cannot show: "summit", "revive", "slip".
+func hero_event(name: String) -> void:
+	if "hero" in body: (body.get("hero") as HeroState).event(name)
+
 func set_visual_quality(value: String) -> void:
 	visual_quality = value if value in ["high","balanced","battery"] else "balanced"
 	var cast := GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if visual_quality=="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
@@ -182,7 +189,7 @@ func set_tip_count(count: int) -> void:
 			if piece is MeshInstance3D and piece.get_index()>=1: piece.visible = tip_count>=3 or piece.get_index()==3
 
 func set_walk_speed(speed: float) -> void:
-	if body is ExplorerSprite: (body as ExplorerSprite).walk_speed = speed
+	if "walk_speed" in body: body.set("walk_speed",speed)
 
 func set_hook_configuration(tips: int, count: int) -> void:
 	hook_count = clampi(count,1,2)
@@ -212,6 +219,7 @@ func draw(sim: RopeSim, target: Vector2, tether: bool, flying_bolt: bool, time: 
 	var aiming: bool = flight.get("aiming",false)
 	var body_target: Vector2 = sim.pos+flight.get("aim",Vector2.UP)*3 if aiming else target
 	body.position.x = 0
+	if "flight_info" in body: body.set("flight_info",flight)
 	body.animate(sim,sim.effective_anchor() if sim.attached else body_target,tether or aiming,time)
 	var recoil := maxf(0,1-(time-shot_time)/.16)
 	var shot_direction: Vector2 = flight.get("velocity",Vector2.ZERO).normalized()
@@ -283,6 +291,7 @@ func _draw_volley(sim: RopeSim, time: float, warning: bool, volley: Array) -> vo
 	_update_body_shadow(sim)
 	var body_target := sim.effective_anchor() if sim.attached else Vector2(volley[0].get("position",sim.pos))
 	body.position.x = 0
+	if "flight_info" in body: body.set("flight_info",{"shot":last_shot})
 	body.animate(sim,body_target,sim.attached,time)
 	var from := body.grip_position()
 	for index in range(2):

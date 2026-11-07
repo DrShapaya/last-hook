@@ -1,0 +1,7 @@
+# Rebuilt by tools/blender/build_hero.py and export_hero.py; the baked
+# textures ship in game/assets/hero/model/.
+3d/bake/
+3d/*.blend
+3d/*.blend1
+# The WebP next to it is the same footage.
+baseline/*.avi

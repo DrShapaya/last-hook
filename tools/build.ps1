@@ -82,6 +82,9 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_menus.gd') (Join-Pa
 Invoke-TaskGodot @('--headless','--script','res://tests/test_ads.gd') (Join-Path $taskArtifacts 'build-ads.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_character_editing.gd') (Join-Path $taskArtifacts 'build-character-editing.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_sprite_animation.gd') (Join-Path $taskArtifacts 'build-sprite-animation.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_hero_state.gd') (Join-Path $taskArtifacts 'build-hero-state.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_hero_rig.gd') (Join-Path $taskArtifacts 'build-hero-rig.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_hero_model.gd') (Join-Path $taskArtifacts 'build-hero-model.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_polish.gd') (Join-Path $taskArtifacts 'build-polish.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_audio.gd') (Join-Path $taskArtifacts 'build-audio.log')
 }

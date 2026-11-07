@@ -1,0 +1,490 @@
+{
+	"units": "hero height = 1.0; origin on the ground between the feet; x toward the face; y up",
+	"master_px": 1024,
+	"bones": [
+		{
+			"name": "root",
+			"parent": null,
+			"position": [
+				0.0,
+				0.0
+			]
+		},
+		{
+			"name": "pelvis",
+			"parent": "root",
+			"position": [
+				-0.01,
+				0.45
+			]
+		},
+		{
+			"name": "spine",
+			"parent": "pelvis",
+			"position": [
+				-0.01,
+				0.52
+			]
+		},
+		{
+			"name": "chest",
+			"parent": "spine",
+			"position": [
+				0.0,
+				0.62
+			]
+		},
+		{
+			"name": "neck",
+			"parent": "chest",
+			"position": [
+				0.0,
+				0.73
+			]
+		},
+		{
+			"name": "head",
+			"parent": "neck",
+			"position": [
+				0.0,
+				0.755
+			]
+		},
+		{
+			"name": "shoulder_near",
+			"parent": "chest",
+			"position": [
+				-0.02,
+				0.67
+			]
+		},
+		{
+			"name": "elbow_near",
+			"parent": "shoulder_near",
+			"position": [
+				-0.0225,
+				0.5625
+			]
+		},
+		{
+			"name": "hand_near",
+			"parent": "elbow_near",
+			"position": [
+				-0.025,
+				0.455
+			]
+		},
+		{
+			"name": "shoulder_far",
+			"parent": "chest",
+			"position": [
+				0.06,
+				0.66
+			]
+		},
+		{
+			"name": "elbow_far",
+			"parent": "shoulder_far",
+			"position": [
+				0.0725,
+				0.5575
+			]
+		},
+		{
+			"name": "hand_far",
+			"parent": "elbow_far",
+			"position": [
+				0.085,
+				0.455
+			]
+		},
+		{
+			"name": "hip_near",
+			"parent": "pelvis",
+			"position": [
+				-0.03,
+				0.44
+			]
+		},
+		{
+			"name": "knee_near",
+			"parent": "hip_near",
+			"position": [
+				-0.035,
+				0.265
+			]
+		},
+		{
+			"name": "foot_near",
+			"parent": "knee_near",
+			"position": [
+				-0.04,
+				0.09
+			]
+		},
+		{
+			"name": "hip_far",
+			"parent": "pelvis",
+			"position": [
+				0.03,
+				0.44
+			]
+		},
+		{
+			"name": "knee_far",
+			"parent": "hip_far",
+			"position": [
+				0.035,
+				0.265
+			]
+		},
+		{
+			"name": "foot_far",
+			"parent": "knee_far",
+			"position": [
+				0.04,
+				0.09
+			]
+		}
+	],
+	"sockets": [
+		{
+			"name": "grip_near",
+			"bone": "hand_near",
+			"position": [
+				-0.025,
+				0.41
+			],
+			"use": "Точка хвата каната (заменяет Grip)"
+		},
+		{
+			"name": "grip_far",
+			"bone": "hand_far",
+			"position": [
+				0.085,
+				0.41
+			],
+			"use": "Вторая рука на канате"
+		},
+		{
+			"name": "back",
+			"bone": "chest",
+			"position": [
+				-0.17,
+				0.57
+			],
+			"use": "Рюкзак"
+		},
+		{
+			"name": "head_top",
+			"bone": "head",
+			"position": [
+				-0.03,
+				1.0
+			],
+			"use": "Головной убор (задаёт голова)"
+		},
+		{
+			"name": "eyes",
+			"bone": "head",
+			"position": [
+				0.072,
+				0.86
+			],
+			"use": "Глаза и лицо (задаёт голова)"
+		},
+		{
+			"name": "neck_front",
+			"bone": "chest",
+			"position": [
+				0.06,
+				0.71
+			],
+			"use": "Шарф, значок"
+		},
+		{
+			"name": "belt",
+			"bone": "pelvis",
+			"position": [
+				0.0,
+				0.47
+			],
+			"use": "Пояс: верёвка, фляга"
+		}
+	],
+	"parts": [
+		{
+			"id": "head",
+			"slot": "head",
+			"bones": [
+				"head"
+			],
+			"rigid": true,
+			"under": "низ головы над воротником",
+			"overlap": 0.02,
+			"paired": false,
+			"overlap_px": 20,
+			"canvas_px": [
+				379,
+				338
+			],
+			"joints_px": {
+				"head": [
+					225,
+					292
+				]
+			},
+			"pivot": "head",
+			"axis": null,
+			"painted": "upright, as in the neutral pose"
+		},
+		{
+			"id": "torso",
+			"slot": "torso",
+			"bones": [
+				"spine",
+				"chest"
+			],
+			"rigid": false,
+			"under": "подол заходит на таз, плечи круглые под рукавами, шея под головой",
+			"overlap": 0.035,
+			"paired": false,
+			"overlap_px": 36,
+			"canvas_px": [
+				297,
+				399
+			],
+			"joints_px": {
+				"spine": [
+					128,
+					282
+				],
+				"chest": [
+					138,
+					179
+				]
+			},
+			"pivot": "spine",
+			"axis": null,
+			"painted": "upright, as in the neutral pose"
+		},
+		{
+			"id": "pelvis",
+			"slot": "pants",
+			"bones": [
+				"pelvis"
+			],
+			"rigid": true,
+			"under": "верх таза под подолом куртки",
+			"overlap": 0.035,
+			"paired": false,
+			"overlap_px": 36,
+			"canvas_px": [
+				276,
+				205
+			],
+			"joints_px": {
+				"pelvis": [
+					128,
+					87
+				]
+			},
+			"pivot": "pelvis",
+			"axis": null,
+			"painted": "upright, as in the neutral pose"
+		},
+		{
+			"id": "sleeve",
+			"slot": "torso",
+			"bones": [
+				"shoulder",
+				"elbow"
+			],
+			"rigid": false,
+			"under": "шапка плеча под торсом, манжета над перчаткой",
+			"overlap": 0.03,
+			"paired": true,
+			"overlap_px": 31,
+			"width": 0.08,
+			"canvas_px": [
+				184,
+				323
+			],
+			"joints_px": {
+				"shoulder_near": [
+					92,
+					51
+				],
+				"elbow_near": [
+					92,
+					161
+				],
+				"hand_near": [
+					92,
+					271
+				]
+			},
+			"pivot": "shoulder_near",
+			"axis": [
+				"shoulder_near",
+				"hand_near"
+			],
+			"painted": "straight, hanging down",
+			"chain": [
+				"shoulder_near",
+				"elbow_near",
+				"hand_near"
+			]
+		},
+		{
+			"id": "glove",
+			"slot": "gloves",
+			"bones": [
+				"hand"
+			],
+			"rigid": true,
+			"under": "запястье уходит в манжету",
+			"overlap": 0.02,
+			"paired": true,
+			"overlap_px": 20,
+			"radius": 0.042,
+			"canvas_px": [
+				168,
+				168
+			],
+			"joints_px": {
+				"hand_near": [
+					84,
+					50
+				]
+			},
+			"pivot": "hand_near",
+			"axis": [
+				"elbow_near",
+				"hand_near"
+			],
+			"painted": "hanging down, wrist at the top",
+			"chain": [
+				"hand_near"
+			]
+		},
+		{
+			"id": "pant_leg",
+			"slot": "pants",
+			"bones": [
+				"hip",
+				"knee"
+			],
+			"rigid": false,
+			"under": "бедро уходит в таз, низ штанины в ботинок",
+			"overlap": 0.03,
+			"paired": true,
+			"overlap_px": 31,
+			"width": 0.095,
+			"canvas_px": [
+				200,
+				461
+			],
+			"joints_px": {
+				"hip_near": [
+					100,
+					51
+				],
+				"knee_near": [
+					100,
+					230
+				],
+				"foot_near": [
+					100,
+					410
+				]
+			},
+			"pivot": "hip_near",
+			"axis": [
+				"hip_near",
+				"foot_near"
+			],
+			"painted": "straight, hanging down",
+			"chain": [
+				"hip_near",
+				"knee_near",
+				"foot_near"
+			]
+		},
+		{
+			"id": "boot",
+			"slot": "boots",
+			"bones": [
+				"foot"
+			],
+			"rigid": true,
+			"under": "голенище с запасом под штаниной",
+			"overlap": 0.025,
+			"paired": true,
+			"overlap_px": 26,
+			"canvas_px": [
+				246,
+				215
+			],
+			"joints_px": {
+				"foot_near": [
+					118,
+					77
+				]
+			},
+			"pivot": "foot_near",
+			"axis": null,
+			"painted": "upright, as in the neutral pose"
+		},
+		{
+			"id": "backpack",
+			"slot": "backpack",
+			"bones": [
+				"chest"
+			],
+			"rigid": true,
+			"under": "лямки уходят за плечо",
+			"overlap": 0.025,
+			"paired": false,
+			"overlap_px": 26,
+			"canvas_px": [
+				307,
+				420
+			],
+			"joints_px": {
+				"chest": [
+					333,
+					159
+				]
+			},
+			"pivot": "chest",
+			"axis": null,
+			"painted": "upright, as in the neutral pose"
+		}
+	],
+	"layers_back_to_front": [
+		"glove_far",
+		"sleeve_far",
+		"boot_far",
+		"pant_leg_far",
+		"backpack",
+		"pelvis",
+		"pant_leg_near",
+		"boot_near",
+		"torso",
+		"joint_shadows",
+		"head",
+		"eyes",
+		"headwear",
+		"glove_near",
+		"sleeve_near",
+		"hook"
+	],
+	"rules": [
+		"Каждая деталь рисуется целиком, с продолжением под соседней деталью на overlap_px.",
+		"Рукав, штанина и торс гнутся сеткой по двум костям; кисти, ботинки, голова и рюкзак жёсткие.",
+		"Свет мягкий сверху-слева, без теней от соседних деталей: тени стыков — отдельный слой joint_shadows.",
+		"Одна картинка на парную деталь; дальняя затемняется шейдером.",
+		"Контур одной толщины: 6 px при master_px."
+	]
+}

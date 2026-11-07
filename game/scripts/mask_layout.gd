@@ -25,6 +25,10 @@ const CAVE_SIZES := [Vector2(3.0,2.7),Vector2(2.4,2.2),Vector2(1.9,1.7)]
 const CAVE_ROCK := .3
 const CAVE_CLEAR := 1.2
 const CAVE_SPACING := 12.0
+# A cave's cache lies this share of its half height below its middle, on its
+# floor, and is stocked only within this reach of a grip of the network.
+const CACHE_FLOOR := .35
+const CACHE_REACH := 4.2
 const KINDS := {"stone":GripSpec.STONE,"root":GripSpec.ROOT,"spring":GripSpec.SPRING,"ice":GripSpec.ICE,"crystal":GripSpec.CRYSTAL}
 
 var source: LevelSource
@@ -489,7 +493,34 @@ func _plan_caves() -> void:
 		if cave.is_empty(): y += 1.5
 		else:
 			rock_caves.append(cave)
+			_stock_cave(cave)
 			y += CAVE_SPACING
+
+# A cave within reach of the climb hides a cache: one rare find on its floor,
+# worth the swing in (docs/DESERT_LEVEL_PLAN.md, stage 6). A cave no grip of
+# the network reaches keeps nothing, so nothing shines out of reach.
+func _stock_cave(cave: Array) -> void:
+	var spot := Vector2(float(cave[0]),float(cave[1])-float(cave[3])*CACHE_FLOOR)
+	for anchor in anchors:
+		if not GripSpec.in_network(anchor): continue
+		if anchor["pos"].distance_to(spot)<=CACHE_REACH and transition_clear(anchor["pos"],spot):
+			var before := finds.size()
+			if economy_loot:
+				# A rare artifact like a route treasure, placed and checked as
+				# every find of the level is.
+				var row := _row_near(spot.y)
+				loot_plan.request(row,spot,"route_treasure")
+				loot_plan.resolve_until(row)
+			else: super._add_find(spot,clampi(int(spot.y/20),0,5),true)
+			if finds.size()>before: finds[-1]["cache"] = true
+			return
+
+# The main route's row nearest a height.
+func _row_near(y: float) -> int:
+	var best := 0
+	for index in range(main_route.size()):
+		if absf(main_point(index).y-y)<absf(main_point(best).y-y): best = index
+	return best
 
 func _cave_at(y: float) -> Array:
 	for size: Vector2 in CAVE_SIZES:

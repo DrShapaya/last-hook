@@ -490,6 +490,7 @@ static func _timer_text(seconds: float) -> String:
 
 func update_anchor_timer(id: int, seconds_left: float) -> void:
 	var object := anchor_by_id(id)
+	_trickle_sand(object,seconds_left)
 	var dial: Dictionary = object.get("timer_dial",{})
 	if dial.is_empty() or not is_instance_valid(dial["label"]): return
 	var shown := snappedf(clampf(seconds_left,0,GripSpec.ROOT_SECONDS),.05)
@@ -1046,7 +1047,43 @@ func break_anchor(id: int) -> bool:
 	_crumble(object)
 	return true
 
+# A sandstone grip of the desert sheds sand while it is held, faster as its
+# clock runs out, so the break reads before it comes
+# (docs/DESERT_LEVEL_PLAN.md, stage 6).
+const SAND_TRICKLE := Vector2(.28,.05)
+var sand_clock := 0.0
+
+func _sandstone(object: Dictionary) -> bool:
+	return not object.is_empty() and layout is MaskLayout and (layout as MaskLayout).rock_form=="desert"
+
+func _trickle_sand(object: Dictionary, seconds_left: float) -> void:
+	if not visuals_enabled or not _sandstone(object) or not is_instance_valid(object.get("visual")): return
+	var now := Time.get_ticks_msec()/1000.0
+	if now<sand_clock: return
+	var worn := 1.0-clampf(seconds_left/GripSpec.ROOT_SECONDS,0,1)
+	sand_clock = now+lerpf(SAND_TRICKLE.x,SAND_TRICKLE.y,worn)
+	_sand_grains(object,1 if worn<.6 else 2,.9)
+
+# Grains of sand falling from under a grip.
+func _sand_grains(object: Dictionary, count: int, fall: float) -> void:
+	var p: Vector2 = object["pos"]
+	var dims: Vector2 = object.get("dimensions",Vector2(1.6,.65))
+	var mount: SurfaceMount = object.get("mount")
+	var z := mount.holder_position().z+.35 if mount!=null else 2.5
+	var color := (profile_at(p.y).rock_palette["warm"] as Color).darkened(.12)
+	var tween := create_tween().set_parallel(true)
+	for index in range(count):
+		var x := p.x+randf_range(-.45,.45)*dims.x
+		var grain := box("Песчинка",Vector3(x,p.y-dims.y*.45,z),Vector3(.07,.07,.05),mat("sand_grain_%s" % color.to_html(),color))
+		var time := randf_range(.45,.7)
+		tween.tween_property(grain,"position",grain.position+Vector3(randf_range(-.15,.15),-fall*randf_range(.8,1.3),0),time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tween.tween_property(grain,"scale",Vector3.ZERO,time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tween.tween_callback(grain.queue_free).set_delay(time)
+
 func _crumble(object: Dictionary) -> void:
+	if is_instance_valid(object.get("visual")) and visuals_enabled and _sandstone(object):
+		# The sandstone gives way in a shower of sand.
+		_sand_grains(object,10,1.6)
 	if is_instance_valid(object.get("visual")):
 		object["visual"].visible = false
 		if visuals_enabled:

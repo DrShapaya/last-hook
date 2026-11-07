@@ -476,7 +476,8 @@ func desert_depth_tests(world: MountainWorld, layout: MaskLayout) -> void:
 	check(worst<=.2,"no vertex of the rock stands off the mask (%.2f)" % worst)
 	# Thin arches and bridges count too, so some stone always falls here.
 	check(tip_share<=.02,"thin sharp tips are rare (%.3f of the stone)" % tip_share)
-	# Caves lie in thick rock, and nothing the player needs stands in one.
+	# Caves lie in thick rock, and nothing the player needs stands in one: only
+	# a cache, put there on purpose.
 	check(layout.rock_caves.size()>=3,"the canyon has caves (%d)" % layout.rock_caves.size())
 	var in_cave := 0
 	var off_stone := 0
@@ -486,11 +487,32 @@ func desert_depth_tests(world: MountainWorld, layout: MaskLayout) -> void:
 		check(rock.distance(at)<0.0,"a cave opens the face, it is no paint on it")
 		var spots: Array = []
 		for anchor in layout.anchors: spots.append(anchor["pos"])
-		for find in layout.finds: spots.append(find["pos"])
+		for find in layout.finds:
+			if not find.get("cache",false): spots.append(find["pos"])
 		for spot: Vector2 in spots:
 			if ((spot-at)/Vector2(float(cave[2]),float(cave[3]))).length()<1.0: in_cave += 1
 	check(off_stone==0,"every cave lies inside the rock (%d do not)" % off_stone)
 	check(in_cave==0,"no grip or find stands in a cave (%d do)" % in_cave)
+	# A cave in reach of the climb hides a rare find on its floor, and the
+	# swing to it is clear (docs/DESERT_LEVEL_PLAN.md, stage 6).
+	var caches := 0
+	var stray := 0
+	for find in layout.finds:
+		if not find.get("cache",false): continue
+		caches += 1
+		var housed := false
+		for cave in layout.rock_caves:
+			if ((find["pos"]-Vector2(float(cave[0]),float(cave[1])))/Vector2(float(cave[2]),float(cave[3]))).length()<1.0: housed = true
+		var reached := false
+		for anchor in layout.anchors:
+			if GripSpec.in_network(anchor) and anchor["pos"].distance_to(find["pos"])<=MaskLayout.CACHE_REACH and layout.transition_clear(anchor["pos"],find["pos"]): reached = true
+		if not housed or not reached or not find["rare"]:
+			stray += 1
+			print("DESERT_CACHE_STRAY ",find["pos"]," housed ",housed," reached ",reached," rare ",find["rare"])
+	print("DESERT_CACHES ",caches," of ",layout.rock_caves.size()," caves, stray ",stray)
+	check(caches>=1 and stray==0,"caves in reach hide rare caches a grip reaches (%d, %d stray)" % [caches,stray])
+	# A sandstone grip sheds sand while held; other locations' grips do not.
+	check(world._sandstone(layout.anchors[layout.main_route[3]]),"the canyon's grips are sandstone")
 	# Near its edge the rock has a side: it faces away from the viewer, not at him.
 	var sides: Array = []
 	y = 6.0

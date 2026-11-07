@@ -670,6 +670,7 @@ func finds_without_pedestal() -> bool:
 func build_chunk(index: int, parent: Node3D) -> void:
 	query_cache.clear()
 	decor_rects.erase(index)
+	decor_clumps.erase(index)
 	decor_kin.erase(index)
 	await _build_masses(index,parent)
 	if not await pause(parent): return
@@ -678,6 +679,9 @@ func build_chunk(index: int, parent: Node3D) -> void:
 	if not await pause(parent): return
 	if layout is MaskLayout and (layout as MaskLayout).rock_form=="winter":
 		await _build_crystals(index,parent)
+		if not await pause(parent): return
+	if layout is MaskLayout and (layout as MaskLayout).rock_form=="desert" and _seats_on_view():
+		await _build_desert_life(index,parent)
 		if not await pause(parent): return
 	await _build_decor(index,parent)
 	if layout is MaskLayout and (layout as MaskLayout).rock_form!="boulder":
@@ -689,6 +693,148 @@ func _in_cave(point: Vector2, reach: float = 0.0) -> bool:
 	for cave in (layout as MaskLayout).rock_caves:
 		if ((point-Vector2(float(cave[0]),float(cave[1])))/(Vector2(float(cave[2]),float(cave[3]))+Vector2(reach,reach))).length()<1.0: return true
 	return false
+
+# --- Desert life (docs/DESERT_LEVEL_PLAN.md, stage 4) --------------------------------
+
+# Plants of a desert group, larger than the scattered decor: as tall against
+# a ledge as on desertClose.png. The painted atlas variants first, where the
+# catalogue has them, the older ones otherwise.
+const DESERT_SCALE := {"cactus":1.45,"dry_plant":1.6,"tree_dead":.8,"skull":1.0,"vine_dry":1.4,"stone_desert":.9}
+const DESERT_PREFERRED := {"cactus":[6,7,8],"dry_plant":[5,7,8],"vine_dry":[6,7,8]}
+# Groups keep this far apart.
+const DESERT_GROUP_GAP := 3.5
+
+func _desert_entry(kind: String, random: RandomNumberGenerator, mode: String = "") -> Array:
+	var entry := FloraModels.pick(kind,random,mode,DESERT_PREFERRED.get(kind,[]))
+	return entry if not entry.is_empty() else FloraModels.pick(kind,random,mode)
+
+# Every open ledge carries a group as on desertClose.png: a tall cactus with a
+# smaller one beside it, a flowering bush, now and then a dry shrub or a
+# skull; big dry roots hang from the ends of the ledges. They claim their
+# places before the scattered decor, which fits round them.
+func _build_desert_life(index: int, parent: Node3D) -> void:
+	var rock := RockSurface.make(layout as MaskLayout)
+	var random := layout.rng(index,931)
+	var groups := 0
+	var group_budget := 2 if quality=="battery" else 6
+	var anchors: Array = []
+	# The benches seen on the face: tops of the ledges, inside the outline, in
+	# front of the wall over them.
+	for spot: Vector3 in rock.perches(index*BAND,(index+1)*BAND,random,group_budget*120):
+		if groups>=group_budget: break
+		if not await pause(parent): return
+		var at := Vector2(spot.x,spot.y)
+		if not _on_bench(rock,at): continue
+		var far := true
+		for other: Vector2 in anchors: far = far and other.distance_to(at)>=DESERT_GROUP_GAP
+		if not far: continue
+		if await _desert_group(index,parent,rock,at,random,groups)>=2:
+			anchors.append(at)
+			groups += 1
+	if not is_instance_valid(parent): return
+	# Roots under each ledge, most of them near its ends, over the air beside it.
+	var roots := 0
+	var root_budget := 2 if quality=="battery" else 8
+	for ledge: Array in (layout as MaskLayout).rock_marks:
+		if int(floor(float(ledge[0])/BAND))!=index: continue
+		for end: float in [-1.0,1.0,-1.0,1.0]:
+			if roots>=root_budget: break
+			var entry := _desert_entry("vine_dry",random,"hang")
+			if entry.is_empty(): continue
+			var scale := float(DESERT_SCALE["vine_dry"])*random.randf_range(.85,1.1)
+			var size := FloraModels.size_of(entry,scale)
+			for attempt in range(8):
+				var rx := float(ledge[3])+end*(float(ledge[2])-random.randf_range(1.0,float(ledge[2])*.8))
+				var under := _ceiling_over(rx,float(ledge[0])-5.0,8.0)
+				if under==INF: continue
+				var seat := _hang_seat(Vector2(rx,under-.3),size)
+				if not seat.is_finite(): continue
+				var rect := Rect2(seat.x-size.x*.5,seat.y-size.y,size.x,size.y)
+				if not _decor_route_clear(seat,1.2) or _taken(index,rect.grow(.2)) or _would_crowd(index,rect.get_center()) or not _decor_fits(rect,true): continue
+				_plant_desert(index,parent,"Подвес_корень_%d" % roots,entry,seat,rect,scale,0.0)
+				roots += 1
+				break
+
+# A point on the top of a ledge seen inside the face: stone that looks up, a
+# step in from the outline, out of the caves.
+func _on_bench(rock: RockSurface, at: Vector2) -> bool:
+	return rock.distance(at)>1.0 and rock.normal_at(at).y>.4 and not _in_cave(at,.4)
+
+# One group on a bench at `at`, a clump as on desertClose.png: how many of
+# its pieces found a place. The first piece, the tall cactus, decides whether
+# the group stands at all; the rest gather round it, one behind another.
+func _desert_group(index: int, parent: Node3D, rock: RockSurface, at: Vector2, random: RandomNumberGenerator, number: int) -> int:
+	var side := -1.0 if random.randf()<.5 else 1.0
+	var pieces: Array = [["cactus",0.0],["cactus",side*random.randf_range(.7,1.0)],["dry_plant",-side*random.randf_range(.9,1.4)]]
+	if random.randf()<.6: pieces.append(["cactus",-side*random.randf_range(1.6,2.1)])
+	if random.randf()<.5: pieces.append(["stone_desert",side*random.randf_range(1.6,2.2)])
+	var roll := random.randf()
+	if roll<.35: pieces.append(["dry_plant_tree",side*random.randf_range(2.6,3.2)])
+	elif roll<.55: pieces.append(["skull",-side*random.randf_range(2.4,2.9)])
+	var clump := "Растение_группа_%d_%d" % [index,number]
+	var placed := 0
+	for piece: Array in pieces:
+		if not await pause(parent): return placed
+		var kind: String = piece[0]
+		var entry: Array
+		var scale: float
+		if kind=="dry_plant_tree":
+			# A dry shrub on the bench, or the dead tree where none is painted.
+			entry = FloraModels.pick("dry_plant",random,"stand",[6])
+			scale = float(DESERT_SCALE["dry_plant"])*1.4
+			if entry.is_empty():
+				entry = FloraModels.pick("tree_dead",random)
+				scale = float(DESERT_SCALE["tree_dead"])
+		else:
+			entry = _desert_entry(kind,random,"stand")
+			scale = float(DESERT_SCALE[kind])*random.randf_range(.85,1.1)
+			# The other cacti are smaller than the first.
+			if kind=="cactus" and placed>0: scale *= random.randf_range(.55,.75)
+		if entry.is_empty():
+			if placed==0: return 0
+			continue
+		var size := FloraModels.size_of(entry,scale)
+		var seat := at+Vector2(float(piece[1]),-.05)
+		var rect := Rect2(seat.x-size.x*.5,seat.y,size.x,size.y)
+		if not _bench_holds(rock,rect) or not _decor_route_clear(seat,1.0+size.x*.3) or _taken_by_others(index,rect.grow(.08),clump) or _would_crowd(index,rect.get_center(),2.6,clump) or not _decor_fits(rect,false):
+			if placed==0: return 0
+			continue
+		# The first piece stands at the back, the later ones in front of it.
+		_plant_desert(index,parent,"%s_%d" % [clump,placed],entry,seat,rect,scale,placed*.03,clump)
+		placed += 1
+	return placed
+
+# A piece stands on the bench: its foot on the same top, and nothing over
+# it stands out of the face further than the bench it grows from, so no
+# ledge above cuts across it.
+func _bench_holds(rock: RockSurface, rect: Rect2) -> bool:
+	var foot := rock.height(Vector2(rect.get_center().x,rect.position.y))
+	for share in [.15,.5,.85]:
+		if not _on_bench(rock,Vector2(rect.position.x+rect.size.x*share,rect.position.y+.05)): return false
+	for row in [.35,.65,1.0]:
+		for column in [.2,.5,.8]:
+			if rock.height(rect.position+rect.size*Vector2(column,row))>foot+.4: return false
+	return true
+
+# Whether a piece would overlap one that is not of its own clump.
+func _taken_by_others(index: int, rect: Rect2, clump: String) -> bool:
+	for band in [index-1,index,index+1]:
+		var rects: Array = decor_rects.get(band,[])
+		var owners: Array = decor_clumps.get(band,[])
+		for k in range(rects.size()):
+			if k<owners.size() and owners[k]==clump: continue
+			if (rects[k] as Rect2).intersects(rect): return true
+	return false
+
+func _plant_desert(index: int, parent: Node3D, name: String, entry: Array, seat: Vector2, rect: Rect2, scale: float, lift: float, clump: String = "") -> void:
+	var holder := Node3D.new()
+	holder.name = name
+	parent.add_child(holder)
+	# In front of all the stone the piece covers; pieces of one group a hair
+	# apart, so none flickers through the next.
+	holder.position = Vector3(seat.x,seat.y,_front_over(rect)+.05+lift)
+	FloraModels.plant(holder,entry,quality!="battery",scale)
+	_take(index,rect,clump)
 
 # Plants and stones along the ledges of a location's own rock.
 func _build_ledge_plants(index: int, parent: Node3D) -> void:
@@ -725,8 +871,9 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 				if not point.is_finite(): continue
 		var rect := Rect2(point.x-size.x*.5,point.y,size.x,size.y)
 		if _taken(index,rect.grow(gap)) or (seated and not on_lens and not _decor_fits(rect,false)): continue
-		# On the snow peak the ice comes later and needs its room too.
-		if (layout as MaskLayout).rock_form=="winter" and _would_crowd(index,rect.get_center()): continue
+		# On the snow peak the ice comes later and needs its room too; in the
+		# desert the groups stand first and keep theirs.
+		if (layout as MaskLayout).rock_form in ["winter","desert"] and _would_crowd(index,rect.get_center()): continue
 		var holder := Node3D.new()
 		holder.name = "Растение_%d" % placed
 		parent.add_child(holder)
@@ -998,7 +1145,10 @@ func _build_rock_surface(index: int, parent: Node3D) -> void:
 	instance.material_override = rock_material_at(index*BAND+BAND*.5)
 	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if quality!="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(instance)
-	if (layout as MaskLayout).rock_form=="desert" and quality!="battery": _add_dust(index,parent)
+	if (layout as MaskLayout).rock_form=="desert" and quality!="battery":
+		_add_dust(index,parent)
+		_add_heat_haze(index,parent)
+		_add_tumbleweed(index,parent)
 	if (layout as MaskLayout).rock_form=="winter" and quality!="battery":
 		_add_snowfall(index,parent)
 		_add_blown_snow(index,parent,rock)
@@ -1034,6 +1184,88 @@ func _add_dust(index: int, parent: Node3D) -> void:
 	grain.material = material
 	dust.draw_pass_1 = grain
 	parent.add_child(dust)
+
+# --- Desert air (docs/DESERT_LEVEL_PLAN.md, stage 5) --------------------------------
+
+# Hot air shimmers over the foot of the canyon and over its widest benches:
+# the picture behind wavers a little, never tinted. Not on battery.
+const HEAT_CODE := """shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled, depth_draw_never;
+uniform sampler2D screen : hint_screen_texture, filter_linear_mipmap;
+uniform float strength = .0035;
+void fragment(){
+	float rise = 1.0-UV.y;
+	float body = smoothstep(0.0,.25,rise)*(1.0-smoothstep(.55,1.0,rise))*smoothstep(0.0,.12,UV.x)*smoothstep(1.0,.88,UV.x);
+	vec2 wobble = vec2(sin(rise*38.0-TIME*3.1+UV.x*9.0),cos(UV.x*27.0+rise*12.0-TIME*2.2))*strength*body;
+	ALBEDO = texture(screen,SCREEN_UV+wobble).rgb;
+	ALPHA = body;
+}"""
+static var heat_shader: Shader
+
+func _heat_strip(parent: Node3D, name: String, at: Vector3, size: Vector2) -> void:
+	if heat_shader==null:
+		heat_shader = Shader.new()
+		heat_shader.code = HEAT_CODE
+	var material := ShaderMaterial.new()
+	material.shader = heat_shader
+	var plane := QuadMesh.new()
+	plane.size = size
+	var strip := MeshInstance3D.new()
+	strip.name = name
+	strip.mesh = plane
+	strip.material_override = material
+	strip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	strip.position = at
+	parent.add_child(strip)
+
+func _add_heat_haze(index: int, parent: Node3D) -> void:
+	if index==0: _heat_strip(parent,"Марево подножия",Vector3(0,3.0,2.2),Vector2(44,6.0))
+	# Over the two widest benches of the band, in front of the face.
+	var benches: Array = (layout as MaskLayout).rock_marks.filter(func(ledge: Array) -> bool: return int(floor(float(ledge[1])/BAND))==index)
+	benches.sort_custom(func(a: Array, b: Array) -> bool: return float(a[2])>float(b[2]))
+	for k in range(mini(2,benches.size())):
+		var ledge: Array = benches[k]
+		_heat_strip(parent,"Марево_%d" % k,Vector3(float(ledge[3]),float(ledge[1])+1.6,2.0),Vector2(float(ledge[2])*1.6,3.2))
+
+# Now and then a tumbleweed bowls along on the wind, across the band and
+# off the face: one at a time, most of the time none. Not on battery.
+func _add_tumbleweed(index: int, parent: Node3D) -> void:
+	var weed := GPUParticles3D.new()
+	weed.name = "Перекати-поле_%d" % index
+	weed.amount = 1
+	weed.lifetime = 14.0
+	weed.preprocess = layout.rng(index,941).randf_range(0.0,14.0)
+	weed.position = Vector3(-26,index*BAND+BAND*.5,1.8)
+	weed.visibility_aabb = AABB(Vector3(-4,-BAND*.6,-2),Vector3(60,BAND*1.2,4))
+	weed.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var process := ParticleProcessMaterial.new()
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	process.emission_box_extents = Vector3(.5,BAND*.4,.1)
+	process.direction = Vector3(1,.05,0)
+	process.spread = 6.0
+	# Most of its life it waits off the face: it crosses in a few seconds.
+	process.initial_velocity_min = 11.0
+	process.initial_velocity_max = 14.0
+	process.gravity = Vector3(0,-.6,0)
+	process.angle_min = -180.0
+	process.angle_max = 180.0
+	process.angular_velocity_min = -420.0
+	process.angular_velocity_max = -300.0
+	process.turbulence_enabled = true
+	process.turbulence_noise_strength = 1.4
+	process.turbulence_influence_min = .05
+	process.turbulence_influence_max = .12
+	weed.process_material = process
+	var ball := QuadMesh.new()
+	ball.size = Vector2(.9,.9)
+	var material := StandardMaterial3D.new()
+	material.albedo_texture = load(FloraModels.sprite_path("dry_plant",4))
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	material.alpha_scissor_threshold = .5
+	material.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	material.albedo_color = Color(.92,.8,.62)
+	ball.material = material
+	weed.draw_pass_1 = ball
+	parent.add_child(weed)
 
 # --- Summer air (docs/SUMMER_LEVEL_PLAN.md, stage 5) --------------------------------
 
@@ -1430,6 +1662,8 @@ func _on_face(mass: RockMassSpec, point: Vector2) -> RockSurfaceHit:
 # Pieces already standing in a band (landmarks first, then decor), so no
 # two overlap.
 var decor_rects: Dictionary = {}
+# The clump of each of decor_rects, "" for a piece on its own.
+var decor_clumps: Dictionary = {}
 
 func _taken(index: int, rect: Rect2) -> bool:
 	for band in [index-1,index,index+1]:
@@ -1438,25 +1672,45 @@ func _taken(index: int, rect: Rect2) -> bool:
 	return false
 
 # How many pieces already stand within `reach` of a point.
-func _crowd_near(index: int, point: Vector2, reach: float = 2.6) -> int:
+# A clump (a desert group, planted piece by piece) is one neighbour to what
+# stands round it, and its own pieces do not crowd each other; `clump` is the
+# clump of the piece asking, "" for none. As decor_audit.gd judges it.
+func _crowd_near(index: int, point: Vector2, reach: float = 2.6, clump: String = "") -> int:
 	var count := 0
+	var clumps := {}
 	for band in [index-1,index,index+1]:
-		for other: Rect2 in decor_rects.get(band,[]):
-			if other.get_center().distance_to(point)<reach: count += 1
+		var rects: Array = decor_rects.get(band,[])
+		var owners: Array = decor_clumps.get(band,[])
+		for k in range(rects.size()):
+			if (rects[k] as Rect2).get_center().distance_to(point)>=reach: continue
+			var owner: String = owners[k] if k<owners.size() else ""
+			if owner.is_empty(): count += 1
+			elif owner!=clump and not clumps.has(owner):
+				clumps[owner] = true
+				count += 1
 	return count
 
 # Whether a piece at `point` would stand among more than three others, or
 # put one of its neighbours among more than three.
-func _would_crowd(index: int, point: Vector2, reach: float = 2.6) -> bool:
-	if _crowd_near(index,point,reach)>=3: return true
+func _would_crowd(index: int, point: Vector2, reach: float = 2.6, clump: String = "") -> bool:
+	if _crowd_near(index,point,reach,clump)>=3: return true
 	for band in [index-1,index,index+1]:
-		for other: Rect2 in decor_rects.get(band,[]):
-			if other.get_center().distance_to(point)<reach and _crowd_near(index,other.get_center(),reach)>=4: return true
+		var rects: Array = decor_rects.get(band,[])
+		var owners: Array = decor_clumps.get(band,[])
+		for k in range(rects.size()):
+			var owner: String = owners[k] if k<owners.size() else ""
+			if not clump.is_empty() and owner==clump: continue
+			# A neighbour gains this piece only if it is not of the same clump.
+			if (rects[k] as Rect2).get_center().distance_to(point)<reach and _crowd_near(index,(rects[k] as Rect2).get_center(),reach,owner)>=4: return true
 	return false
 
-func _take(index: int, rect: Rect2) -> void:
+func _take(index: int, rect: Rect2, clump: String = "") -> void:
 	if not decor_rects.has(index): decor_rects[index] = []
+	if not decor_clumps.has(index): decor_clumps[index] = []
+	# Keep the clumps in step with the rects, whoever took them before.
+	while (decor_clumps[index] as Array).size()<(decor_rects[index] as Array).size(): decor_clumps[index].append("")
 	decor_rects[index].append(rect)
+	decor_clumps[index].append(clump)
 
 # The same thing never stands twice in one place: how far apart pieces of a
 # family keep, in metres.
@@ -1804,6 +2058,9 @@ func _build_decor(index: int, parent: Node3D) -> void:
 			if not anchor.is_finite(): continue
 			rect.position = Vector2(anchor.x-size.x*.5,anchor.y-size.y if hangs else anchor.y)
 		if _taken(index,rect.grow(gap)) or not _decor_fits(rect,hangs,climbs): continue
+		# The desert's groups are clumps of several plants: what stands round
+		# them keeps the room the audit asks for.
+		if layout is MaskLayout and (layout as MaskLayout).rock_form=="desert" and _would_crowd(index,rect.get_center()): continue
 		if kind=="crystal": crystals += 1
 		if kind=="hanging": hanging += 1
 		if kind=="climb": climbing += 1

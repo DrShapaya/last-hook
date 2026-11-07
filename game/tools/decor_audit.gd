@@ -6,11 +6,14 @@ extends SceneTree
 #   floating  its foot has no stone under it
 #   edge      less than half of its painted foot rests on stone
 #   buried    stone in front of it hides a good part of it
-#   crowded   too many pieces stand close round it
+#   crowded   too many pieces stand close round it (the pieces of one desert
+#             group count as one clump and do not crowd each other)
 # Exits 1 when any piece of a checked level breaks a rule.
 
 const CROWD_REACH := 2.6
 const CROWD_LIMIT := 3
+# Holders of a desert group: "Растение_группа_<band>_<group>_<piece>".
+const CLUMP := "Растение_группа_"
 const BURIED_LIMIT := .18
 const FOOT_LIMIT := .5
 
@@ -72,6 +75,10 @@ func _pieces(holder: Node) -> Array:
 	for prefix in ["Декор_","Крупный элемент","Ориентир акта","Растение_","Подвес_","Кристалл_"]:
 		if str(holder.name).begins_with(prefix): group = prefix
 	if group.is_empty() or not holder is Node3D: return []
+	# A desert group is planted as one clump, piece by piece.
+	var clump := ""
+	if str(holder.name).begins_with(CLUMP):
+		clump = str(holder.name).rsplit("_",true,1)[0]
 	var result: Array = []
 	for mesh: MeshInstance3D in holder.find_children("*","MeshInstance3D",true,false):
 		var name := str(mesh.name)
@@ -86,13 +93,13 @@ func _pieces(holder: Node) -> Array:
 		var foot := Vector2(box.get_center().x,box.position.y)
 		var span := Vector2(at.x-size.x*.5+extent["foot_left"]*size.x,at.x-size.x*.5+extent["foot_right"]*size.x)
 		if hanging: foot = Vector2(box.get_center().x,box.end.y)
-		result.append({"group":group,"name":name,"foot":foot,"span":span,"box":box,"z":at.z,"hanging":hanging,"climbing":FloraModels_climbs(kind,int(parts[1]))})
+		result.append({"group":group,"name":name,"foot":foot,"span":span,"box":box,"z":at.z,"hanging":hanging,"climbing":FloraModels_climbs(kind,int(parts[1])),"clump":clump})
 	for shaft: Node3D in holder.find_children("Древко","Node3D",true,false):
 		var pole: Node3D = shaft.get_parent()
 		var at := pole.global_position
 		var foot := Vector2(at.x,at.y+pole.scale.y*.1)
 		var tall := pole.scale.y*3.4
-		result.append({"group":group,"name":"Флаг","foot":foot,"span":Vector2(foot.x-.08,foot.x+.08),"box":Rect2(foot.x-.08,foot.y,.16,tall),"z":at.z,"hanging":false,"climbing":false})
+		result.append({"group":group,"name":"Флаг","foot":foot,"span":Vector2(foot.x-.08,foot.x+.08),"box":Rect2(foot.x-.08,foot.y,.16,tall),"z":at.z,"hanging":false,"climbing":false,"clump":""})
 	return result
 
 func FloraModels_climbs(kind: String, variant: int) -> bool:
@@ -148,7 +155,15 @@ func _judge(visuals: MassifVisuals, piece: Dictionary, pieces: Array) -> Array:
 			if not visuals.open_at(probe) and visuals.wall_depth(probe)>float(piece["z"])+.02: hidden += 1
 	if hidden/float(looked)>BURIED_LIMIT: problems.append("buried")
 	var near := 0
+	var clump: String = piece["clump"]
+	var clumps := {}
 	for other: Dictionary in pieces:
-		if not other["box"].get_center().is_equal_approx(box.get_center()) and other["box"].get_center().distance_to(box.get_center())<CROWD_REACH: near += 1
+		if not clump.is_empty() and other["clump"]==clump: continue
+		if other["box"].get_center().is_equal_approx(box.get_center()) or other["box"].get_center().distance_to(box.get_center())>=CROWD_REACH: continue
+		# A clump nearby is one neighbour, however many pieces it has.
+		if str(other["clump"]).is_empty(): near += 1
+		elif not clumps.has(other["clump"]):
+			clumps[other["clump"]] = true
+			near += 1
 	if near>CROWD_LIMIT: problems.append("crowded")
 	return problems

@@ -408,16 +408,43 @@ func desert_depth_tests(world: MountainWorld, layout: MaskLayout) -> void:
 	var drops: Array = []
 	var hollows: Array = []
 	for ledge in layout.rock_marks:
-		var at := Vector2(float(ledge[3]),float(ledge[0])-1.0)
-		if rock.distance(at)<ROLL_CLEAR or rock.distance(at+Vector2(0,-3.0))<ROLL_CLEAR: continue
-		var crest := rock.height(Vector2(at.x,lerpf(float(ledge[0]),float(ledge[1]),.45)))
-		drops.append(crest-rock.height(at))
-		hollows.append(rock.height(at+Vector2(0,-3.0))-rock.height(at))
+		# The first spot along the ledge with full rock under it.
+		for along in [0.0,-.3,.3,-.15,.15]:
+			var at := Vector2(float(ledge[3])+along*float(ledge[2]),float(ledge[0])-1.0)
+			if rock.distance(at)<ROLL_CLEAR or rock.distance(at+Vector2(0,-3.0))<ROLL_CLEAR: continue
+			var crest := rock.height(Vector2(at.x,lerpf(float(ledge[0]),float(ledge[1]),.45)))
+			drops.append(crest-rock.height(at))
+			hollows.append(rock.height(at+Vector2(0,-3.0))-rock.height(at))
+			break
 	drops.sort()
 	hollows.sort()
 	print("DESERT_UNDERCUT drop ",drops," hollow ",hollows)
 	check(drops.size()>=2 and float(drops[drops.size()/2])>=3.0,"a ledge overhangs the rock under it by 3 units %s" % str(drops))
 	check(float(hollows[hollows.size()/2])>=.5,"under a ledge lies a hollow, deeper than the wall below %s" % str(hollows))
+	# Ledges are thick slabs, two or three heights of the hero, and their top is
+	# one bench leaning back: it faces the sky and is the same plane across.
+	var thin := 0
+	var top_points := 0
+	var benches := 0
+	var leans: Array = []
+	for ledge in layout.rock_marks:
+		if float(ledge[1])-float(ledge[0])<3.0: thin += 1
+		var foot := float(ledge[0])-DesertRock.LEDGE_BELOW
+		var crown := float(ledge[1])+DesertRock.LEDGE_ABOVE
+		for k in range(24):
+			var at := Vector2(float(ledge[3])+lerpf(-.5,.5,(k%6)/5.0)*float(ledge[2]),lerpf(lerpf(foot,crown,DesertRock.NOSE+.12),float(ledge[1])-.4,(k/6)/3.0))
+			if rock.distance(at)<ROLL_CLEAR: continue
+			top_points += 1
+			var normal := rock.normal_at(at)
+			if normal.y>.35 and normal.z>.25: benches += 1
+			leans.append(normal.y)
+	var bench_share := float(benches)/maxf(1.0,top_points)
+	leans.sort()
+	var spread: float = leans[int(leans.size()*.9)]-leans[int(leans.size()*.1)] if leans.size()>10 else 1.0
+	print("DESERT_LEDGES thin ",thin," of ",layout.rock_marks.size()," bench ",bench_share," of ",top_points," lean spread ",spread)
+	check(thin==0,"every ledge is a thick slab (%d thin)" % thin)
+	check(top_points>=20 and bench_share>=.8,"a ledge's top is a bench facing the sky (%.2f of %d)" % [bench_share,top_points])
+	check(spread<=.25,"a ledge's top is one plane (lean spread %.2f)" % spread)
 	# The outline has no spikes: at the coarsest preset no vertex of the face
 	# stands off the mask, and hardly any stone is a thin sharp tip.
 	var worst := 0.0
@@ -729,6 +756,81 @@ func desert_outline_tests() -> void:
 		# The belly of a wide ledge may run level for a short way, as in the picture.
 		check(rim<=4.0,"route %d has no dead-level rim over 4 units (%.1f at %.1f)" % [route,rim,rim_at])
 		check(wall<=6.0,"route %d has no straight wall over 6 units (%.1f at %.1f)" % [route,wall,wall_at])
+		desert_silhouette_tests(designer as DesertDesigner,source,route)
+
+# The canyon's silhouette after desert_4k.png: gates with a flat lintel and
+# straight jambs, the rock above every gap standing on enough stone, legs
+# under the ledges, and a mesa with a spire at the top.
+func desert_silhouette_tests(designer: DesertDesigner, source: LevelSource, route: int) -> void:
+	var sky := func(x: float, y: float) -> bool: return source.sample("silhouette",Vector2(x,y))<=.5
+	# A gap's width along a row through a point inside it.
+	var gap := func(at: Vector2) -> float:
+		if not sky.call(at.x,at.y): return 0.0
+		var left := at.x
+		var right := at.x
+		while left>at.x-12.0 and sky.call(left-.125,at.y): left -= .125
+		while right<at.x+12.0 and sky.call(right+.125,at.y): right += .125
+		return right-left
+	var gates := 0
+	var square := 0
+	for window in designer.windows:
+		var half: Vector2 = window[1]
+		if half.x<DesertDesigner.GATE_HALF: continue
+		gates += 1
+		var center: Vector2 = window[0]
+		var middle: float = gap.call(center)
+		var under_lintel: float = gap.call(center+Vector2(0,half.y*.6))
+		if middle>0.0 and under_lintel>=middle*.75: square += 1
+		else: print("DESERT_GATE_SHAPE route ",route," at ",center," half ",half," middle ",middle," under lintel ",under_lintel)
+	print("DESERT_GATES route ",route," gates ",gates," square ",square," pillars ",designer.pillars.size()," boulders ",designer.boulders.size())
+	check(gates>=2,"route %d has a great gate in most acts (%d)" % [route,gates])
+	check(square==gates,"route %d: every gate has a flat lintel over straight jambs (%d of %d)" % [route,square,gates])
+	# Legs stand apart: stone in the leg, sky between it and its wall.
+	var apart := 0
+	for pillar in designer.pillars:
+		var x := float(pillar[0])
+		var mid := (float(pillar[1])+float(pillar[2]))*.5
+		if sky.call(x,mid): continue
+		var toward := -signf(x-designer.corridor_center(mid))
+		var reach := float(pillar[3])+DesertDesigner.LEG_GAP.y+1.0
+		var step := .25
+		while step<reach:
+			if sky.call(x+toward*step,mid):
+				apart += 1
+				break
+			step += .25
+	print("DESERT_LEGS route ",route," legs ",designer.pillars.size()," standing apart ",apart)
+	check(apart>=2,"route %d stands ledges on legs with sky beside them (%d of %d)" % [route,apart,designer.pillars.size()])
+	# Outside the splits no part of the canyon hangs on a thin strip of rock.
+	var thinnest := INF
+	var thin_at := 0.0
+	var y := 6.0
+	while y<designer._mesa_floor():
+		var near_split := false
+		for split in designer.splits:
+			if y>float(split["y0"])-DesertDesigner.SPLIT_MELT-1.0 and y<float(split["y1"])+DesertDesigner.SPLIT_MELT+1.0: near_split = true
+		if not near_split:
+			var stone := 0.0
+			var x := -20.0
+			while x<=20.0:
+				if not sky.call(x,y): stone += .25
+				x += .25
+			if stone<thinnest:
+				thinnest = stone
+				thin_at = y
+		y += .5
+	print("DESERT_NECK route ",route," thinnest ",thinnest," at ",thin_at)
+	check(thinnest>=7.0,"route %d: the rock above never hangs on less than 7 units of stone (%.1f at %.1f)" % [route,thinnest,thin_at])
+	# The summit: a broad flat top and a narrow spire over it.
+	var mesa := 0.0
+	var spire := 0.0
+	var x := -20.0
+	while x<=20.0:
+		if not sky.call(x,designer.height-1.0): mesa += .25
+		if not sky.call(x,designer.height+DesertDesigner.SPIRE_RISE-.5): spire += .25
+		x += .25
+	print("DESERT_SUMMIT route ",route," mesa ",mesa," spire ",spire)
+	check(mesa>=9.0 and spire>0.0 and spire<=3.5,"route %d ends in a mesa with a spire (%.1f, %.1f)" % [route,mesa,spire])
 
 # The automatic designer: beats dressed in landforms, the route on stone,
 # the same seed giving the same source.

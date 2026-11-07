@@ -14,6 +14,8 @@ const FloraModels := preload("res://scripts/flora_models.gd")
 # Nothing here collides or changes a gameplay coordinate.
 
 const STREAK_SHADER := "shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_never, shadows_disabled; uniform vec4 tint : source_color = vec4(1.0); uniform float strength = .3; uniform float speed = 1.0; uniform float seed = 0.0; void fragment(){ float dash = smoothstep(.0,.25,fract(UV.x*1.6-TIME*speed+seed))*smoothstep(1.0,.55,fract(UV.x*1.6-TIME*speed+seed)); float edge = smoothstep(0.0,.5,UV.y)*smoothstep(1.0,.5,UV.y); ALBEDO = tint.rgb; ALPHA = dash*edge*strength*tint.a; }"
+# The yellow haze over a sand storm's zone, soft at its edges.
+const SAND_VEIL_SHADER := "shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_never, shadows_disabled; uniform float strength = .1; void fragment(){ float edge = smoothstep(0.0,.3,UV.x)*smoothstep(1.0,.7,UV.x)*smoothstep(0.0,.35,UV.y)*smoothstep(1.0,.65,UV.y); float drift = .75+.25*sin(UV.x*9.0-TIME*1.7+UV.y*4.0); ALBEDO = vec3(.98,.88,.66); ALPHA = edge*drift*strength; }"
 const HAZE_SHADER := "shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_never, shadows_disabled; uniform vec4 tint : source_color = vec4(.85,.68,.45,1.0); uniform float strength = 0.0; uniform vec2 hero = vec2(0.0); uniform float clear_radius = 7.0; varying vec3 world_pos; void vertex(){ world_pos = (MODEL_MATRIX*vec4(VERTEX,1.0)).xyz; } void fragment(){ float d = length(world_pos.xy-hero); float far = smoothstep(clear_radius,clear_radius+5.0,d); ALBEDO = tint.rgb; ALPHA = far*strength*.55; }"
 const SHADOW_SHADER := "shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_never, shadows_disabled; uniform float strength = 0.0; void fragment(){ float edge = smoothstep(0.0,.5,UV.x)*smoothstep(1.0,.5,UV.x); ALBEDO = vec3(.05,.10,.22); ALPHA = edge*strength*.6; }"
 # Clear radius of the storm haze: always beyond the base rope, so a valid grip
@@ -179,6 +181,44 @@ func _build_field(hazard: Dictionary, entry: Dictionary, random: RandomNumberGen
 		cloud.draw_pass_1 = MassifVisuals.snow_streak(.75,direction.angle())
 		node.add_child(cloud)
 		entry["cloud"] = cloud
+	# A sand storm shows from afar (docs/DESERT_LEVEL_PLAN.md, stage 5): a
+	# yellow haze over its zone all the time and sand driven across it, thin in
+	# the calm, thick while it blows (update).
+	if marker=="ribbon":
+		var veil := _material(SAND_VEIL_SHADER,"sand_veil")
+		var sheet := _quad(node,rect.size+Vector2(4,3),veil,Vector3(rect.get_center().x,rect.get_center().y,2.55))
+		sheet.name = "Песчаная дымка"
+		entry["veil"] = veil
+		if world.visual_quality!="battery":
+			var sand := GPUParticles3D.new()
+			sand.name = "Песчаная буря"
+			sand.amount = 160 if world.visual_quality=="high" else 100
+			sand.lifetime = 1.6
+			sand.preprocess = 1.6
+			sand.position = Vector3(rect.get_center().x-direction.x*rect.size.x*.5,rect.get_center().y,2.5)
+			sand.visibility_aabb = AABB(Vector3(-4,-rect.size.y*.6,-1.5),Vector3(rect.size.x+8,rect.size.y*1.2,3))
+			sand.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var process := ParticleProcessMaterial.new()
+			process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+			process.emission_box_extents = Vector3(1.0,rect.size.y*.5,.6)
+			process.direction = Vector3(direction.x,direction.y,0)
+			process.spread = 10.0
+			process.initial_velocity_min = rect.size.x*.55
+			process.initial_velocity_max = rect.size.x*.85
+			process.gravity = Vector3(0,-.5,0)
+			process.scale_min = .5
+			process.scale_max = 1.3
+			process.angle_min = -rad_to_deg(direction.angle())
+			process.angle_max = process.angle_min
+			sand.process_material = process
+			var grain := MassifVisuals.snow_streak(.85,direction.angle())
+			var sand_paint: StandardMaterial3D = (grain.material as StandardMaterial3D).duplicate()
+			# Ochre, darker than the pale sandstone, so the sand reads on it.
+			sand_paint.albedo_color = Color(.78,.55,.3,.85)
+			grain.material = sand_paint
+			sand.draw_pass_1 = grain
+			node.add_child(sand)
+			entry["cloud"] = sand
 	# A summer wind pocket carries leaves across it, the way it pushes
 	# (docs/SUMMER_LEVEL_PLAN.md, stage 5); fewer on battery.
 	if marker=="flag":
@@ -368,9 +408,16 @@ func update(time: float, hero: Vector2, haze_amount: float, camera: Vector2) -> 
 				var strength := .32
 				if not is_inf(float(hazard["active_time"])):
 					strength = .06 if name=="calm" else lerpf(.12,.5,progress) if name=="telegraph" else .75
+					# A sand storm stays in sight between its gusts: it is seen coming.
+					if entry.has("veil"): strength = maxf(strength,.22)
 				(entry["streak"] as ShaderMaterial).set_shader_parameter("strength",strength)
 				if entry.has("cloud") and is_instance_valid(entry["cloud"]):
 					(entry["cloud"] as GPUParticles3D).amount_ratio = clampf(strength*1.3,.08,1.0)
+				# A storm's haze is there in the calm too, so it is seen coming.
+				if entry.has("veil"):
+					(entry["veil"] as ShaderMaterial).set_shader_parameter("strength",.25+strength*.5)
+					# The sand never quite settles: some always runs across the zone.
+					if entry.has("cloud") and is_instance_valid(entry["cloud"]): (entry["cloud"] as GPUParticles3D).amount_ratio = clampf(.3+strength,.3,1.0)
 				var flap := (.25 if name=="calm" and not is_inf(float(hazard["active_time"])) else 1.0)
 				if not entry.has("cloths"):
 					var cloths: Array[Node3D] = []

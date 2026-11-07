@@ -85,10 +85,19 @@ void fragment() {
 	float bedding=noise3(vec3(p.x*0.09,p.y*0.75+p.x*0.22,p.z*0.2));
 	stone*=1.0+(bedding-0.5)*strata_contrast*strata_scale;
 	if(strata_fine>0.0){
-		// Fine wavy bedding drawn across the sandstone, in uneven bands.
-		float wave=noise3(vec3(p.x*0.18,p.y*0.35,p.z*0.3))*1.4;
-		float band=noise3(vec3(p.x*0.05,(p.y+wave)*2.3,p.z*0.1));
-		stone*=1.0-strata_fine*smoothstep(0.5,0.66,band)+strata_fine*0.5*smoothstep(0.42,0.3,band);
+		// Fine wavy bedding drawn across the sandstone as on desertClose.png:
+		// thin dark lines over the large planes, unevenly spaced, each fading
+		// in and out along its length, and a faint change of tone per layer.
+		float wave=noise3(vec3(p.x*0.11,p.y*0.16,p.z*0.2))*2.4+noise3(vec3(p.x*0.45,p.y*0.3,7.0))*0.35;
+		float layer=(p.y+wave)*1.35+noise3(vec3(p.x*0.03,p.y*0.08,3.0))*1.5;
+		// A groove: a dark line with a pale lip just above it.
+		float aa=fwidth(layer)*1.2;
+		float rise=fract(layer);
+		float line=1.0-smoothstep(0.035,0.035+aa,min(rise,1.0-rise));
+		float lip=smoothstep(0.05,0.05+aa,rise)*(1.0-smoothstep(0.12,0.12+aa,rise));
+		float shown=smoothstep(0.3,0.55,noise3(vec3(p.x*0.16,floor(layer)*2.7,p.z*0.1)));
+		float tone=hash31(vec3(floor(layer),3.0,5.0))-0.5;
+		stone*=1.0-strata_fine*0.8*line*shown+strata_fine*0.45*lip*shown+strata_fine*0.3*tone;
 	}
 	if(grain_strength>0.0){
 		vec2 facet_uv=p.xy+rock_normal.xy*3.0;

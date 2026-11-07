@@ -124,11 +124,17 @@ func _corner(i: int, j: int, cell: float) -> Vector2:
 	var key := Vector2i(i,j)
 	if corners.has(key): return corners[key]
 	var basis := _basis()
-	var point := Vector2((i+(_hash(i,j,1)-.5)*.76)*basis.x+j*basis.y*basis.z,(j+(_hash(i,j,2)-.5)*.76)*basis.y)*cell
+	var point := _snapped(Vector2((i+(_hash(i,j,1)-.5)*.76)*basis.x+j*basis.y*basis.z,(j+(_hash(i,j,2)-.5)*.76)*basis.y)*cell,j,cell*basis.y)
 	var inside := distance(point)
 	if inside< -cell*1.6: point = Vector2.INF
 	elif inside<.1: point = _on_edge(point)
 	corners[key] = point
+	return point
+
+# A grid corner moved onto a crease of the face, such as the crest of a
+# ledge: a row of corners lying on it gives a clean edge instead of a saw of
+# facets cutting across it. `row` is the corner's row, `height` a row's height.
+func _snapped(point: Vector2, _row: int, _height: float) -> Vector2:
 	return point
 
 # Rock that shows through openings of the face.
@@ -188,6 +194,60 @@ func _emit_cut(triangle: Array, vertices: PackedVector3Array, normals: PackedVec
 		return
 	for index in range(1,ring.size()-1): _emit([ring[start],ring[(start+index)%ring.size()],ring[(start+index+1)%ring.size()]],vertices,normals,colors,cell*.5)
 
+# How many facets of the grid one facet in the body of the rock spans, across
+# and up. The body reads as large calm planes; the edge, where the outline is
+# drawn, keeps the fine grid. 1 keeps one size everywhere. Only for a grid
+# whose rows do not lean.
+func _body_span() -> int:
+	return 1
+
+# Whether the rock around a point is plain body, where large facets may lie.
+func _plain_body(_point: Vector2) -> bool:
+	return false
+
+# Whether a large cell of the body lies wholly in plain rock, by the grid's
+# corners in it before they are shaken.
+func _plain_cell(big: Vector2i, span: int, cell: float, plain: Dictionary) -> bool:
+	if plain.has(big): return plain[big]
+	var result := true
+	for v in range(span+1):
+		for u in range(span+1):
+			if not _plain_body(Vector2(big.x*span+u,big.y*span+v)*cell):
+				result = false
+				break
+		if not result: break
+	plain[big] = result
+	return result
+
+# A large facet of the body. Where a neighbour is cut fine, the corners on
+# their shared side are its corners too, so no gap opens: the cell is then a
+# fan from its middle.
+func _emit_body(big: Vector2i, span: int, cell: float, plain: Dictionary, vertices: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray) -> void:
+	var i := big.x*span
+	var j := big.y*span
+	var ring: Array = []
+	var cut := false
+	# Sides counterclockwise: bottom, right, top, left, each with its neighbour.
+	for side in [[Vector2i(0,0),Vector2i(1,0),Vector2i(0,-1)],[Vector2i(span,0),Vector2i(0,1),Vector2i(1,0)],[Vector2i(span,span),Vector2i(-1,0),Vector2i(0,1)],[Vector2i(0,span),Vector2i(0,-1),Vector2i(-1,0)]]:
+		var start: Vector2i = side[0]
+		var along: Vector2i = side[1]
+		var fine := not _plain_cell(big+side[2],span,cell,plain)
+		for k in range(span if fine else 1):
+			ring.append(_corner(i+start.x+along.x*k,j+start.y+along.y*k,cell))
+		if fine: cut = true
+	if not cut:
+		var a: Vector2 = ring[0]
+		var b: Vector2 = ring[1]
+		var c: Vector2 = ring[2]
+		var d: Vector2 = ring[3]
+		var triangles := [[a,b,c],[a,c,d]] if _hash(i,j,3)<.5 else [[a,b,d],[b,c,d]]
+		for triangle in triangles: _emit(triangle,vertices,normals,colors,cell*span)
+		return
+	var middle := Vector2.ZERO
+	for point in ring: middle += point
+	middle /= ring.size()
+	for k in range(ring.size()): _emit([middle,ring[k],ring[(k+1)%ring.size()]],vertices,normals,colors,cell*span)
+
 # The face between two heights, at about `cell` units a facet.
 func build(low: float, high: float, cell: float) -> ArrayMesh:
 	var vertices := PackedVector3Array()
@@ -195,11 +255,22 @@ func build(low: float, high: float, cell: float) -> ArrayMesh:
 	var colors := PackedColorArray()
 	corners.clear()
 	var basis := _basis()
+	var span := _body_span() if basis.z==0.0 else 1
+	var plain := {}
 	var left := int(floor((origin.x-1.0)/(cell*basis.x)))
 	var right := int(ceil((origin.x+size.x*step+1.0)/(cell*basis.x)))
-	for j in range(int(ceil(low/(cell*basis.y))),int(ceil(high/(cell*basis.y)))):
+	var first := int(ceil(low/(cell*basis.y)))
+	for j in range(first,int(ceil(high/(cell*basis.y)))):
 		var shift := roundi(j*basis.y*basis.z/basis.x)
 		for i in range(left-shift,right-shift):
+			if span>1:
+				var big := Vector2i(floori(float(i)/span),floori(float(j)/span))
+				if _plain_cell(big,span,cell,plain):
+					# A large cell is built once, by the band that holds its
+					# lowest row and from its lower left corner.
+					if i==big.x*span and j==big.y*span:
+						_emit_body(big,span,cell,plain,vertices,normals,colors)
+					continue
 			var a := _corner(i,j,cell)
 			var b := _corner(i+1,j,cell)
 			var c := _corner(i+1,j+1,cell)

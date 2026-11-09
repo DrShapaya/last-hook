@@ -16,7 +16,13 @@ const MODEL := "res://assets/hero/model/hero.glb"
 # painted bigger than the physics body); the rope still leaves from the hand.
 const HEIGHT := 1.16
 const FEET_Y := -.56
-const STRIDE_PER_UNIT := 3.4 # As ExplorerSprite: one leg cycle per 2*PI/3.4 units walked.
+# Gait phase per unit walked. A planted foot stays put when the body covers
+# one step while the leg sweeps back: half a cycle (PI) per 2*L*sin(swing)
+# units, with leg L = .41 and the hips swinging WALK_SWING either way:
+# PI/(2*.41*sin(.7)) = 5.9. The game's walk is about two body heights per
+# second, so this is a brisk trot; the painted hero's 3.4 made 3D feet skate.
+const STRIDE_PER_UNIT := 5.9
+const WALK_SWING := .7
 const BLEND_SPEED := 14.0 # How fast the pose follows a new clip (1/s).
 const TURN_SPEED := 20.0 # Turning around is quick: fewer frames mid-turn.
 const ROPE_STATES := ["latch","swing","release","slip"]
@@ -51,8 +57,9 @@ void fragment() {
 	float k = clamp((dot(n, key) + .25) / 1.25, 0.0, 1.0);
 	float f = clamp((dot(n, fill) + .4) / 1.4, 0.0, 1.0);
 	vec3 h = normalize(key + VIEW);
-	float gloss = mix(60.0, 6.0, rough);
-	float spec = pow(max(dot(n, h), 0.0), gloss) * (1.0 - rough) * .45;
+	// Moderate gloss: smooth metal (the thermos cap) burned out to white.
+	float gloss = mix(36.0, 6.0, rough);
+	float spec = pow(max(dot(n, h), 0.0), gloss) * (1.0 - rough) * .28;
 	float rim = pow(1.0 - max(dot(n, VIEW), 0.0), 3.0) * rim_energy;
 	vec3 light = ambient + key_color * key_energy * k + fill_color * fill_energy * f;
 	vec3 color = albedo * light + key_color * spec + rim_color * rim * albedo;
@@ -109,9 +116,14 @@ const LAND := {"thigh_near":1.05,"shin_near":-1.7,"foot_near":.65,"thigh_far":.8
 	"spine":-.28,"chest":-.12,"head":.2,"upper_arm_near":.75,"forearm_near":.6,"upper_arm_far":.45,"forearm_far":.7}
 const SLIP := {"upper_arm_near":3.3,"forearm_near":.3,"hand_near":-.4,"upper_arm_far":3.1,"forearm_far":.5,
 	"thigh_near":.1,"shin_near":-.3,"thigh_far":-.1,"shin_far":-.4,"head":-.2,"spine":.12}
-const CHEER_A := {"upper_arm_near":2.9,"forearm_near":.35,"hand_near":.2,"upper_arm_far":.1,"forearm_far":.3,"head":.18,"chest":.06,
+# Catch: the body jerks toward the anchor, the head lags, the legs swing on.
+const REACH := {"upper_arm_near":2.5,"forearm_near":.1,"hand_near":.05,"upper_arm_far":1.2,"forearm_far":.5,
+	"thigh_near":.25,"shin_near":-.3,"thigh_far":-.1,"shin_far":-.3,"spine":.05}
+const JOLT := {"upper_arm_near":3.0,"forearm_near":.18,"hand_near":.1,"upper_arm_far":2.6,"forearm_far":.4,"hand_far":.1,
+	"thigh_near":.55,"shin_near":-.65,"thigh_far":.3,"shin_far":-.55,"spine":.14,"chest":.06,"head":-.16}
+const CHEER_A := {"upper_arm_near":2.9,"forearm_near":.35,"hand_near":.2,"upper_arm_far":2.2,"forearm_far":.5,"head":.18,"chest":.06,
 	"thigh_near":.05,"thigh_far":-.05}
-const CHEER_B := {"upper_arm_near":2.5,"forearm_near":.9,"hand_near":-.3,"upper_arm_far":.15,"forearm_far":.3,"head":.12,"chest":.04,
+const CHEER_B := {"upper_arm_near":2.5,"forearm_near":.9,"hand_near":-.3,"upper_arm_far":2.6,"forearm_far":.2,"head":.12,"chest":.04,
 	"thigh_near":.05,"thigh_far":-.05}
 const CROUCH := {"thigh_near":1.3,"shin_near":-2.0,"foot_near":.75,"thigh_far":1.1,"shin_far":-1.9,"foot_far":.75,
 	"spine":-.35,"chest":-.15,"head":.25,"upper_arm_near":.9,"forearm_near":.9,"upper_arm_far":.6,"forearm_far":.9}
@@ -121,7 +133,7 @@ const CROUCH := {"thigh_near":1.3,"shin_near":-2.0,"foot_near":.75,"thigh_far":1
 const CLIPS := {
 	"idle": [true,[[0.0,STAND],[1.8,BREATH],[3.6,STAND]]],
 	"throw": [false,[[0.0,AIM],[.07,RELEASE],[.22,FOLLOW]]],
-	"latch": [false,[[0.0,RELEASE],[.06,SLIP],[.18,HANG]]],
+	"latch": [false,[[0.0,REACH],[.06,JOLT],[.18,HANG]]],
 	"release": [false,[[0.0,HANG],[.2,OPEN]]],
 	"rise": [true,[[0.0,TUCK],[1.0,TUCK]]],
 	"fall": [true,[[0.0,SPREAD_A],[.4,SPREAD_B],[.8,SPREAD_A]]],
@@ -228,6 +240,9 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	scale = Vector3(1+impact*.6,1-impact,1)
 	var desired := _target_pose(sim,direction)
 	var blend := 1-exp(-dt*BLEND_SPEED) if dt>0 else 1.0
+	# A running gait is already smooth; easing it again lags the 1.8 Hz step
+	# and shrinks the stride, which makes the planted foot skate.
+	if state=="walk" and state_time>.15: blend = 1.0
 	for bone in desired:
 		current[bone] = lerpf(float(current.get(bone,0.0)),float(desired[bone]),blend)
 	for bone in current.keys():
@@ -238,17 +253,23 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	# the hero's own frame (rotation.z is applied before the turn).
 	if state=="swing": desired_lean = clampf((direction.angle()-PI*.5)*facing*.6,-.5,.5) if direction.length()>.1 else 0.0
 	lean = lerpf(lean,desired_lean,1-exp(-dt*8))
-	rotation.z = lean
+	# On the ground the upper body leans from the hips and the feet stay planted;
+	# in the air and on the rope the whole body tilts.
+	rotation.z = 0.0 if sim.grounded else lean
 	pack = lerpf(pack,clampf(sim.vel.x*facing*.03-sim.vel.y*.012,-.18,.18),1-exp(-dt*5))
 	var applied := current.duplicate()
+	if sim.grounded: applied["spine"] = float(applied.get("spine",0.0))+lean
 	applied["backpack"] = float(applied.get("backpack",0.0))+pack
 	applied["head"] = float(applied.get("head",0.0))-pack*.25
 	_apply(applied)
+	_plant_feet(sim.grounded,dt)
 	grip.position = to_local(grip_position())
 
 func _target_pose(sim: RopeSim, direction: Vector2) -> Dictionary:
 	if state=="walk":
-		return walk_pose(stride,clampf(absf(sim.vel.x)/maxf(.1,walk_speed),0,1))
+		# Full stride from a modest speed: shrinking the swing at low speed with
+		# the same cadence would make the feet skate while slowing down.
+		return walk_pose(stride,clampf(absf(sim.vel.x)/maxf(.1,walk_speed)*2.5,0,1))
 	# Angle of the target above the horizon, in the hero's own facing.
 	var aim := atan2(direction.y,absf(direction.x)) if direction.length()>.1 else .6
 	match state:
@@ -271,17 +292,38 @@ func _target_pose(sim: RopeSim, direction: Vector2) -> Dictionary:
 	var clip: Array = CLIPS.get(state,CLIPS["idle"])
 	return sample(clip[1],state_time,clip[0])
 
+# One gait cycle per TAU of stride. Each leg spends half the cycle planted,
+# its thigh sweeping back at a constant rate (a sine sweep raced at mid-step
+# and skated), and half swinging forward with the knee folded so the foot
+# clears the ground. The sole stays level while planted. Arms swing against
+# the legs.
 static func walk_pose(stride_phase: float, pace: float = 1.0) -> Dictionary:
-	var swing := sin(stride_phase)
 	var pose := {"spine":-.08*pace,"head":.04*pace,"chest":-.02}
 	for side in ["near","far"]:
-		var s := swing if side=="near" else -swing
-		var lift := maxf(0.0,cos(stride_phase if side=="near" else stride_phase+PI))
-		pose["thigh_"+side] = (.42*s+.02)*pace
-		pose["shin_"+side] = (-.12-.8*lift)*pace
-		pose["foot_"+side] = (.25*lift-.12*s)*pace
-		pose["upper_arm_"+side] = (-.34*s)*pace+(.06 if side=="near" else -.04)
-		pose["forearm_"+side] = .25+.2*maxf(0.0,s)*pace
+		var p := fposmod(stride_phase/TAU+(0.0 if side=="near" else .5),1.0)
+		var thigh: float
+		var shin: float
+		var foot: float
+		if p<.5:
+			var u := p/.5
+			thigh = WALK_SWING*(1-2*u)
+			shin = -.1
+			foot = -(thigh+shin)
+		else:
+			var u := (p-.5)/.5
+			# Thigh forward first, then the knee straightens with the foot still
+			# up, then the foot sets down: a late knee snap slapped the foot
+			# forward along the ground.
+			var bend := smoothstep(0.0,.3,u)*smoothstep(.92,.55,u)
+			thigh = -WALK_SWING+2*WALK_SWING*smoothstep(0.0,.7,u)
+			shin = -.1-1.15*bend
+			foot = -(thigh+shin)*.6+.25*bend
+		pose["thigh_"+side] = thigh*pace
+		pose["shin_"+side] = shin*pace
+		pose["foot_"+side] = foot*pace
+		var swing := sin(TAU*p)
+		pose["upper_arm_"+side] = -.34*swing*pace+(.06 if side=="near" else -.04)
+		pose["forearm_"+side] = .25+.2*maxf(0.0,swing)*pace
 	return pose
 
 static func blend_poses(a: Dictionary, b: Dictionary, t: float) -> Dictionary:
@@ -299,6 +341,21 @@ static func sample(keys: Array, time: float, loop: bool) -> Dictionary:
 		if time<=b[0]:
 			return blend_poses(a[1],b[1],smoothstep(0.0,1.0,(time-a[0])/maxf(.0001,b[0]-a[0])))
 	return keys[-1][1]
+
+var plant := 0.0
+# On the ground the body drops so the lower foot stays on the ground: a swinging
+# leg lifts the planted foot otherwise (stiff hips), and a crouch floats.
+func _plant_feet(grounded: bool, dt: float) -> void:
+	var target := 0.0
+	if grounded:
+		skeleton.force_update_all_bone_transforms()
+		var lowest := INF
+		for side in ["near","far"]:
+			lowest = minf(lowest,skeleton.get_bone_global_pose(bone_index["foot_"+side]).origin.y)
+		var rest_y := skeleton.get_bone_global_rest(bone_index["foot_near"]).origin.y
+		target = (lowest-rest_y)*HEIGHT
+	plant = target if dt<=0 or grounded else lerpf(plant,target,1-exp(-dt*12))
+	model.position.y = FEET_Y-plant
 
 func _apply(angles: Dictionary) -> void:
 	for bone in bone_index:

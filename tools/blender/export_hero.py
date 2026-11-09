@@ -16,7 +16,7 @@ procedural materials). Output: game/assets/hero/model/hero.glb.
    knees bend smoothly without one leg pulling the other.
 4. Export glTF binary with the textures inside.
 
-Run: blender --background docs/character/3d/hero.blend --python tools/blender/export_hero.py -- [--tris=15000] [--size=2048]
+Run: blender --background docs/character/3d/hero.blend --python tools/blender/export_hero.py -- [--tris=15000] [--size=2048] [--reuse-bake]
 """
 import math
 import os
@@ -34,6 +34,7 @@ args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 opts = dict(a[2:].split("=", 1) for a in args if a.startswith("--") and "=" in a)
 TRIS = int(opts.get("tris", 15000))
 SIZE = int(opts.get("size", 2048))
+REUSE_BAKE = "--reuse-bake" in args
 
 # Names of detail objects that only live in the detailed model (baked in).
 DETAIL_WORDS = ("Строчка", "Шов", "Рант", "Зубцы", "Носок", "Край", "Пряжка", "Люверс", "Шнурок", "Бант",
@@ -46,7 +47,7 @@ KEEP = ("Глаз", "Подошва", "Карман рюкзака", "Клапа
 # ---------------------------------------------------------------- skeleton
 
 S, E, W = (-0.005, 0.655), (0.0, 0.555), (0.01, 0.46)
-ARM_Y, LEG_Y = 0.145, 0.058
+ARM_Y, LEG_Y = 0.145, 0.076  # Must match build_hero.py.
 
 
 def arm(side):
@@ -89,7 +90,9 @@ def allowed_bones(name):
     if name.startswith("Шея"):
         return ["neck", "head"]
     if name.startswith(("Куртка", "Капюшон", "Карман")) and "рюкзака" not in name:
-        return ["spine", "chest", "neck", "upper_arm_near", "upper_arm_far", "pelvis"]
+        # Not the arms: a raised arm dragged half the jacket's side into a
+        # curtain from the elbow to the waist. The sleeve follows the arm.
+        return ["spine", "chest", "neck", "pelvis"]
     if name.startswith("Рукав"):
         return ["chest", "upper_arm_" + side, "forearm_" + side]
     if name.startswith("Перчатка"):
@@ -116,10 +119,24 @@ def weight_part(obj):
     segment, sharpened, the two strongest kept and normalised."""
     names = allowed_bones(obj.name)
     groups = {n: obj.vertex_groups.get(n) or obj.vertex_groups.new(name=n) for n in names}
+    pants = obj.name.startswith("Штаны")
     for v in obj.data.vertices:
         co = obj.matrix_world @ v.co
         scores = []
-        for n in names:
+        bones = names
+        if pants:
+            # Each leg follows only its own thigh and shin; a wide stride
+            # stretched the inner legs into a web between the thighs. Only a
+            # narrow strip at the crotch blends, through the pelvis.
+            # (The inner leg surfaces reach within a centimetre of the centre
+            # line, so the strip is bounded by height as well.)
+            if abs(co.y) < 0.012 and co.z > 0.37:
+                bones = ["pelvis"]
+            elif co.y < 0:
+                bones = [n for n in names if not n.endswith("_far")]
+            else:
+                bones = [n for n in names if not n.endswith("_near")]
+        for n in bones:
             h, t, _ = BONES[n]
             d = segment_distance(co, h, t)
             scores.append((1.0 / (d ** 4 + 1e-7), n))
@@ -315,11 +332,13 @@ def main():
     bake_mat.use_nodes = True
     low.data.materials.clear()
     low.data.materials.append(bake_mat)
-    paths = {
-        "color": bake(low, highs, "DIFFUSE", "hero_color", "sRGB"),
-        "normal": bake(low, highs, "NORMAL", "hero_normal", "Non-Color"),
-        "roughness": bake(low, highs, "ROUGHNESS", "hero_roughness", "Non-Color"),
-    }
+    names = {"color": ("DIFFUSE", "hero_color", "sRGB"), "normal": ("NORMAL", "hero_normal", "Non-Color"),
+             "roughness": ("ROUGHNESS", "hero_roughness", "Non-Color")}
+    paths = {k: os.path.join(TEX_DIR, v[1] + ".png") for k, v in names.items()}
+    # --reuse-bake: weights or bones changed, the mesh did not. Decimation and
+    # unwrapping are deterministic, so the previous textures still fit.
+    if not (REUSE_BAKE and all(os.path.exists(p) for p in paths.values())):
+        paths = {k: bake(low, highs, *v) for k, v in names.items()}
     game_material(low, paths)
     rig = build_armature(low)
     # Only the game model goes into the file.

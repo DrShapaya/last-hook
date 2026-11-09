@@ -5,6 +5,8 @@ extends SceneTree
 #   --mode=compare   current hero next to the 3D hero, side and three-quarter (one PNG).
 #   --mode=states    the 3D hero in several HeroState states (one PNG).
 #   --mode=clips     the same states animated (numbered PNGs, 30 per second).
+#   --mode=audit     every HeroState state large, side and three-quarter, one
+#                    PNG per state (audit-<state>.png): for anatomy and skinning.
 # Pass --out=<folder>. Needs a window (no --headless): it renders.
 #
 # Level light and environment copy main.gd, so the frame shows how the hero
@@ -46,6 +48,14 @@ func setup() -> void:
 	camera.position = Vector3(0,.12,10)
 	root_node.add_child(camera)
 	camera.current = true
+	if mode=="audit":
+		root.size = Vector2i(1000,600)
+		root.content_scale_size = root.size
+		camera.size = 1.25
+		camera.position = Vector3(0,.05,10)
+		heroes = [_hero(Vector3(-.55,0,0),"idle"),_hero(Vector3(.55,0,0),"idle")]
+		_audit_next()
+		return
 	if mode=="compare":
 		current = ExplorerSprite.new()
 		current.position = Vector3(-1.2,0,0)
@@ -63,6 +73,41 @@ func setup() -> void:
 			heroes.append(_hero(Vector3(x,0,0),STATES[index][0]))
 			_label(STATES[index][1],Vector2(index*root.size.x/STATES.size(),600),root.size.x/STATES.size())
 	process_frame.connect(_step)
+
+var audit_index := -1
+var audit_label: Label
+
+# Audit: drive both heroes through a state long enough to reach its key pose,
+# then take one frame; side view on the left, three-quarter on the right.
+func _audit_next() -> void:
+	audit_index += 1
+	if audit_index>=HeroState.STATES.size():
+		quit()
+		return
+	var state: String = HeroState.STATES[audit_index]
+	var hold := {"throw":.08,"latch":.07,"release":.12,"land":.08,"slip":.12,"revive":.2}
+	var time := 0.0
+	for hero in heroes:
+		hero.forced_state = state
+		hero.state = ""
+		hero.last_time = -1.0
+	var length: float = hold.get(state,.6)
+	while time<=length:
+		var motion := _sim(state,time)
+		for hero in heroes: hero.animate(motion[0],motion[1],motion[2],time)
+		time += 1.0/60
+	heroes[1].rotation.y = heroes[1].turn-.7
+	if not audit_label:
+		var overlay := CanvasLayer.new()
+		root_node.add_child(overlay)
+		audit_label = Label.new()
+		audit_label.position = Vector2(20,16)
+		audit_label.add_theme_font_size_override("font_size",26)
+		overlay.add_child(audit_label)
+	audit_label.text = state
+	for i in range(3): await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png(out.path_join("audit-%s.png" % state))
+	_audit_next()
 
 func _hero(at: Vector3, state: String) -> HeroModel:
 	var hero := HeroModel.new()
@@ -85,7 +130,9 @@ func _sim(state: String, time: float) -> Array:
 			sim.vel = Vector2(4.5*cos(time*TAU/1.6),0)
 			target = sim.pos+Vector2(-phase*1.2,3)
 		"fall": sim.vel = Vector2(1,-6)
-		"aim": target = sim.pos+Vector2(2,2.5)
+		"aim","hook_flight": target = sim.pos+Vector2(2,2.5)
+		"rise": sim.vel = Vector2(1.5,5)
+		"latch","release","slip": sim.attached = state=="latch"
 	return [sim,target,state in ["aim","throw","swing"]]
 
 func _step() -> void:

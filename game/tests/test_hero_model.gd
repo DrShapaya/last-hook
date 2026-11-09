@@ -102,6 +102,43 @@ func hero_model_tests() -> void:
 	check(model.state=="fall","dropping through the air falls (%s)" % model.state)
 	var moved := model.skeleton.get_bone_global_pose(model.bone_index["hand_near"]).origin.distance_to(hand_rest)
 	check(moved>.05,"the arms move with the state (%.2f)" % moved)
+	# Walking: a foot on the ground barely slides, and the lower foot stays on
+	# the ground (no floating while a leg swings).
+	var walker := HeroModel.new()
+	root.add_child(walker)
+	walker.setup()
+	var ground := RopeSim.new()
+	ground.vel = Vector2(walker.walk_speed,0)
+	var tracks := {"near":[],"far":[]}
+	var lowest_heights: Array[float] = []
+	for i in range(240):
+		time += 1.0/60
+		ground.pos += ground.vel/60
+		walker.position.x = ground.pos.x
+		walker.animate(ground,ground.pos+Vector2(2,3),false,time)
+		walker.skeleton.force_update_all_bone_transforms()
+		var low := INF
+		for side in ["near","far"]:
+			var foot: Vector3 = walker.skeleton.global_transform*walker.skeleton.get_bone_global_pose(walker.bone_index["foot_"+side]).origin
+			tracks[side].append(foot)
+			low = minf(low,foot.y)
+		if i>60: lowest_heights.append(low)
+	var floor_y: float = lowest_heights.min()
+	var slide := 0.0
+	var samples := 0
+	for side in tracks:
+		var track: Array = tracks[side]
+		for i in range(61,track.size()):
+			# Planted: on the ground now and a frame ago.
+			if track[i].y<floor_y+.012 and track[i-1].y<floor_y+.012:
+				slide += absf(track[i].x-track[i-1].x)*60
+				samples += 1
+	var skate := slide/maxf(1,samples)/walker.walk_speed
+	print("walk: planted foot slides at %.0f%% of walking speed, lower foot rises up to %.3f" % [skate*100,lowest_heights.max()-floor_y])
+	check(samples>30,"the walk plants its feet (%d planted frames)" % samples)
+	check(skate<.35,"the planted foot does not skate (%.0f%% of walking speed)" % (skate*100))
+	check(lowest_heights.max()-floor_y<.02,"the lower foot stays on the ground while walking")
+	walker.queue_free()
 	# Swinging: the anchor passes overhead back and forth; the facing holds.
 	var swinger := HeroModel.new()
 	root.add_child(swinger)

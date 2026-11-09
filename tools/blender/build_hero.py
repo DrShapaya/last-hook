@@ -33,7 +33,7 @@ J = {
     "hip": 0.44, "knee": 0.255, "ankle": 0.085,
 }
 ARM_Y = 0.145  # Shoulder distance from the body centre line.
-LEG_Y = 0.058
+LEG_Y = 0.076  # Legs apart enough that the thighs never fuse into one piece (a web at wide strides).
 
 
 # ---------------------------------------------------------------- scene
@@ -800,7 +800,7 @@ def build_pants(M):
         h = Vector((-0.005, y, hip))
         k = Vector((0.012, y, J["knee"]))
         a = Vector((0.004, y, hem_z))
-        legs += [rod(h, k, 0.072, 0.064), rod(k, a, 0.064, 0.066)]
+        legs += [rod(h, k, 0.068, 0.062), rod(k, a, 0.062, 0.066)]
     pants = fuse([pelvis] + legs, "Штаны", M["pants"])
     for v in pants.data.vertices:  # A flat hem instead of a rounded cap.
         if v.co.z < hem_z:

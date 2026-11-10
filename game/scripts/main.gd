@@ -2119,6 +2119,7 @@ func revive(currency: String) -> void:
 # wake up and the hero returns to the last safe point.
 func _return_to_safety(plan: Dictionary) -> void:
 	world.activate_rescue_anchors(plan["anchors"])
+	if is_instance_valid(explorer): explorer.hero_event("revive")
 	# A shot thrown before the fall ends here, like on any other rescue.
 	_reset_input()
 	bolt_active = false
@@ -2129,7 +2130,6 @@ func _return_to_safety(plan: Dictionary) -> void:
 	focus_cooldown = 0.0
 	sim.vel = Vector2.ZERO
 	sim.pos = safe_position
-	if is_instance_valid(explorer): explorer.hero_event("revive")
 	sim.flight_peak = sim.pos.y
 	sim.attached = false
 	sim.grounded = true
@@ -2196,6 +2196,7 @@ func finish_run(success: bool) -> void:
 	if success:
 		_sfx("win")
 		_haptic("win")
+		if is_instance_valid(explorer): explorer.hero_event("summit")
 	ads.report_event("run_finished_%s" % ("success" if success else "failed"))
 	_reset_input()
 	bolt_active = false
@@ -2206,7 +2207,6 @@ func finish_run(success: bool) -> void:
 		model.profile["active"] = {}
 		settlement = {"mode":"practice","success":success,"highest":maxi(0,roundi((sim.highest-START_Y)*10)),"seconds":run_seconds,"shots":shots,"catches":catches,"reason":failure_reason}
 		hud.show_result(settlement)
-		if is_instance_valid(explorer): explorer.hero_event("summit")
 		return
 	var rewarded_height := maxf(0,sim.highest-START_Y)
 	if success:
@@ -2294,6 +2294,7 @@ func go_back() -> void:
 		"revive": show_menu()
 		"result": show_menu()
 		"menu":
+			if is_instance_valid(hud.lobby_view) and hud.lobby_view.close_character(): return
 			if hud.menu_tab!="expedition":
 				hud.menu_slide = -1
 				hud.menu_focus = "tab"
@@ -2316,7 +2317,6 @@ func cycle_location(direction: int) -> bool:
 	lobby_location = next
 	if model.profile["locations"].has(lobby_location):
 		selected_location = lobby_location
-			if is_instance_valid(hud.lobby_view) and hud.lobby_view.close_character(): return
 		model.profile["selected_location"] = selected_location
 		if not preview:
 			model.save()
@@ -2498,6 +2498,8 @@ func _process(delta: float) -> void:
 		"trail":hook_flight.trail,"returning":bolt_returning,"shot":shot_serial,"impact":impact_serial,
 		"impact_position":hook_impact,"impact_kind":hook_impact_kind,"aiming":pressed and not sim.attached and not bolt_active,"aim":aim_direction}
 	shot_visual["hook_count"] = model.hook_count()
+	# The hero slips instead of letting go when the grip failed (HeroState).
+	shot_visual["release_reason"] = last_release_reason
 	if hook_volley!=null:
 		var volley_visual: Array = []
 		for shot in hook_volley.shots:
@@ -2526,8 +2528,6 @@ func _update_music() -> void:
 	sounds.set_key(MusicPlayer.tonality(theme))
 	sounds.set_wind(_wind_level())
 
-	# The hero slips instead of letting go when the grip failed (HeroState).
-	shot_visual["release_reason"] = last_release_reason
 # Air rushing past the hero, quieter while time is slowed.
 func _wind_level() -> float:
 	if state!="play" or sim==null or sim.grounded or int(_settings()["sfx_volume"])<=0: return 0.0

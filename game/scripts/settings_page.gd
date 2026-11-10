@@ -14,6 +14,9 @@ const WIDE_ROW := 92.0
 const COLUMN_GAP := 16.0
 const ABOUT_PATH := "res://data/about.json"
 const CHANGELOG_PATH := "res://data/changelog.json"
+# The update list shows only the newest versions: each is a row, and the
+# page must fit the screen at large text in every orientation.
+const SHOWN_VERSIONS := 8
 
 var lobby: LobbyView
 var hud
@@ -265,7 +268,7 @@ func _build_about() -> void:
 	if not history.is_empty():
 		rows.append({"height":44.0,"build":func(slab: Control, y: float, width: float):
 			lobby.text(slab,"Список обновлений",Vector2(20,y+8),Vector2(width-40,26),17,INK(),"display")})
-	for index in range(history.size()):
+	for index in range(mini(history.size(),SHOWN_VERSIONS)):
 		rows.append(_version_row(history[index]))
 	_place(rows)
 

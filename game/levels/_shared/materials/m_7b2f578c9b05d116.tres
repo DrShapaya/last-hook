@@ -1,0 +1,8 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_f8aeaae80ff32939.gdshader" id="1_sfxdo"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_sfxdo")
+shader_parameter/length_units = 13.030000000000086

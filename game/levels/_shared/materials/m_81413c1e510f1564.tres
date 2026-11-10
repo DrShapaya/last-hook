@@ -1,0 +1,7 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_9248d639814eaa41.gdshader" id="1_n22p6"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_n22p6")

@@ -61,6 +61,9 @@ static func draw_flag(ci: CanvasItem, pole: Vector2, time: float = 0.0, near: fl
 class RouteGauge extends Control:
 	var value := 0.0
 	var record := 0.0
+	# The last stretch before the summit, lit and pulsing once it is near.
+	var near_summit := false
+	var near_from := .85
 	var zones := 6
 	var flash := 0.0
 	var flash_at := 0.0
@@ -104,6 +107,11 @@ class RouteGauge extends Control:
 			# A short light trail behind the head.
 			for glow in range(4):
 				draw_circle(Vector2(fill_x-glow*5,y),5.0-glow,Color(HOLD,.22-glow*.05))
+		if near_summit:
+			var pulse := .55+.45*sin(time*5.0)
+			var from_x := lerpf(left,right,near_from)
+			_pill(Rect2(from_x-2,y-thick*.5-1,right-from_x+6,thick+2),Color("ffd24a",.18+.22*pulse))
+			_pill(Rect2(from_x,y-2,right-from_x+2,4),Color("ffe9a0",.5+.4*pulse))
 		for index in range(1,zones):
 			var at := float(index)/zones
 			var x := lerpf(left,right,at)

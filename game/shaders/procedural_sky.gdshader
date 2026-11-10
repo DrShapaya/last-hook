@@ -21,12 +21,19 @@ uniform float snow_amount : hint_range(0.0, 1.0) = 0.3;
 uniform vec2 sun_pos = vec2(0.28, 0.82);
 uniform float cloud_coverage : hint_range(0.0, 1.0) = 0.4;
 uniform float sky_time = 0.0;
-uniform vec2 cloud_offset = vec2(0.0);
 uniform float aspect = 1.0;
 // Climbed height in world units and the camera's sideways position.
 uniform float altitude = 0.0;
 uniform float view_x = 0.0;
 uniform float sky_seed = 0.0;
+
+// Frame heights a layer shifts per world unit of camera motion, in the order
+// the layers overlap: back to front, each faster than the one behind it.
+const float PARALLAX_FAR_CLOUD = 0.0032;
+const float PARALLAX_FAR_RANGE = 0.005;
+const float PARALLAX_NEAR_CLOUD = 0.0065;
+const float PARALLAX_MID_RANGE = 0.008;
+const float PARALLAX_NEAR_RANGE = 0.0115;
 
 // Integer hashing of the noise lattice. The classic fract(sin(n) * big)
 // and fract(p * big) hashes lose their precision on phone GPUs: the noise
@@ -207,33 +214,34 @@ void fragment() {
 	sky += sun_color * exp(-distance(sky_coords, sun_pos) * 4.5) * 0.1;
 	uint seed = uint(int(sky_seed * 100.0));
 
-	// Ranges sink as the climb gains height, the nearest first; each pans a
-	// little with the camera. At the foot of the climb they stand on the bottom
-	// of the frame; about halfway up the last crest has left it.
-	float rise = max(altitude, 0.0) / 74.0;
+	// Every layer is fixed in the world at its own distance: climbing moves it
+	// down the frame, walking moves it sideways, both at the same parallax, and
+	// the farther the layer the slower. At the foot of the climb the ranges
+	// stand on the bottom of the frame; they leave it one by one, nearest first.
+	float climbed = max(altitude, 0.0);
 	float ax = (UV.x - 0.5) * aspect;
 	vec3 haze = mix(horizon_color, cloud_lit, 0.2);
-	float far_sink = rise * 0.5;
-	float mid_sink = rise * 0.55;
-	float near_sink = rise * 0.6;
-	float far_x = ax + view_x * 0.003 + sky_seed;
-	float mid_x = ax + view_x * 0.008 + sky_seed * 1.7 + 40.0;
-	float near_x = ax + view_x * 0.022 + sky_seed * 2.3 + 90.0;
+	float far_sink = climbed * PARALLAX_FAR_RANGE;
+	float mid_sink = climbed * PARALLAX_MID_RANGE;
+	float near_sink = climbed * PARALLAX_NEAR_RANGE;
+	float far_x = ax + view_x * PARALLAX_FAR_RANGE + sky_seed;
+	float mid_x = ax + view_x * PARALLAX_MID_RANGE + sky_seed * 1.7 + 40.0;
+	float near_x = ax + view_x * PARALLAX_NEAR_RANGE + sky_seed * 2.3 + 90.0;
 	float mid_line = crest_line(mid_x * 2.3, 0.84 + mid_sink, 0.2);
 	float near_line = crest_line(near_x * 1.6, 0.95 + near_sink, 0.17);
 
 	// What lies fully behind the nearer ranges is not worked out at all.
 	if (y < mid_line + 0.002 && y < near_line + 0.002) {
-		// Clouds rise past slower than the rock, the far ones slowest.
+		// Cloud space runs up the sky, so a cloud sinks by adding the climb.
 		vec2 view = vec2(UV.x * aspect, -y);
-		vec2 far_pos = view + vec2(cloud_offset.x * 0.3 + sky_time * 0.0014, -altitude * 0.009);
+		vec2 far_pos = view + vec2(view_x * PARALLAX_FAR_CLOUD + sky_time * 0.0014, climbed * PARALLAX_FAR_CLOUD);
 		vec4 far_cloud = cloud_layer(far_pos, vec2(0.2, 0.17), cloud_coverage * 1.1, seed + 11u, mix(cloud_lit, horizon_color, 0.3), mix(cloud_shadow, horizon_color, 0.45));
 		sky = mix(sky, far_cloud.rgb, far_cloud.a);
 
 		float far_line = crest_line(far_x * 3.2, 0.74 + far_sink, 0.24);
 		sky = range_layer(sky, far_x, y, far_line, 3.2, 0.74 + far_sink, 0.24, far_sink, vec2(0.05, 0.036), seed + 23u, mix(range_far, horizon_color, 0.15), snow_amount, haze);
 
-		vec2 near_pos = view + vec2(cloud_offset.x * 0.6 + sky_time * 0.003, -altitude * 0.018);
+		vec2 near_pos = view + vec2(view_x * PARALLAX_NEAR_CLOUD + sky_time * 0.003, climbed * PARALLAX_NEAR_CLOUD);
 		vec4 near_cloud = cloud_layer(near_pos, vec2(0.36, 0.3), cloud_coverage, seed + 31u, cloud_lit, cloud_shadow);
 		sky = mix(sky, near_cloud.rgb, near_cloud.a);
 	}

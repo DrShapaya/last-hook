@@ -115,6 +115,239 @@ func run_tests() -> void:
 	print("MASKS_TESTS ",checks," checks, ",failures.size()," failures")
 	quit(0 if failures.is_empty() else 1)
 
+# Share of each channel in a colour: its hue and saturation without its
+# brightness.
+func chroma(color: Color) -> Vector3:
+	var sum := maxf(color.r+color.g+color.b,.001)
+	return Vector3(color.r,color.g,color.b)/sum
+
+func luminance(color: Color) -> float:
+	return color.r*.2126+color.g*.7152+color.b*.0722
+
+# A grip is the stone of the face it stands on (docs/LEVEL_OBJECTS_PLAN.md,
+# stage 1): its body has the hue of the face round it and only steps a
+# little lighter or darker. On a location's own rock the truth is the built
+# face itself, the triangles facing the viewer round the grip; on the summer
+# boulders it is the host boulder's palette.
+func grip_tone_tests(world: MountainWorld, layout: MaskLayout, location: int) -> void:
+	var visuals := MassifVisuals.new(world,layout)
+	var rock := RockSurface.make(layout)
+	var faces: Array = []
+	if rock!=null:
+		var band := 0.0
+		while band<layout.summit+4.0:
+			var mesh := rock.build(band,band+24.0,.6)
+			band += 24.0
+			if mesh.get_surface_count()==0: continue
+			var arrays := mesh.surface_get_arrays(0)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+			var indices := PackedInt32Array()
+			if arrays[Mesh.ARRAY_INDEX]!=null: indices = arrays[Mesh.ARRAY_INDEX]
+			var count := indices.size() if not indices.is_empty() else vertices.size()
+			for i in range(0,count,3):
+				var ia := indices[i] if not indices.is_empty() else i
+				var ib := indices[i+1] if not indices.is_empty() else i+1
+				var ic := indices[i+2] if not indices.is_empty() else i+2
+				var normal := (vertices[ib]-vertices[ia]).cross(vertices[ic]-vertices[ia]).normalized()
+				if normal.z<0: normal = -normal
+				# Faces turned to the sky carry sand or snow: the grip's top
+				# is dressed for that, its body is the stone under it.
+				if normal.z<.5 or normal.y>.35: continue
+				var middle := (vertices[ia]+vertices[ib]+vertices[ic])/3.0
+				faces.append([Vector2(middle.x,middle.y),(colors[ia]+colors[ib]+colors[ic])/3.0])
+	var hue_gaps: Array = []
+	var light_gaps: Array = []
+	for id in layout.main_route:
+		var anchor: Dictionary = layout.anchors[id]
+		var p: Vector2 = anchor["pos"]
+		var truth := Color.BLACK
+		var seen := 0
+		if rock!=null:
+			var reach := maxf(float(anchor["dimensions"].x),float(anchor["dimensions"].y))*.5
+			for face in faces:
+				var d: float = (face[0] as Vector2).distance_to(p)
+				if d>reach and d<reach+1.4:
+					truth += face[1]
+					seen += 1
+		else:
+			var hit := visuals.surface_query(p)
+			if hit.valid() and visuals.masses_by_id.has(hit.mass_id):
+				truth = visuals._palette(visuals.profile_at(p.y),p.y,visuals.masses_by_id[hit.mass_id])["base"]
+				seen = 1
+		if seen==0: continue
+		truth = truth/float(seen)
+		var grip := visuals.grip_tone(anchor)
+		var gap := chroma(grip)-chroma(truth)
+		hue_gaps.append(absf(gap.x)+absf(gap.y)+absf(gap.z))
+		light_gaps.append(absf(luminance(grip)-luminance(truth)))
+	hue_gaps.sort()
+	light_gaps.sort()
+	var hue_p90: float = hue_gaps[int(hue_gaps.size()*.9)]
+	var light_p90: float = light_gaps[int(light_gaps.size()*.9)]
+	print("GRIP_TONE location ",location," grips ",hue_gaps.size()," hue p90 %.3f light p90 %.3f" % [hue_p90,light_p90])
+	check(hue_gaps.size()>=10,"grip tones are measured on location %d" % location)
+	check(hue_p90<.03,"grips of location %d take the hue of the face round them (p90 gap %.3f)" % [location,hue_p90])
+	check(light_p90<.12,"grips of location %d stay near the brightness of the face round them (p90 gap %.3f)" % [location,light_p90])
+	# The top of a grip is dressed as the face is: snow, sand or moss.
+	var sample: Dictionary = layout.anchors[layout.main_route[layout.main_route.size()/3]]
+	var body := visuals.grip_tone(sample)
+	var top := visuals.grip_top_color(body,visuals.profile_at(sample["pos"].y),sample["pos"])
+	match location:
+		0: check(chroma(top).y>chroma(body).y+.01,"summer grips carry moss on top")
+		1: check((chroma(top)-chroma(DesertRock.SAND)).length()<(chroma(body)-chroma(DesertRock.SAND)).length() and luminance(top)>luminance(body),"canyon grips carry sand on top")
+		2: check(luminance(top)>.8,"winter grips carry snow on top")
+
+# The foot of a climb is a base camp of the location (docs/LEVEL_OBJECTS_PLAN.md,
+# stage 6): a tent and a fire in summer, an awning and packs in the canyon,
+# a snowed tent and a sled on the peak. It stands on the start platform,
+# behind the hero, clear of the first grip and of the walk along the deck.
+func base_camp_tests(world: MountainWorld, layout: MaskLayout, location: int) -> void:
+	var visuals := MassifVisuals.new(world,layout)
+	var expected: Array = [["Палатка","Костёр"],["Навес","Тюки"],["Палатка в снегу","Сани"]][location]
+	var parent := Node3D.new()
+	world.add_child(parent)
+	for quality in ["balanced","battery"]:
+		visuals.set_quality(quality)
+		for child in parent.get_children(): child.free()
+		var camp := visuals.build_base_camp(parent)
+		check(camp!=null,"location %d builds a base camp (%s)" % [location,quality])
+		if camp==null: continue
+		var named := true
+		for part in expected: named = named and camp.find_child(part,true,false)!=null
+		check(named,"the camp of location %d has its own pieces %s" % [location,str(expected)])
+		var start: Dictionary = visuals.start_ledge()
+		var first: Vector2 = layout.anchors[layout.main_route[0]]["pos"]
+		var box := AABB()
+		var seen := false
+		var lights := 0
+		for node in camp.find_children("*","",true,false):
+			if node is Light3D: lights += 1
+			if not node is MeshInstance3D: continue
+			var part := (node as MeshInstance3D).global_transform*(node as MeshInstance3D).get_aabb()
+			box = part if not seen else box.merge(part)
+			seen = true
+		var on_deck: bool = seen and box.position.x>=float(start["left"])-.6 and box.end.x<=float(start["right"])+.6 and box.position.y>=float(start["top"])-1.0
+		var low: bool = box.end.y<=float(start["top"])+2.2 and box.end.y<first.y-1.0
+		var behind: bool = box.end.z<=MountainVisuals.PLATFORM_FRONT+.05
+		# The middle of the deck stays free where the hero starts.
+		var free_middle := true
+		for node in camp.get_children():
+			if node is Node3D and absf((node as Node3D).global_position.x)<1.1: free_middle = false
+		check(on_deck and low and behind and free_middle,"the camp of location %d stands on the start deck behind the hero, low and clear of the first grip (%s)" % [location,str(box)])
+		if quality=="battery": check(lights==0,"the battery camp of location %d lights nothing" % location)
+	parent.free()
+
+# Mean turn at the outline's corners, in radians: a rounded boulder turns in
+# many small steps, angular granite in a few sharp ones.
+func mean_turn(outline: PackedVector2Array) -> float:
+	var total := 0.0
+	for index in range(outline.size()):
+		var a := outline[index-1]
+		var b := outline[index]
+		var c := outline[(index+1)%outline.size()]
+		total += absf((b-a).angle_to(c-b))
+	return total/outline.size()
+
+# Grips are the stone of their location (docs/LEVEL_OBJECTS_PLAN.md, stage 2):
+# rounded boulders in summer, layered sandstone in the canyon, angular
+# granite on the snow peak. The type cues stay the same everywhere, and
+# neighbouring grips are not alike.
+func grip_character_tests(world: MountainWorld, layout: MaskLayout, location: int) -> void:
+	var visuals := MassifVisuals.new(world,layout)
+	var expected: String = ["boulder","layered","angular"][location]
+	var right := true
+	var turns := 0.0
+	var layered := 0
+	var cracked := 0
+	var count := 0
+	var ratios: Array = []
+	var alike := 0
+	var previous := Vector2.ZERO
+	for id in layout.main_route:
+		var anchor: Dictionary = layout.anchors[id]
+		var spec := GripVisualSpec.for_grip(anchor,visuals.profile_at(anchor["pos"].y),visuals._room_below(anchor),visuals.grip_character())
+		right = right and spec.character==expected
+		turns += mean_turn(spec.outline)
+		if spec.layers.size()>=2: layered += 1
+		if not spec.cracks.is_empty(): cracked += 1
+		var shape := Vector2(spec.front_width/float(anchor["dimensions"].x),spec.front_height)
+		if shape.distance_to(previous)<.03: alike += 1
+		previous = shape
+		ratios.append(shape.x)
+		count += 1
+	turns /= maxf(1,count)
+	ratios.sort()
+	var spread: float = ratios[int(ratios.size()*.9)]-ratios[int(ratios.size()*.1)]
+	print("GRIP_CHARACTER location ",location," ",expected," turn %.3f layered %d cracked %d of %d spread %.3f alike %d" % [turns,layered,cracked,count,spread,alike])
+	check(right,"grips of location %d are built as %s" % [location,expected])
+	match location:
+		0: check(turns<.22 and cracked<count*.4,"summer grips are rounded boulders (turn %.2f, %d cracked)" % [turns,cracked])
+		1: check(layered==count and cracked==0,"canyon grips are layered sandstone (%d of %d layered, %d cracked)" % [layered,count,cracked])
+		2: check(turns>.34,"snow peak grips are angular granite (turn %.2f)" % turns)
+	check(spread>=.06 and alike<=count/10,"neighbouring grips of location %d differ in size (spread %.3f, %d alike)" % [location,spread,alike])
+
+func triangles(meshes: Array) -> int:
+	var count := 0
+	for mesh: MeshInstance3D in meshes:
+		for surface in range(mesh.mesh.get_surface_count()):
+			var arrays := mesh.mesh.surface_get_arrays(surface)
+			var indices = arrays[Mesh.ARRAY_INDEX]
+			count += (indices.size() if indices!=null else (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size())/3
+	return count
+
+# Rest platforms belong to their location (docs/LEVEL_OBJECTS_PLAN.md, stage
+# 4): one set of models, the location's tint on wood, iron and rope, only its
+# own dressing on them, and on battery no more triangles than bare timber.
+func platform_look_tests(world: MountainWorld, layout: MaskLayout, location: int) -> void:
+	const WoodPlatform := preload("res://scripts/wood_platform.gd")
+	var look: String = ["summer","desert","winter"][location]
+	var dress: Array = WoodPlatform.LOOKS[look]["dress"]
+	var timber := 0
+	var slabs := 0
+	var own_ok := true
+	var tint_ok := true
+	var light_ok := true
+	for quality in ["balanced","battery"]:
+		var visuals := MassifVisuals.new(world,layout)
+		visuals.set_quality(quality)
+		var rests := Node3D.new()
+		world.add_child(rests)
+		for ledge in layout.ledges:
+			ledge.erase("visual")
+			visuals.build_ledge(ledge,rests)
+			var holder: Node3D = ledge["visual"]
+			if holder.find_child("Снежная плита",false,false)!=null:
+				if quality=="balanced": slabs += 1
+				continue
+			var model := holder.find_child("Деревянная площадка",false,false) as Node3D
+			if model==null:
+				own_ok = false
+				continue
+			if quality=="balanced": timber += 1
+			var parts := {}
+			for mesh: MeshInstance3D in model.find_children("*","MeshInstance3D",true,false): parts[WoodPlatform.part_of(mesh)] = mesh
+			for part in ["snow","ice","sand","moss","vine"]:
+				var wanted: bool = part in dress and (quality!="battery" or not part in WoodPlatform.LOOKS[look]["detail"])
+				own_ok = own_ok and parts.has(part)==wanted
+			var wood: MeshInstance3D = parts.get("wood")
+			tint_ok = tint_ok and wood!=null and (wood.material_override as StandardMaterial3D).albedo_color==WoodPlatform.LOOKS[look]["wood"]
+			if quality=="battery":
+				var scene := (load(str(model.get_meta("model"))) as PackedScene).instantiate() as Node3D
+				var bare: Array = []
+				for mesh: MeshInstance3D in scene.find_children("*","MeshInstance3D",true,false):
+					if WoodPlatform.part_of(mesh) in WoodPlatform.TIMBER: bare.append(mesh)
+				var drawn := triangles(model.find_children("*","MeshInstance3D",true,false))
+				light_ok = light_ok and drawn<=triangles(bare)
+				scene.free()
+		rests.free()
+		for ledge in layout.ledges: ledge.erase("visual")
+	print("PLATFORM_LOOK location ",location," timber ",timber," slabs ",slabs)
+	check(timber>0 and own_ok,"rest platforms of location %d carry only the %s dressing" % [location,look])
+	check(tint_ok,"the timber of location %d takes the %s tint" % [location,look])
+	check(light_ok,"on battery the %s platforms draw no more than bare timber did" % look)
+	if location==2: check(slabs>0 and timber>0,"the snow peak rests on snowy timber and on slabs of its rock (%d, %d)" % [timber,slabs])
+
 # Each location has a generator of its own, with its own rock and mask.
 func style_tests() -> void:
 	var parted_rows := {}
@@ -156,6 +389,10 @@ func style_tests() -> void:
 			check(mesh.get_surface_count()==1 and mesh.get_faces().size()>300,"location %d builds one continuous rock face" % location)
 			var a := rock.build(24.0,48.0,1.0).get_faces()
 			check(a==mesh.get_faces(),"the rock face of location %d is the same every time" % location)
+		grip_tone_tests(world,layout,location)
+		platform_look_tests(world,layout,location)
+		grip_character_tests(world,layout,location)
+		base_camp_tests(world,layout,location)
 		if location==0:
 			summer_boulder_tests(layout)
 			summer_moss_tests()
@@ -676,8 +913,12 @@ func winter_decor_tests() -> void:
 	world.add_child(rests)
 	for ledge in world.layout.ledges:
 		visuals.build_ledge(ledge,rests)
-		if is_instance_valid(ledge.get("visual")) and (ledge["visual"] as Node).find_child("Снежная плита",false,false)!=null: slabs += 1
-	check(slabs>0 and slabs==world.layout.ledges.size(),"every rest on the peak is a snow slab of its rock (%d of %d)" % [slabs,world.layout.ledges.size()])
+		var slab: bool = is_instance_valid(ledge.get("visual")) and (ledge["visual"] as Node).find_child("Снежная плита",false,false)!=null
+		if slab: slabs += 1
+		if slab!=visuals.snow_slab(ledge): slabs = -1000
+	# One rest in three is a slab of the rock, the others snowy timber
+	# (docs/LEVEL_OBJECTS_PLAN.md, stage 4).
+	check(slabs>0,"the rests the peak marks as slabs are slabs of its rock (%d of %d)" % [slabs,world.layout.ledges.size()])
 	rests.free()
 	print("WINTER_DECOR shelf ice ",shelf_ice," crystals ",crystals," heaped ",heaped)
 	check(shelf_ice>=8,"ice hangs in rows under the snow shelves (%d)" % shelf_ice)

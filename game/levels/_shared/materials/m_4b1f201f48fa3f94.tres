@@ -1,0 +1,8 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://levels/_shared/shaders/s_e83c8b404786aae6.gdshader" id="1_r1wfo"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_r1wfo")
+shader_parameter/length_units = 13.360003051757957

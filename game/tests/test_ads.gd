@@ -199,6 +199,10 @@ func run_tests() -> void:
 	game.start_run(false)
 	game.preview = false
 	game.finish_run(true)
+	# The summit scene plays first (docs/LEVEL_OBJECTS_PLAN.md, stage 5); the
+	# advert waits for its end or a tap.
+	check(game.summit_scene>0.0 and not game.ads.fullscreen and native.interstitials_shown==shown_before,"no interstitial interrupts the summit scene")
+	game.skip_summit_scene()
 	check(game.state=="result" and game.ads.fullscreen and native.interstitials_shown==shown_before+1,"successful summit settles rewards before showing one interstitial")
 	game.finish_run(true)
 	check(native.interstitials_shown==shown_before+1,"repeat completion cannot show the same interstitial twice")

@@ -136,15 +136,18 @@ void fragment() {
 	ROUGHNESS=roughness_value;
 	SPECULAR=0.5*light_quality;
 	if(light_quality>0.5){
-		// Surface gradient of the stone's height, so grain catches the real sun.
-		float height=grain+bedding*0.5-crack*0.4;
+		// Surface gradient of the stone's height, so its relief catches the real
+		// sun. Only low frequencies: derivatives come in 2x2 pixel blocks, and
+		// fine grain turns into a checker pattern.
+		float height=noise3(p*1.6+vec3(41.0))*1.5+bedding*0.5;
 		vec3 dpx=dFdx(VERTEX);
 		vec3 dpy=dFdy(VERTEX);
 		vec3 r1=cross(dpy,NORMAL);
 		vec3 r2=cross(NORMAL,dpx);
 		float det=dot(dpx,r1);
 		vec3 gradient=sign(det)*(dFdx(height)*r1+dFdy(height)*r2);
-		NORMAL=normalize(abs(det)*NORMAL-0.05*gradient);
+		// The area of an orthographic pixel is tiny: never divide by it bare.
+		NORMAL=normalize(NORMAL-0.05*gradient/max(abs(det),1e-6));
 	}
 }
 // Wrapped sun light: faces turned away from the sun stay mid-grey instead

@@ -176,6 +176,7 @@ func run_tests() -> void:
 			game._physics_process(1.0/120)
 			game._move_camera(1.0/120)
 		check(game.state=="result" and game.settlement.get("success",false),"fresh base-kit run reaches and settles the actual summit from the starting platform, seed %d" % seed_number)
+		summit_ending_tests(game,seed_number)
 		check(game.model.profile["run_history"].size()==1 and game.model.profile["run_history"][0]["seconds"]>0,"completed run records local pace and shot metrics once, seed %d" % seed_number)
 		print("FULL_SUMMIT seed=",seed_number," kit=",kit," seconds=",snappedf(game.run_seconds,.1)," shots=",game.shots," catches=",game.catches)
 		if not game.model.profile["run_history"].is_empty(): summit_sessions.append(game.model.profile["run_history"][0].duplicate(true))
@@ -494,6 +495,45 @@ func touch_throw(game, target: Vector2) -> void:
 	game.pointer_down(origin,true)
 	game.pointer_move(end)
 	game.pointer_up(end)
+
+# The end of a climb reads as one (docs/LEVEL_OBJECTS_PLAN.md, stage 5): the
+# last grip is the summit's own, a beacon stands over the summit, the bar
+# lights the last stretch, and a short scene that a tap skips plays before
+# the results, which stay settled exactly as before.
+func summit_ending_tests(game, seed_number: int) -> void:
+	var world: MountainWorld = game.world
+	var last: Dictionary = world.anchor_by_id(world.summit_grip_id())
+	check(world.summit_grip_id()==world.main_route[-1] and last.get("summit",false),"the summit grip is the last grip of the main route, seed %d" % seed_number)
+	check(GripSpec.description(last).begins_with("Вершина"),"aiming at the summit grip names it the summit")
+	# The run here only steps physics, so nothing streamed in: build the top's
+	# pieces as the chunk would.
+	var top_chunk := Node3D.new()
+	world.add_child(top_chunk)
+	var mount: SurfaceMount = world.visuals.mount_at(last["pos"],last["dimensions"],last,MountainVisuals.GRIP_STANDOFF)
+	world.visuals.build_grip(last,top_chunk,mount)
+	var holder: Node3D = last.get("visual")
+	check(holder!=null and holder.find_child("Флажки вершины",true,false)!=null,"the summit grip carries its pennants, seed %d" % seed_number)
+	world._build_summit_beacon(top_chunk,world.summit_flag_point())
+	var beacon := top_chunk.find_child("Маяк вершины",true,false) as Node3D
+	check(beacon!=null and beacon.find_child("Луч",true,false)!=null and beacon.find_child("Гирлянда",true,false)!=null,"a beam and a garland of pennants stand over the summit, seed %d" % seed_number)
+	if beacon!=null:
+		var top := -INF
+		for mesh: MeshInstance3D in beacon.find_children("*","MeshInstance3D",true,false): top = maxf(top,(mesh.global_transform*mesh.get_aabb()).end.y)
+		check(top>=world.layout.summit+8.0,"the beam rises well over the summit, to be seen from below (%.1f m)" % (top-world.layout.summit))
+	check(game.summit_scene>0.0 and not game.hud.content.visible,"a summit plays its short scene, the play chrome put aside, before the results, seed %d" % seed_number)
+	game.hud.result_data = {}
+	for frame in range(10): game._process(.1)
+	check(game.summit_scene>0.0 and game.summit_pull>0.2,"during the scene the camera pulls back to show the mountain")
+	for frame in range(30): game._process(.1)
+	check(game.summit_scene<=0.0 and bool(game.hud.result_data.get("success",false)),"the results follow the scene within three seconds")
+	check(game.summit_pull==0.0 and game.hud.content.visible,"the camera returns to its framing and the screen to the results after the scene")
+	game.hud.result_data = {}
+	game.summit_scene = 1.0
+	game.skip_summit_scene()
+	check(game.summit_scene<=0.0 and bool(game.hud.result_data.get("success",false)),"a tap skips the summit scene straight to the results")
+	# The bar lights the last stretch once the summit is near.
+	check(GameHud.summit_near("summit",game.summit_height-12.0,game.summit_height) and not GameHud.summit_near("summit",game.summit_height-40.0,game.summit_height) and not GameHud.summit_near("endless",game.summit_height-5.0,game.summit_height),"the climb bar lights its last stretch within 20 m of the summit, on summit climbs only")
+	top_chunk.queue_free()
 
 func climb_route(game, count: int, override_route: Array[int] = []) -> int:
 	var reached := 1

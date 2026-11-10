@@ -79,22 +79,40 @@ func support_root_of(_object: Dictionary) -> Vector2:
 func grip_tint() -> float:
 	return .55
 
+# The dressing of the rest platforms here (a key of WoodPlatform.LOOKS, ""
+# for bare timber in the summer tint).
+func platform_look(_point: Vector2) -> String:
+	return ""
+
 # Rest platforms are authored timber models (WoodPlatform): the shared grain
-# under the models' own tones, the wood nudged towards the place's cool rock
-# so it sits in the light.
-func ledge_materials(profile: GripBiomeProfile) -> Dictionary:
-	var wood: StandardMaterial3D = world.mat("ledge_wood_%s" % profile.id,Color.WHITE.lerp(profile.rock_palette["cool"],.10),false)
+# under the models' light tones, tinted by the location's look; the dressing
+# parts (snow, ice, sand, moss, vine) keep their own vertex colours.
+func ledge_materials(_profile: GripBiomeProfile, look: String = "") -> Dictionary:
+	var tints: Dictionary = WoodPlatform.LOOKS.get(look,WoodPlatform.LOOKS["summer"])
+	var key := look if look!="" else "bare"
+	var wood: StandardMaterial3D = world.mat("ledge_wood_%s" % key,tints["wood"],false)
 	wood.albedo_texture = load(WoodPlatform.grain_path())
 	wood.vertex_color_use_as_albedo = true
 	wood.roughness = .86
-	var iron: StandardMaterial3D = world.mat("ledge_iron",Color.WHITE,false)
+	var iron: StandardMaterial3D = world.mat("ledge_iron_%s" % key,tints["iron"],false)
 	iron.vertex_color_use_as_albedo = true
 	iron.metallic = .5
 	iron.roughness = .45
-	var rope: StandardMaterial3D = world.mat("ledge_rope",Color.WHITE,false)
+	var rope: StandardMaterial3D = world.mat("ledge_rope_%s" % key,tints["rope"],false)
 	rope.vertex_color_use_as_albedo = true
 	rope.roughness = .95
-	return {"wood":wood,"iron":iron,"rope":rope}
+	var result := {"wood":wood,"iron":iron,"nail":iron,"rope":rope}
+	for part in ["snow","ice","sand","moss","vine"]:
+		var dress: StandardMaterial3D = world.mat("ledge_%s" % part,Color.WHITE,false)
+		dress.vertex_color_use_as_albedo = true
+		dress.roughness = .2 if part=="ice" else .9
+		# Grass blades and leaves are single sheets.
+		if part in ["moss","vine"]: dress.cull_mode = BaseMaterial3D.CULL_DISABLED
+		if part=="ice":
+			dress.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			dress.albedo_color = Color(1,1,1,.85)
+		result[part] = dress
+	return result
 
 # The platform model of a rest ledge: the style whose supports fit the free
 # face under the ledge, its back plane on the frontmost stone anywhere over
@@ -104,16 +122,40 @@ func _place_platform(holder: Node3D, object: Dictionary, mount: SurfaceMount) ->
 	var left: float = object["left"]
 	var right: float = object["right"]
 	var top: float = object["top"]
-	var width := right-left+.24
+	var width := right-left+WoodPlatform.OVERHANG*2.0
 	var style := WoodPlatform.style_for(_room_under_ledge(object))
 	var drop: float = WoodPlatform.DROP[style]
-	var back := _front_over(Rect2(left-.12,top-drop-.02,width,drop+.02))+PLATFORM_GAP
-	var model := WoodPlatform.instantiate(style,width,ledge_materials(mount.profile),quality!="battery")
+	var back := _front_over(Rect2(left-WoodPlatform.OVERHANG,top-drop-.02,width,drop+.02))+PLATFORM_GAP
+	var look := platform_look(Vector2((left+right)*.5,top))
+	var model := WoodPlatform.instantiate(style,width,ledge_materials(mount.profile,look),quality!="battery",look,quality!="battery")
 	model.scale.z = clampf((PLATFORM_FRONT-back)/WoodPlatform.DEPTH,.55,1.0)
 	model.position = Vector3(0,0,back-holder.position.z)
 	holder.add_child(model)
 	object["platform_style"] = style
 	return model
+
+# The platform the hero starts on: the lowest ledge, under the first grip.
+func start_ledge() -> Dictionary:
+	var best: Dictionary = {}
+	for ledge in layout.ledges:
+		if float(ledge["top"])<2.0 and (best.is_empty() or float(ledge["top"])<float(best["top"])): best = ledge
+	return best
+
+# The base camp on the start platform (BaseCamp), in the place's look; none
+# where the place has no look of its own. Its pieces stand mid-deck, as deep
+# as the deck the platform model puts there (see _place_platform).
+func build_base_camp(parent: Node3D) -> Node3D:
+	var start := start_ledge()
+	if start.is_empty(): return null
+	var left: float = start["left"]
+	var right: float = start["right"]
+	var top: float = start["top"]
+	var look := platform_look(Vector2((left+right)*.5,top))
+	if look=="": return null
+	var drop: float = WoodPlatform.DROP["braced"]
+	var back := _front_over(Rect2(left-WoodPlatform.OVERHANG,top-drop-.02,right-left+WoodPlatform.OVERHANG*2.0,drop+.02))+PLATFORM_GAP
+	var front := back+WoodPlatform.DEPTH*clampf((PLATFORM_FRONT-back)/WoodPlatform.DEPTH,.55,1.0)
+	return BaseCamp.build(parent,look,left,right,top,(back+front)*.5,front-back,quality!="battery")
 
 # Free height under a ledge before the first grip, find, hazard or ledge
 # below it that its supports would run into.
@@ -154,12 +196,41 @@ func _front_over(area: Rect2) -> float:
 # Give the playable stone a controlled contrast step against the host face.
 # Type colour carries identity, while the luminance adjustment keeps the hold
 # readable on both dark snow/forest bands and pale desert/sky bands.
+# The character of the grips' stone here (see GripVisualSpec.character).
+func grip_character() -> String:
+	return "plain"
+
+# The tone of the stone a grip stands out of, as the face shows it there.
+func surface_tone(point: Vector2, _reach: float = 1.0) -> Color:
+	return zone_color(point.y)
+
+# The top face of a grip's block, dressed as the mountain round it is. The
+# sun and the form light already brighten it a lot; bare, its own tone stays
+# a little under the stone so it reads as a lit cap.
+func grip_top_color(stone: Color, profile: GripBiomeProfile, _point: Vector2) -> Color:
+	var weather: Dictionary = profile.weathering_rules
+	if float(weather["snow"])>.5: return Color("eef3f6")
+	if float(weather["dust"])>.5: return stone.lerp(profile.rock_palette["warm"],.45)
+	if float(weather["moss"])>.5: return stone.lightened(.12).lerp(profile.vegetation_set["leaf"],.08)
+	return stone.darkened(.05)
+
+# The body colour of a grip's block: the host's own stone, a touch lighter
+# and barely leaning to the type's material, so the block separates by its
+# volume and light, never as a pale plate laid on the face.
+func grip_tone(object: Dictionary, profile: GripBiomeProfile = null) -> Color:
+	var p: Vector2 = object["pos"]
+	if profile==null: profile = profile_at(p.y)
+	var size: Vector2 = object.get("dimensions",Vector2.ONE)
+	return grip_stone_color(surface_tone(p,maxf(size.x,size.y)*.5+.3),profile,GripSpec.kind_of(object))
+
 func grip_stone_color(rock: Color, profile: GripBiomeProfile, kind: int) -> Color:
-	var stone := rock.lerp(profile.material_color(kind),.24)
-	var luminance := stone.r*.2126+stone.g*.7152+stone.b*.0722
-	if luminance<.48:
-		return stone.lightened(.12)
-	return stone.darkened(.09)
+	# Only a hint of the type's material: the block is the host's stone. The
+	# step in brightness scales the channels, so the hue stays the host's
+	# (lightening towards white would turn sandstone or blue granite grey).
+	var stone := rock.lerp(profile.material_color(kind),.1)
+	var luminance := rock.r*.2126+rock.g*.7152+rock.b*.0722
+	var step := 1.15 if luminance<.48 else .88
+	return Color(clampf(stone.r*step,0,1),clampf(stone.g*step,0,1),clampf(stone.b*step,0,1))
 
 # Mountains whose finds lie on the face itself, with only a contact shade.
 func finds_without_pedestal() -> bool:
@@ -362,7 +433,10 @@ func build_grip(object: Dictionary, parent: Node3D, mount: SurfaceMount) -> void
 	elif family in ["dry_slab","cracked_beam"]: outline = _jagged(outline,id)
 	elif family=="masonry": outline = _masonry_outline(outline)
 	object["surface"] = outline
-	var spec := GripVisualSpec.for_grip(object,profile,_room_below(object))
+	var spec := GripVisualSpec.for_grip(object,profile,_room_below(object),grip_character())
+	# The summit's own grip: a whole stroke of bright gold, whatever its type
+	# (docs/LEVEL_OBJECTS_PLAN.md, stage 5).
+	if object.get("summit",false): spec.paint_profile = {"color":SUMMIT_GOLD,"width":.9,"wear":.05,"height":.9,"gaps":[]}
 	object["visual_spec"] = spec
 	# Two frames on the host face: the socket stays with the wall, the block
 	# sits on a pivot that a spring bends under load.
@@ -381,12 +455,8 @@ func build_grip(object: Dictionary, parent: Node3D, mount: SurfaceMount) -> void
 	block.name = "Блок"
 	block.transform = frame
 	pivot.add_child(block)
-	var rock := zone_color(p.y)
-	# The host's own stone, a touch lighter and barely leaning to the type's
-	# material: the block separates by its volume and light, never as a pale
-	# plate laid on the face.
-	var stone := grip_stone_color(rock,profile,kind)
-	var front := _block_mesh(block,spec,stone,profile,kind)
+	var stone := grip_tone(object,profile)
+	var front := _block_mesh(block,spec,stone,profile,kind,grip_top_color(stone,profile,p))
 	_grip_shadow(holder,object,spec,frame)
 	# No seam, ring or recess round the block: it stands out of the face,
 	# and its contact is the real shadow it casts.
@@ -401,6 +471,7 @@ func build_grip(object: Dictionary, parent: Node3D, mount: SurfaceMount) -> void
 		GripSpec.ICE: _ice_details(object,block,spec,profile,front)
 		GripSpec.CRYSTAL: _crystal_details(object,block,spec,profile,front)
 	if GripSpec.lifetime(object)=="permanent": _hardware(block,spec,profile,front)
+	if object.get("summit",false): _summit_pennants(block,spec)
 	# Only the contact shade darkens the face round a grip: small fittings
 	# would throw stray specks across the facets.
 	for mesh: MeshInstance3D in holder.find_children("*","MeshInstance3D",true,false):
@@ -410,6 +481,42 @@ func build_grip(object: Dictionary, parent: Node3D, mount: SurfaceMount) -> void
 	# The dial stands clear of the faceted face, so no plane cuts into it.
 	object["face_point"] = frame*Vector3(face.x,face.y,_face_z(front,face,spec.protrusion())+spec.bulge+.06)
 	object["dial_size"] = clampf((spec.front_ring()[0].y-spec.bounds().position.y)*.78,.34,.5)
+
+const SUMMIT_GOLD := Color("ffcf3a")
+
+# Two small pennants on poles at the summit grip's top corners, standing up
+# out of its top face: nothing reaches over the front where the hook lands.
+func _summit_pennants(block: Node3D, spec: GripVisualSpec) -> void:
+	var holder := Node3D.new()
+	holder.name = "Флажки вершины"
+	block.add_child(holder)
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var depth := spec.protrusion()*.45
+	var corners := [spec.outline[spec.top_left]+Vector2(.12,-.06),spec.outline[spec.top_right]+Vector2(-.12,-.06)]
+	for index in range(2):
+		var foot: Vector2 = corners[index]
+		var side := -1.0 if index==0 else 1.0
+		var base := Vector3(foot.x,foot.y,depth)
+		var top := base+Vector3(0,.62,0)
+		# The pole: a thin box.
+		for quad in [[base+Vector3(-.018,0,0),base+Vector3(.018,0,0),top+Vector3(.018,0,0),top+Vector3(-.018,0,0)]]:
+			for v in [quad[0],quad[1],quad[2],quad[0],quad[2],quad[3]]:
+				surface.set_color(Color("5a4632"))
+				surface.add_vertex(v)
+		# The pennant flies outwards from the pole.
+		var color := SUMMIT_GOLD if index==0 else Color("e8652a")
+		for v in [top,top+Vector3(side*.34,-.09,.02),top+Vector3(0,-.2,0)]:
+			surface.set_color(color)
+			surface.add_vertex(v)
+	var mesh := MeshInstance3D.new()
+	mesh.name = "Флажки"
+	mesh.mesh = surface.commit()
+	var material: StandardMaterial3D = world.mat("summit_pennant",Color.WHITE,false)
+	material.vertex_color_use_as_albedo = true
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mesh.material_override = material
+	holder.add_child(mesh)
 
 # A cast shadow falls apart on the faceted face: planes turned from the sun
 # cannot take it, so it arrives in scraps. Every grip lies on one soft shade
@@ -485,7 +592,7 @@ func _block_frame(holder: Node3D, mount: SurfaceMount, lift: float = 0.0) -> Tra
 # into a few large planes, with grooves where cracks split the outcrop into
 # stones. Returns the visible triangles - a height field over the whole
 # silhouette - for paint, cracks and details on the real surface.
-func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: GripBiomeProfile, kind: int) -> Array:
+func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: GripBiomeProfile, kind: int, top_color: Color) -> Array:
 	var depth := spec.protrusion()
 	var bounds := spec.bounds()
 	var top := spec.outline[spec.top_left].y
@@ -493,12 +600,6 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 	var height := maxf(.01,top-low)
 	var random := layout.rng(spec.seed_value,941)
 	var weather: Dictionary = profile.weathering_rules
-	# The sun and the form light already brighten the top face a lot; its
-	# own tone stays a little under the stone so it reads as a lit cap.
-	var top_color := stone.darkened(.05)
-	if float(weather["snow"])>.5: top_color = Color("eef3f6")
-	elif float(weather["dust"])>.5: top_color = stone.lerp(profile.rock_palette["warm"],.45)
-	elif float(weather["moss"])>.5: top_color = stone.lightened(.12).lerp(profile.vegetation_set["leaf"],.08)
 	# Each stone between the cracks has its own plane: out or back a little and
 	# turned to its own side, so the stones catch the light differently.
 	var edges: Array[float] = [bounds.position.x]
@@ -513,9 +614,18 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 			if x>=edges[index]: return stones[index]
 		return stones[0]
 	var middle_y := (top+low)*.5
+	# Beds of layered stone: each stands a little out or back of the one
+	# above it, so the joints read as steps (GripVisualSpec.layers).
+	var bed_offsets: Array[float] = [0.0]
+	for line in spec.layers: bed_offsets.append(random.randf_range(.03,.07)*(-1.0 if bed_offsets.size()%2==1 else .6))
+	var bed_of := func(y: float) -> int:
+		var bed := 0
+		for line in spec.layers:
+			if y<float(line): bed += 1
+		return bed
 	var plane_z := func(point: Vector2) -> float:
 		var own: Dictionary = stone_at.call(point.x)
-		var z := depth*lerpf(1.0,.94,clampf((top-point.y)/height,0,1))+float(own["offset"])
+		var z := depth*lerpf(1.0,.94,clampf((top-point.y)/height,0,1))+float(own["offset"])+bed_offsets[int(bed_of.call(point.y))]
 		return z+float(own["turn"])*(point.x-float(own["x"]))+float(own["pitch"])*(point.y-middle_y)
 	# The front face domes like the boulders of the face: it falls back
 	# towards its rim, most at the flanks, so its facets turn to all sides.
@@ -524,9 +634,10 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 	var crown := func(point: Vector2) -> float:
 		var d := (point-face_mid)/face_half
 		return depth*.30*clampf(d.x*d.x*1.1+d.y*d.y*.4,0,1.2)
-	var groove := func(x: float) -> float:
+	var groove := func(x: float, y: float = INF) -> float:
 		var dip := 0.0
 		for crack in spec.cracks: dip = maxf(dip,clampf(1.0-absf(x-float(crack))/.16,0,1))
+		for line in spec.layers: dip = maxf(dip,clampf(1.0-absf(y-float(line))/.07,0,1))
 		return dip*.07
 	# The part buried in the rock runs straight back along the view axis, not
 	# along the tilted face normal: a deep back (an outcrop lifted out of a
@@ -552,7 +663,7 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 		# The lower rim stands nearly as far out as the face: the foot of the
 		# face looks forward, not down into shade.
 		var t := clampf((top-point.y)/height,0,1)
-		rim.append(Vector3(point.x,point.y,float(plane_z.call(point))-float(crown.call(point))+random.randf_range(-.07,.03)*(1.0-t*.6)-float(groove.call(point.x))))
+		rim.append(Vector3(point.x,point.y,float(plane_z.call(point))-float(crown.call(point))+random.randf_range(-.07,.03)*(1.0-t*.6)-float(groove.call(point.x,point.y))))
 	# Front face: the rim, a few raised points and the crack grooves,
 	# triangulated together so the face breaks into large planes.
 	var face_points := PackedVector2Array(spec.front)
@@ -566,7 +677,7 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 			at = front_box.get_center().lerp(at,.8)
 			if not Geometry2D.is_point_in_polygon(at,spec.front): continue
 			face_points.append(at)
-			face_z.append(float(plane_z.call(at))-float(crown.call(at))+spec.bulge*random.randf_range(.3,.8)-float(groove.call(at.x))*.6)
+			face_z.append(float(plane_z.call(at))-float(crown.call(at))+spec.bulge*random.randf_range(.3,.8)-float(groove.call(at.x,at.y))*.6)
 			break
 	for crack in spec.cracks:
 		for step in range(1,4):
@@ -574,6 +685,15 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 			if not Geometry2D.is_point_in_polygon(at,spec.front): continue
 			face_points.append(at)
 			face_z.append(float(plane_z.call(at))-float(crown.call(at))-.06)
+	# The bed joints run across the front face: a row of points along each,
+	# set back into the stone, so the face breaks along them.
+	for line in spec.layers:
+		var steps := maxi(3,int(front_box.size.x/.22))
+		for step in range(steps+1):
+			var at := Vector2(lerpf(front_box.position.x,front_box.end.x,float(step)/steps),float(line)+random.randf_range(-.015,.015))
+			if not Geometry2D.is_point_in_polygon(at,spec.front): continue
+			face_points.append(at)
+			face_z.append(float(plane_z.call(at))-float(crown.call(at))-.08)
 	var points := PackedVector3Array()
 	var colors := PackedColorArray()
 	var cap_points := PackedVector3Array()
@@ -593,6 +713,8 @@ func _block_mesh(block: Node3D, spec: GripVisualSpec, stone: Color, profile: Gri
 		tone = tone.darkened(clampf(-normal.y-.2,0,.8)*.22)
 		tone = tone.darkened(clampf(normal.x*.6-normal.y*.3,0,.6)*.16)
 		var jitter := (facet_hash(salt,spec.seed_value,7.7)-.5)*.09
+		# Sandstone beds alternate a little in tone.
+		if not spec.layers.is_empty() and int(bed_of.call((a.y+b.y+c.y)/3.0))%2==1: jitter -= .06
 		return tone.lightened(jitter) if jitter>0 else tone.darkened(-jitter)
 	var triangles: Array = []
 	var salt := 0

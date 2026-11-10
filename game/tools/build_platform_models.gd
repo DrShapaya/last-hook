@@ -3,7 +3,11 @@ extends SceneTree
 # Authors the rest-platform models in assets/models/platforms: a timber deck
 # in two support styles (timber braces, iron brackets) and every width of
 # WoodPlatform.WIDTHS, exported as glTF so they can be reworked in Blender,
-# plus the tileable wood grain they share. Every board is chamfered, the deck
+# plus the tileable wood grain they share. Wood, iron and rope carry light
+# tones that each location tints (WoodPlatform.LOOKS); each model also holds
+# the dressing of every location as parts of their own (snow cap and
+# icicles, drifted sand, moss with grass and a vine), of which the game keeps
+# only the location's (docs/LEVEL_OBJECTS_PLAN.md, stage 4). Every board is chamfered, the deck
 # boards differ a little in width, length, height and tone, and the joints
 # carry iron straps, bolts and rope lashings. The grain is its own texture. Fixed seeds: the files only
 # change when this script does. After running it, reimport:
@@ -11,10 +15,19 @@ extends SceneTree
 #   Godot --headless --path game --import
 
 const WoodPlatform := preload("res://scripts/wood_platform.gd")
-const PLANK := Color("b07e4c")
-const BEAM := Color("7e5634")
-const IRON := Color("47403b")
-const ROPE := Color("cfae72")
+# Light base tones: the game's location tint multiplies them (WoodPlatform).
+const PLANK := Color("e4cba4")
+const BEAM := Color("bf9f7e")
+const IRON := Color("8f8a86")
+const ROPE := Color("f2e8d4")
+const SNOW := Color("e2eaf2")
+const SNOW_SHADE := Color("c4d2e2")
+const ICE := Color("bfe4f4")
+const SAND := Color("c99860")
+const SAND_DARK := Color("a87442")
+const MOSS := Color("6f8f3a")
+const MOSS_DARK := Color("4a6428")
+const LEAF := Color("7fa645")
 # Grain repeats every metre across a board and every two along it.
 const GRAIN_SCALE := Vector2(1.0,.5)
 
@@ -48,7 +61,7 @@ func run() -> void:
 func _platform(style: String, width: float) -> Node3D:
 	parts = {}
 	used = {}
-	for part in ["wood","iron","rope"]:
+	for part in WoodPlatform.PARTS:
 		var surface := SurfaceTool.new()
 		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 		parts[part] = surface
@@ -67,6 +80,9 @@ func _platform(style: String, width: float) -> Node3D:
 			_bolt(joist*Vector3(side*(half-.02),0,.073),.024,.012)
 	if style=="braced": _braces(half,depth,drop,joists[0])
 	else: _brackets(half,depth,drop)
+	_snow(half,depth)
+	_sand(half,depth)
+	_moss(half,depth,drop)
 	var root := Node3D.new()
 	root.name = "Platform_%s_%d" % [style,roundi(width*100)]
 	# The grain stays a separate texture (wood_grain.png) that the game lays
@@ -74,7 +90,13 @@ func _platform(style: String, width: float) -> Node3D:
 	var materials := {
 		"wood":_material(.86,0.0),
 		"iron":_material(.45,.55),
-		"rope":_material(.95,0.0)}
+		"nail":_material(.45,.55),
+		"rope":_material(.95,0.0),
+		"snow":_material(.8,0.0),
+		"ice":_material(.2,0.0),
+		"sand":_material(.97,0.0),
+		"moss":_material(.95,0.0),
+		"vine":_material(.9,0.0)}
 	for part: String in parts:
 		var surface: SurfaceTool = parts[part]
 		# A bracket platform has no rope.
@@ -108,9 +130,9 @@ func _deck(half: float, depth: float) -> void:
 		for z in [depth-.17,.13]:
 			for side in [-1,1]:
 				var nail := shear*Vector3(x+side*board*.24,-sink+.001,z)
-				_cylinder("iron",nail,Vector3.UP,.011,.004,6,IRON.lightened(.08))
+				_cylinder("nail",nail,Vector3.UP,.011,.004,6,IRON.lightened(.08))
 		var fascia_nail := shear*Vector3(x,-.05,depth+.038)
-		_cylinder("iron",fascia_nail,Vector3.BACK,.01,.004,6,IRON.lightened(.08))
+		_cylinder("nail",fascia_nail,Vector3.BACK,.01,.004,6,IRON.lightened(.08))
 	_box("wood",shear*Transform3D(Basis(),Vector3(0,-.048,depth+.019)),Vector3(half+.05,.054,.018),.01,PLANK.darkened(.06),0)
 
 func _braces(half: float, depth: float, drop: float, joist_z: float) -> void:
@@ -155,6 +177,157 @@ func _brackets(half: float, depth: float, drop: float) -> void:
 		_timber("wood",top+Vector3(0,.04,0),Vector3(foot_x,foot_y+.02,.09),Vector2(.05,.045),BEAM.lightened(random.randf_range(0,.07)))
 		_box("iron",shear*Transform3D(Basis(),Vector3(top_x,-.17,depth-.17+.068)),Vector3(.07,.05,.005),.003,IRON,1)
 		_bolt(shear*Vector3(top_x,-.17,depth-.17+.073),.02,.01)
+
+# --- Location dressing ---------------------------------------------------------------
+
+# The deck's top lies on the walking line (y 0) before the shear; the front
+# fascia stands this far past the deck.
+const DECK_TOP := .0
+const FRONT := .038
+
+# A low-poly cap over the deck from the back edge to just past the front:
+# a height field `rows` deep whose top stands `thick(x, t)` over the deck
+# (t: 0 at the back, 1 at the lip), a front skirt hanging `lip(x)` below the
+# deck top and closed ends. Faces get `color(x, t, up)` (up: 1 on top, 0 on
+# the skirt and ends).
+func _cap(part: String, half: float, depth: float, step: float, rows: int, thick: Callable, lip: Callable, color: Callable) -> void:
+	var count := maxi(2,roundi(half*2.0/step))
+	var xs: Array[float] = []
+	for index in range(count+1):
+		var x := -half+half*2.0*index/count
+		if index>0 and index<count: x += random.randf_range(-.3,.3)*half*2.0/count
+		xs.append(x)
+	var grid: Array = []
+	for row in range(rows+1):
+		var t := float(row)/rows
+		var line: Array[Vector3] = []
+		for x in xs: line.append(Vector3(x,DECK_TOP+float(thick.call(x,t)),t*(depth+FRONT+.02)))
+		grid.append(line)
+	for row in range(rows):
+		for index in range(count):
+			var a: Vector3 = grid[row][index]
+			var b: Vector3 = grid[row][index+1]
+			var c: Vector3 = grid[row+1][index+1]
+			var d: Vector3 = grid[row+1][index]
+			var tint: Color = color.call((a.x+b.x)*.5,(row+.5)/rows,1.0)
+			_triangle(part,shear*a,shear*b,shear*c,tint)
+			_triangle(part,shear*a,shear*c,shear*d,tint.darkened(.03))
+	var front: Array = grid[rows]
+	for index in range(count):
+		var a: Vector3 = front[index]
+		var b: Vector3 = front[index+1]
+		var low_a := Vector3(a.x,DECK_TOP-float(lip.call(a.x)),a.z)
+		var low_b := Vector3(b.x,DECK_TOP-float(lip.call(b.x)),b.z)
+		var tone: Color = color.call((a.x+b.x)*.5,1.0,0.0)
+		_triangle(part,shear*a,shear*b,shear*low_b,tone)
+		_triangle(part,shear*a,shear*low_b,shear*low_a,tone)
+	for side in [0,count]:
+		var outward := -1.0 if side==0 else 1.0
+		for row in range(rows):
+			var a: Vector3 = grid[row][side]
+			var b: Vector3 = grid[row+1][side]
+			var low_a := Vector3(a.x,DECK_TOP-.01,a.z)
+			var low_b := Vector3(b.x,DECK_TOP-.01,b.z)
+			var tone: Color = color.call(a.x,.5,0.0).darkened(.08)
+			if outward>0:
+				_triangle(part,shear*a,shear*low_b,shear*b,tone)
+				_triangle(part,shear*a,shear*low_a,shear*low_b,tone)
+			else:
+				_triangle(part,shear*a,shear*b,shear*low_b,tone)
+				_triangle(part,shear*a,shear*low_b,shear*low_a,tone)
+
+# Winter: a thick lumpy snow cap rolling over the front edge, icicles under it.
+func _snow(half: float, depth: float) -> void:
+	var swell := FastNoiseLite.new()
+	swell.seed = random.randi()
+	swell.frequency = 1.6
+	_cap("snow",half+.04,depth,.24,3,
+		func(x: float, t: float) -> float: return (.10+.07*sin(PI*minf(t*1.1,1.0)))*(1.0+swell.get_noise_1d(x)*.4)*(1.0 if t<.98 else .75),
+		func(x: float) -> float: return .015+maxf(0,swell.get_noise_1d(x*1.7+40.0)-.15)*.16,
+		func(x: float, t: float, up: float) -> Color: return SNOW.lerp(SNOW_SHADE,(1.0-up)*.7+t*.15+absf(swell.get_noise_1d(x*2.3+9.0))*.35))
+	var x := -half+random.randf_range(.1,.3)
+	while x<half-.08:
+		_icicle(shear*Vector3(x,-.1,depth+FRONT-.005),random.randf_range(.022,.04),random.randf_range(.1,.34))
+		x += random.randf_range(.18,.42)
+
+func _icicle(base: Vector3, radius: float, length: float) -> void:
+	var tip := base+Vector3(random.randf_range(-.015,.015),-length,0)
+	var ring: Array[Vector3] = []
+	for index in range(5):
+		var angle := TAU*index/5.0
+		ring.append(base+Vector3(cos(angle)*radius,0,sin(angle)*radius))
+	for index in range(5):
+		_triangle("ice",ring[index],tip,ring[(index+1)%5],ICE.lightened(.12) if index%2==0 else ICE)
+
+# Desert: drifted sand banked against the rock, thinning to bare boards at
+# the front, a low heap at one end and a thin trickle off the edge.
+func _sand(half: float, depth: float) -> void:
+	var drift := FastNoiseLite.new()
+	drift.seed = random.randi()
+	drift.frequency = 1.1
+	var heap_x := random.randf_range(.35,.7)*half*(1.0 if random.randf()<.5 else -1.0)
+	_cap("sand",half-.02,depth*.45,.3,3,
+		func(x: float, t: float) -> float:
+			var bank := (1.0-t)*(.035+maxf(0,drift.get_noise_1d(x))*.05)
+			var heap := maxf(0,1.0-absf(x-heap_x)/.45)*(1.0-t*.7)*.07
+			return maxf(.004,bank+heap),
+		func(_x: float) -> float: return .0,
+		func(x: float, t: float, up: float) -> Color: return SAND.lerp(SAND_DARK,(1.0-up)*.5+absf(drift.get_noise_1d(x*3.0))*.3+t*.1))
+	# The trickle: a narrow ribbon falling from the lip, facing the camera.
+	var at := clampf(heap_x+random.randf_range(-.3,.3),-half+.2,half-.2)
+	var top := shear*Vector3(at,-.02,depth+FRONT+.01)
+	var fall := random.randf_range(.35,.55)
+	var tone := SAND.lightened(.06)
+	_triangle("sand",top+Vector3(-.035,0,0),top+Vector3(.035,0,0),top+Vector3(.008,-fall,.02),tone)
+	_triangle("sand",top+Vector3(-.035,0,0),top+Vector3(.008,-fall,.02),top+Vector3(-.008,-fall,.02),tone)
+
+# Summer: a moss strip along the front edge and the ends of the deck, grass
+# blades out of it, a vine hanging from one end.
+func _moss(half: float, depth: float, drop: float) -> void:
+	var x := -half-.02
+	while x<half:
+		var size := Vector3(random.randf_range(.07,.14),random.randf_range(.025,.045),random.randf_range(.05,.09))
+		var at := Vector3(x+size.x,size.y*.4,depth+FRONT-size.z*.3)
+		_box("moss",shear*Transform3D(Basis(Vector3.UP,random.randf_range(-.4,.4)),at),size,minf(size.y,size.z)*.45,MOSS.lerp(MOSS_DARK,random.randf()),0)
+		if random.randf()<.55: _tuft(shear*Vector3(at.x+random.randf_range(-.04,.04),at.y,at.z-.02),random.randf_range(.09,.17))
+		x += size.x*2.0+random.randf_range(.02,.22)
+	for side in [-1.0,1.0]:
+		for k in range(2):
+			var size := Vector3(random.randf_range(.04,.07),random.randf_range(.03,.05),random.randf_range(.1,.2))
+			_box("moss",shear*Transform3D(Basis(),Vector3(side*(half-size.x*.6),size.y*.3,random.randf_range(.2,depth-.1))),size,size.y*.45,MOSS_DARK.lerp(MOSS,random.randf()),0)
+	# The vine hangs from the front corner of one end, within the supports' drop.
+	var end := 1.0 if random.randf()<.5 else -1.0
+	var hang := shear*Vector3(end*(half-.12),-.06,depth+FRONT+.02)
+	var length := random.randf_range(.45,minf(.85,drop))
+	var segments := 5
+	var previous := hang
+	for index in range(1,segments+1):
+		var point := hang+Vector3(sin(index*1.3)*.035,-length*index/segments,.01)
+		_timber("vine",previous,point,Vector2(.012,.012),MOSS_DARK.darkened(.1))
+		var leaf_side := 1.0 if index%2==0 else -1.0
+		_box("vine",Transform3D(Basis(Vector3.BACK,leaf_side*.7),point+Vector3(leaf_side*.035,.02,.012)),Vector3(.034,.018,.006),.004,LEAF.lerp(MOSS,random.randf()*.5),0)
+		previous = point
+
+# Three crossed grass blades from a base point, both sides.
+func _tuft(base: Vector3, height: float) -> void:
+	for blade in range(3):
+		var lean := Vector3(random.randf_range(-.05,.05)+(blade-1)*.03,height,random.randf_range(-.015,.015))
+		var across := Vector3(.012,0,0).rotated(Vector3.UP,blade*1.05)
+		var tone := LEAF.lerp(MOSS,random.randf()*.6)
+		_triangle("moss",base-across,base+lean,base+across,tone)
+		_triangle("moss",base+across,base+lean,base-across,tone)
+
+# One triangle, wound clockwise as seen from its front (Godot's front faces),
+# its normal from that winding.
+func _triangle(part: String, a: Vector3, b: Vector3, c: Vector3, color: Color) -> void:
+	var surface: SurfaceTool = parts[part]
+	used[part] = true
+	var normal := (c-a).cross(b-a).normalized()
+	for p in [a,b,c]:
+		surface.set_color(color)
+		surface.set_normal(normal)
+		surface.set_uv(Vector2(p.x,p.y))
+		surface.add_vertex(p)
 
 # --- Parts --------------------------------------------------------------------------
 

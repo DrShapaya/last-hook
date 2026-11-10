@@ -27,6 +27,12 @@ const PRESETS := {
 	"battery":{"shadows":"off","lighting":"standard","decor":"battery","sky":"battery","particles":"reduced","glow":false,"render_scale":.75}
 }
 
+# What the ultra light adds on top of the shader. Phones keep the shader and
+# the plain render path: the first ultra build broke the frame on a real
+# device (jagged silhouettes, the sky showing through facets).
+static func ultra_passes(mobile: bool) -> Dictionary:
+	return {"msaa_4x":not mobile,"shadow_atlas":4096 if mobile else 8192}
+
 static func defaults() -> Dictionary:
 	var values: Dictionary = PRESETS["high"].duplicate()
 	values.merge({"fps_limit":0,"master_volume":100,"music_volume":100,"sfx_volume":100,"sensitivity":100,"hold_seconds":DEFAULT_HOLD,

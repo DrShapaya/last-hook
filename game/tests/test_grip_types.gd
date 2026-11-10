@@ -243,6 +243,26 @@ func run_tests() -> void:
 		step(game)
 	check(not game.sim.attached and game.last_release_reason=="ice_slip" and absf(game.anchor_time-slip_after)<.03 and ice["broken"],"held to the end, the hook slips off the plate after %.2f s" % slip_after)
 	check(slip_speed.length()>.5 and game.sim.vel.dot(GripSpec.slide_direction(ice))>0,"the hero leaves the plate with the speed of the slide")
+	# The plate waits quietly through its grace, crackles while the hook runs
+	# and blinks over its last half second (docs/LEVEL_OBJECTS_PLAN.md, stage 3).
+	var caught: Vector2 = game.world.anchor_surface_point(ice,ice["pos"]+Vector2(0,-1),Vector2(0,1))
+	var grace := GripSpec.plate_grace(ice,caught)
+	var quiet := true
+	var crackles := 0
+	var blinked := false
+	var held := 0.0
+	game.world.ice_crackle_clock = 0.0
+	while held<GripSpec.seconds_to_slip(ice,caught):
+		var crackle: bool = game.world.ice_hold(ice,caught,held,game.world.anchor_contact_after(ice,caught,held),1.0/120)
+		if held<grace and crackle: quiet = false
+		if crackle: crackles += 1
+		var holder: Node3D = ice.get("visual")
+		if holder!=null and is_instance_valid(holder):
+			for mesh: MeshInstance3D in holder.find_children("*","MeshInstance3D",true,false):
+				if mesh.material_overlay!=null: blinked = true
+		held += 1.0/120
+	var has_visual: bool = ice.get("visual")!=null and is_instance_valid(ice.get("visual"))
+	check(quiet and crackles>=2 and (blinked or not has_visual),"the plate is quiet through its %.2f s grace, crackles while the hook runs (%d) and blinks before it sheds it" % [grace,crackles])
 	for hook_level in [1,2]:
 		new_run(game,ice_branch["seed"],hook_level,0,13)
 		hang_from(game,ice_branch["entry"])

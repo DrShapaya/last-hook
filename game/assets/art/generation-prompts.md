@@ -13,3 +13,27 @@ Use case: stylized-concept. Asset type: transparent foreground sprite atlas for 
 ## explorer-v2.png
 
 Use case: stylized-concept. Asset type: transparent character sprite for a playable portrait climbing game. Use reference image for STYLE and yellow explorer identity, not for copying UI or scene. Generate one isolated charming small yellow cube-headed mountain explorer, fully visible from head to boots, polished detailed stylized 3D render matching the provided image. Three-quarter side view facing right, mustard yellow rounded-corner cube helmet/head with two small dark eyes, green outdoor jacket, brown leather hiking backpack with visible rolled kit and buckles, dark pants and brown boots. Pose: hanging from a climbing rope with BOTH hands held together above head toward upper right, knees lightly bent, dynamic but no extreme body lean (game will rotate the sprite). Rope and hook NOT included. Warm sunlight upper left, soft detailed materials, realistic leather and fabric, tiny appealing face. Occupy 80 percent of square canvas, leave transparent margins all around. True transparent alpha background, no ground, no sky, no UI, no text, no watermark, no duplicate characters.
+
+## grass-decor-atlas-v1.png
+
+Generated with the built-in `image_gen` tool on 5 November 2026. The atlas was normalized into the runtime sprites `game/assets/sprites/vegetation/grass_tuft_6..8.png`, `grass_blades_6..8.png`, and `bush_6..8.png`.
+
+Use case: stylized-concept. Asset type: transparent sprite atlas for the playable climbing game. Create a square 3 by 3 atlas with nine isolated environment cutouts, one centered object per equal cell, no grid lines and no labels. Top row: three lush grass tufts. Middle row: three slender grass blade clumps. Bottom row: three rounded leafy green bushes. Side-on orthographic view, polished faceted low-poly 3D game style, warm upper-left light, crisp alpha edges, shadows confined to each cutout, generous transparent padding. No terrain, rocks, flowers, pots, text, watermark, or objects crossing cell boundaries.
+
+## rock-decor-atlas-v1.png
+
+Generated with the built-in `image_gen` tool on 5 November 2026. The atlas was normalized into `game/assets/sprites/stones/stone_grey_6..8.png`, `game/assets/sprites/stones/scree_grey_6..8.png`, and `game/assets/sprites/crystals/crystal_blue_6..8.png`.
+
+Use case: stylized-concept. Asset type: transparent decorative sprite atlas for the playable climbing game. Create a square 3 by 3 atlas with isolated cutouts: three cool-grey moss-flecked stones, three loose grey scree clusters, and three blue quartz crystal clusters. Side-on orthographic view, faceted low-poly 3D style, warm upper-left light, crisp alpha edges, confined contact shadows, transparent padding, no terrain, text, watermark, or crossed cell boundaries.
+
+## dry-decor-atlas-v1.png
+
+Generated with the built-in `image_gen` tool on 5 November 2026. Normalized into `dry_plant_6..8.png`, `cactus_6..8.png`, and `vine_dry_6..8.png`.
+
+Use case: stylized-concept. Asset type: transparent desert decor sprite atlas. Three dry plants, three saguaro-like cacti, and three brittle hanging roots, all isolated in a 3 by 3 atlas with warm sandstone lighting and faceted low-poly materials.
+
+## snow-decor-atlas-v1.png
+
+Generated with the built-in `image_gen` tool on 5 November 2026. Normalized into `snow_plant_6..8.png`, `icicle_6..8.png`, and `vine_frost_6..8.png`.
+
+Use case: stylized-concept. Asset type: transparent snow decor sprite atlas. Three frost-covered alpine plants, three hanging icicle clusters, and three frosted hanging roots, all isolated in a 3 by 3 atlas with cool blue-white lighting and faceted low-poly materials.

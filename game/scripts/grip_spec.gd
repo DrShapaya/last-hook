@@ -37,6 +37,10 @@ const ICE_CARRY := 1.5
 const ICE_GRACE := .9
 const ICE_PLATE_ACCEL := .45
 const ICE_LOWER_EDGE := .15
+# Wherever the hook catches, the plate holds it at least this long (time to
+# aim the next throw). A catch near the low end waits longer before the run,
+# so a longer run still buys more time: grace = max(ICE_GRACE, MIN - run/2).
+const ICE_MIN_HOLD := 2.0
 # Distance the spring's throw must keep clear of rock, in its exit direction.
 const SPRING_LANE := 2.4
 # Mask levels are drawn for the full throw; older worlds keep the short lane,
@@ -136,7 +140,16 @@ static func slipped(object: Dictionary, contact: Vector2, held: float) -> bool:
 static func seconds_to_slip(object: Dictionary, contact: Vector2) -> float:
 	if not plate(object): return INF
 	var left: float = _plate_path(object,contact)["left"]
-	return ICE_GRACE+(sqrt(ICE_SLIDE_RATE*ICE_SLIDE_RATE+2*ICE_PLATE_ACCEL*left)-ICE_SLIDE_RATE)/ICE_PLATE_ACCEL
+	return plate_grace(object,contact)+_run_seconds(left)
+
+# Seconds the hook runs down `left` metres of lower edge.
+static func _run_seconds(left: float) -> float:
+	return (sqrt(ICE_SLIDE_RATE*ICE_SLIDE_RATE+2*ICE_PLATE_ACCEL*left)-ICE_SLIDE_RATE)/ICE_PLATE_ACCEL
+
+# How long the plate holds a hook caught at `contact` before it starts to run.
+static func plate_grace(object: Dictionary, contact: Vector2) -> float:
+	if not plate(object): return 0.0
+	return maxf(ICE_GRACE,ICE_MIN_HOLD-_run_seconds(_plate_path(object,contact)["left"])*.5)
 
 static func slide_offset(object: Dictionary, held: float) -> Vector2:
 	return slide_direction(object)*slide_distance(object,held)
@@ -188,8 +201,12 @@ static func surface_point(object: Dictionary, point: Vector2, direction: Vector2
 static func contact_after(object: Dictionary, contact: Vector2, held: float) -> Vector2:
 	if plate(object):
 		var path := _plate_path(object,contact)
-		if held<ICE_GRACE: return contact.lerp(path["start"],maxf(0,held)/ICE_GRACE)
-		return path["start"]+slide_direction(object)*minf(path["left"],plate_run(held-ICE_GRACE))
+		var grace := plate_grace(object,contact)
+		# The hook settles onto the lower edge in the first moment of the
+		# grace, then waits there while the plate creaks.
+		var settle := minf(ICE_GRACE,grace)
+		if held<grace: return contact.lerp(path["start"],clampf(held/settle,0,1))
+		return path["start"]+slide_direction(object)*minf(path["left"],plate_run(held-grace))
 	var remaining := slide_distance(object,held)
 	if remaining<=0: return contact
 	var contour := outline(object)
@@ -331,6 +348,8 @@ static func lifetime_label(object: Dictionary, profile: GripBiomeProfile = null)
 
 static func description(object: Dictionary, profile: GripBiomeProfile = null) -> String:
 	var parts := PackedStringArray([type_label(object,profile)])
+	# The last grip of a climb says so first (docs/LEVEL_OBJECTS_PLAN.md, stage 5).
+	if object.get("summit",false): parts.insert(0,"Вершина")
 	match kind_of(object):
 		ICE: parts.append("скользит")
 		CRYSTAL:

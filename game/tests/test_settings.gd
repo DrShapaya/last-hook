@@ -48,6 +48,8 @@ func test_presets() -> void:
 	check(custom["shadows"]=="ultra" and custom["lighting"]=="ultra" and custom["decor"]=="high" and GameSettings.detect_preset(custom)=="ultra","ultra adds light on top of the high bake")
 	check(GameSettings.sanitize({"lighting":"ultra"})["lighting"]=="ultra" and GameSettings.sanitize({"lighting":"neon"})["lighting"]=="standard","a saved light model is kept, a bad one falls back")
 	check(GameSettings.detect_preset(GameSettings.sanitize({"shadows":"high"}))=="high","a save from before ultra stays on high")
+	check(GameSettings.ultra_passes(true)=={"msaa_4x":false,"shadow_atlas":4096},"phones keep the plain render path on ultra")
+	check(GameSettings.ultra_passes(false)=={"msaa_4x":true,"shadow_atlas":8192},"desktops get every ultra pass")
 
 func test_profile(directory: String) -> void:
 	var fresh := GameModel.fresh_profile()
@@ -398,12 +400,12 @@ func test_graphics(game) -> void:
 	check(game.model.profile["graphics_quality"]=="balanced" and game.world.visual_quality=="balanced" and game.sun_light.shadow_enabled and game.scene_environment.glow_enabled,"a preset fills everything")
 	check(is_equal_approx(game.get_viewport().scaling_3d_scale,1.0),"a preset restores render scale")
 	game.set_graphics_preset("ultra")
-	check(game.scene_environment.ssao_enabled and game.get_viewport().msaa_3d==Viewport.MSAA_4X and game.scene_environment.ambient_light_source==Environment.AMBIENT_SOURCE_SKY,"ultra turns on the full light model")
+	check(game.get_viewport().msaa_3d==Viewport.MSAA_4X and game.scene_environment.ambient_light_source==Environment.AMBIENT_SOURCE_SKY,"ultra turns on the full light model")
 	check(game.world.visual_quality=="high","ultra plays the high bake")
 	game.set_setting("lighting","standard")
-	check(game.model.profile["graphics_quality"]=="custom" and not game.scene_environment.ssao_enabled,"the light model is its own setting")
+	check(game.model.profile["graphics_quality"]=="custom" and game.scene_environment.ambient_light_source==Environment.AMBIENT_SOURCE_COLOR,"the light model is its own setting")
 	game.set_graphics_preset("high")
-	check(not game.scene_environment.ssao_enabled and game.scene_environment.ambient_light_source==Environment.AMBIENT_SOURCE_COLOR and is_equal_approx(game.sun_light.light_energy,game.SUN_ENERGY),"high restores the plain light")
+	check(game.scene_environment.ambient_light_source==Environment.AMBIENT_SOURCE_COLOR and is_equal_approx(game.sun_light.light_energy,game.SUN_ENERGY),"high restores the plain light")
 	check(game.get_viewport().msaa_3d==ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d"),"high restores the project antialiasing")
 
 func test_audio(game) -> void:

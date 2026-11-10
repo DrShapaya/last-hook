@@ -9,8 +9,29 @@ var height_label: Label
 var record_label: Label
 var danger_label: Label
 var goal_label: Label
+# Points up at the summit while it is near but still above the screen.
+var summit_label: Label
 var aim_label: Label
 var climb_bar: PlayGauges.RouteGauge
+# How near the summit (m) the climb bar lights its last stretch.
+const SUMMIT_NEAR := 20.0
+
+static func summit_near(mode: String, climbed: float, summit: float) -> bool:
+	return mode in ["summit","practice"] and summit-climbed<=SUMMIT_NEAR
+
+# "▲ Вершина · 14 м" while the summit is near but above the top of the
+# screen: the finish is seen from below before the beacon comes into view.
+func summit_marker_text() -> String:
+	if not is_instance_valid(game.world) or not game.world.layout.summit_added: return ""
+	var climbed: float = game.sim.pos.y-game.START_Y
+	if not summit_near(game.run_mode,climbed,game.summit_height): return ""
+	var flag: Vector2 = game.world.summit_flag_point()
+	if game.camera.unproject_position(Vector3(flag.x,flag.y+1.0,0)).y>0: return ""
+	return "▲ Вершина · %d м" % maxi(1,roundi(game.summit_height-climbed))
+
+# The play chrome steps aside while the summit scene plays.
+func set_play_hidden(hidden: bool) -> void:
+	content.visible = not hidden
 var rope_gauge: PlayGauges.RopeGauge
 var danger_edge: PlayGauges.DangerEdge
 var danger_timer: PlayGauges.TimerBar
@@ -756,6 +777,7 @@ func clear() -> void:
 	bag_panel = null
 	goal_label = null
 	aim_label = null
+	summit_label = null
 	climb_bar = null
 	rope_gauge = null
 	danger_edge = null
@@ -935,6 +957,8 @@ func show_play() -> void:
 	danger_timer.custom_minimum_size = Vector2(0,3)
 	danger_timer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	danger_column.add_child(danger_timer)
+	summit_label = label(chip(notes,Color("6b4e12")),"",14,Color("ffe39a"))
+	summit_label.add_theme_font_override("font",strong_font)
 	goal_label = label(chip(notes,MenuSurface.SLATE),"",14,WHITE)
 	contract_label = null
 	aim_label = label(chip(notes,MenuSurface.SLATE),"",14,MenuSurface.HOLD)
@@ -1242,6 +1266,9 @@ func update_play() -> void:
 	# Act hazards announce themselves here when the lower edge is not closer.
 	danger_label.text = "Нижний край близко — цепляйся выше!" if danger else game.world.hazards.hint(game.sim.pos,game.hazard_clock) if game.world.hazards!=null else ""
 	climb_bar.value = clampf((game.sim.highest-game.START_Y)/game.summit_height,0,1)
+	# The last stretch lights up once the summit is near (LEVEL_OBJECTS_PLAN, stage 5).
+	climb_bar.near_from = clampf(1.0-SUMMIT_NEAR/maxf(1.0,game.summit_height),0,1)
+	climb_bar.near_summit = summit_near(game.run_mode,game.sim.highest-game.START_Y,game.summit_height)
 	climb_bar.record = clampf(record_at_start/(game.summit_height*10),0,1)
 	climb_bar.visible = game.run_mode=="summit"
 	var reached_zone := clampi(int(maxf(0,game.sim.highest-game.START_Y)/20),0,5)
@@ -1333,6 +1360,8 @@ func update_play() -> void:
 				if not shot_preview["reachable"]:
 					aim_overlay.aim_color = CORAL
 					aim_label.text = "Каната не хватит до цели"
+				elif collision.get("object",{}).get("summit",false):
+					aim_label.text = "Вершина — последний зацеп"
 	else:
 		shot_preview.clear()
 		aim_overlay.branches.clear()
@@ -1351,7 +1380,8 @@ func update_play() -> void:
 			danger_label.text = "Кристалл: два выхода подсвечены — выбирай"
 	danger_timer.visible = danger_label.text.begins_with("Корень")
 	show_chip(danger_label.get_parent().get_parent(),not danger_label.text.is_empty())
-	for note in [goal_label,aim_label]:
+	summit_label.text = summit_marker_text()
+	for note in [summit_label,goal_label,aim_label]:
 		show_chip(note.get_parent(),not note.text.is_empty())
 	var total := float(game.model.bag_value()-flying_value)
 	shown_bag_total = move_toward(shown_bag_total,total,maxf(40,absf(total-shown_bag_total)*6)*delta)

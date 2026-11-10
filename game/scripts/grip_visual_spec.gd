@@ -14,6 +14,12 @@ extends RefCounted
 # body drops below into the mountain (as far as the room below allows).
 
 var visual_family := "stone"
+# The location's stone (docs/LEVEL_OBJECTS_PLAN.md, stage 2): "boulder"
+# (summer), "layered" (canyon sandstone), "angular" (snow peak granite) or
+# "plain" (older worlds). It changes the character, never the type's cues.
+var character := "plain"
+# Heights of the bed joints of layered stone, in outline space, top down.
+var layers: Array[float] = []
 var front_width := 1.6        # widest visible width of the outcrop
 var front_height := .8        # top to bottom of the outcrop
 var top_depth := .3           # how far the top face runs back from the front edge
@@ -58,8 +64,9 @@ const BROKEN_STROKE := [3,4,7,8]
 # Lowest drop of the body below the hitbox, even in a tight spot.
 const MIN_DROP := .22
 
-static func for_grip(object: Dictionary, profile: GripBiomeProfile, room_below: float = INF) -> GripVisualSpec:
+static func for_grip(object: Dictionary, profile: GripBiomeProfile, room_below: float = INF, character: String = "plain") -> GripVisualSpec:
 	var spec := GripVisualSpec.new()
+	spec.character = character
 	var kind := GripSpec.kind_of(object)
 	var dimensions: Vector2 = object.get("dimensions",Vector2(1.6,.65))
 	var w := dimensions.x
@@ -69,20 +76,26 @@ static func for_grip(object: Dictionary, profile: GripBiomeProfile, room_below: 
 	var random := RandomNumberGenerator.new()
 	random.seed = spec.seed_value*48271+kind*977+11
 	var shape: Array = SHAPES[spec.visual_family]
-	spec.front_width = w*float(shape[0])*random.randf_range(.97,1.04)
-	var drop := clampf(float(shape[1])*random.randf_range(.85,1.15)*(.8+w*.12),MIN_DROP,minf(1.0,maxf(MIN_DROP,room_below)))
+	# A location's own stone varies more from grip to grip: no two
+	# neighbours come out alike.
+	var own := character!="plain"
+	spec.front_width = w*float(shape[0])*(random.randf_range(.93,1.1) if own else random.randf_range(.97,1.04))
+	var drop := clampf(float(shape[1])*(random.randf_range(.72,1.3) if own else random.randf_range(.85,1.15))*(.8+w*.12),MIN_DROP,minf(1.0,maxf(MIN_DROP,room_below)))
 	spec.front_height = h+.05+drop
 	spec.side_depth = float(shape[2])*random.randf_range(.92,1.06)
 	spec.back_embed = .42
 	spec.top_band_height = float(shape[3])*random.randf_range(.97,1.08)
 	spec.top_depth = spec.side_depth
 	spec.under_height = minf(float(shape[4])*random.randf_range(.85,1.15),drop*.6+.1)
-	spec.chamfer = minf(w,h)*.34
-	spec.facet_count = int(shape[6])
+	spec.chamfer = minf(w,h)*.34*(1.25 if character=="boulder" else 1.0)
+	spec.facet_count = int(shape[6])+(3 if character=="angular" else 0)
 	spec.rear_scale = random.randf_range(.86,.90)
 	spec.bulge = random.randf_range(.10,.16)
 	# Most outcrops break into two or three stones; ice stays one piece.
-	spec.split = kind!=GripSpec.ICE and random.randf()<.45
+	# Summer boulders seldom split; sandstone breaks along its beds, not
+	# across them (see layers).
+	var split_chance: float = {"boulder":.2,"layered":0.0}.get(character,.45)
+	spec.split = kind!=GripSpec.ICE and random.randf()<float(split_chance)
 	spec.split_x = w*random.randf_range(-.18,.18)
 	if spec.split:
 		spec.cracks.append(spec.split_x)
@@ -107,9 +120,14 @@ func _build_outline(random: RandomNumberGenerator, h: float, narrowing: float) -
 	var right := front_width*.5+shift
 	var top := h*.5+.05
 	var bottom := top-front_height
-	var slope := random.randf_range(-.04,.04)
+	# Sandstone lies level, granite breaks at a tilt.
+	var tilt: float = {"layered":.015,"angular":.07}.get(character,.04)
+	var slope := random.randf_range(-tilt,tilt)
 	var cut_left := chamfer*random.randf_range(.8,1.4)
 	var cut_right := chamfer*random.randf_range(.7,1.3)
+	if character=="angular":
+		cut_left = chamfer*random.randf_range(.5,1.7)
+		cut_right = chamfer*random.randf_range(.5,1.7)
 	var span := right-left
 	# The top edge in three or four pieces, so the top face breaks into
 	# several planes instead of one flat panel.
@@ -117,7 +135,8 @@ func _build_outline(random: RandomNumberGenerator, h: float, narrowing: float) -
 	# ends fall away to the cut corners, so the boulder reads round.
 	# Never deeper than the corner cuts: a corner falling below its flank
 	# point would fold the outline over itself.
-	var arc := minf(front_height*random.randf_range(.07,.11),minf(cut_left,cut_right)*.55)
+	var crown: float = {"boulder":1.5,"layered":.25,"angular":.5}.get(character,1.0)
+	var arc := minf(front_height*random.randf_range(.07,.11)*crown,minf(cut_left,cut_right)*.55)
 	var points: Array[Vector2] = [Vector2(left+cut_left,top-slope-arc)]
 	var pieces := random.randi_range(3,4)
 	for piece in range(1,pieces):
@@ -142,18 +161,46 @@ func _build_outline(random: RandomNumberGenerator, h: float, narrowing: float) -
 		var below: Vector2 = points[last_top+7]
 		var above: Vector2 = points[last_top+8]
 		points.insert(last_top+8,Vector2(minf(below.x,above.x)+span*.08,lerpf(below.y,above.y,.5)))
-	# Round the flanks and the underside a little: a bulging point on every
-	# edge but the top one, kept inside the outcrop's width and height.
-	var rounded: Array[Vector2] = []
-	for index in range(points.size()):
-		var a := points[index]
-		var b := points[(index+1)%points.size()]
-		rounded.append(a)
-		if index<last_top: continue
-		var normal := Vector2(a.y-b.y,b.x-a.x).normalized()
-		var push := minf(.05,a.distance_to(b)*.08)*random.randf_range(.3,1.0)
-		var mid := (a+b)*.5+normal*push
-		rounded.append(Vector2(clampf(mid.x,left-span*.03,right+span*.03),maxf(mid.y,bottom)))
+	if character=="layered":
+		# Two or three beds under the top one; each steps a little in or out
+		# on the flanks, as weathered sandstone does.
+		var count := random.randi_range(2,3)
+		var shifts: Array[float] = [0.0]
+		for bed in range(count):
+			var t := (bed+1.0+random.randf_range(-.18,.18))/(count+1.0)
+			layers.append(lerpf(top-top_band_height-.04,bottom+.08,t))
+			shifts.append(span*random.randf_range(.012,.035)*(1.0 if bed%2==0 else -1.0))
+		var middle := (left+right)*.5
+		for index in range(last_top+1,points.size()):
+			var bed := 0
+			for line in layers:
+				if points[index].y<line: bed += 1
+			points[index].x += shifts[bed]*signf(points[index].x-middle)
+		if crosses(PackedVector2Array(points)):
+			for index in range(last_top+1,points.size()):
+				var bed := 0
+				for line in layers:
+					if points[index].y<line: bed += 1
+				points[index].x -= shifts[bed]*signf(points[index].x-middle)
+	# Round the flanks and the underside: a bulging point on every edge but
+	# the top one, kept inside the outcrop's width and height. A summer
+	# boulder is rounded twice over; granite and sandstone keep their edges.
+	var passes: int = {"boulder":2,"angular":0,"layered":0}.get(character,1)
+	var rounded: Array[Vector2] = points.duplicate()
+	var top_end := last_top
+	for pass_index in range(passes):
+		var next: Array[Vector2] = []
+		for index in range(rounded.size()):
+			var a := rounded[index]
+			var b := rounded[(index+1)%rounded.size()]
+			next.append(a)
+			if index<top_end: continue
+			var normal := Vector2(a.y-b.y,b.x-a.x).normalized()
+			var push := minf(.05 if pass_index==0 else .025,a.distance_to(b)*.08)*random.randf_range(.3,1.0)
+			var mid := (a+b)*.5+normal*push
+			next.append(Vector2(clampf(mid.x,left-span*.03,right+span*.03),maxf(mid.y,bottom)))
+		rounded = next
+		# Points added before the top's end shift it; there are none.
 	outline = PackedVector2Array(rounded)
 	if crosses(outline): outline = PackedVector2Array(points)
 	top_left = 0

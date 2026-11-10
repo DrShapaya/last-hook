@@ -111,9 +111,9 @@ void fragment() {
 # looking right: + raises an arm forward, + swings a leg forward, - folds a
 # knee, + tilts the body back. Timings follow docs/character/MOTION_REFERENCE.md.
 
-const STAND := {"upper_arm_near":.08,"forearm_near":.22,"hand_near":.05,"upper_arm_far":-.06,"forearm_far":.2,
+const STAND := {"upper_arm_near":.03,"forearm_near":.08,"hand_near":.05,"upper_arm_far":-.06,"forearm_far":.08,
 	"thigh_near":.05,"shin_near":-.04,"thigh_far":-.05,"shin_far":-.04}
-const BREATH := {"upper_arm_near":.11,"forearm_near":.25,"upper_arm_far":-.03,"forearm_far":.23,"chest":.02,"head":-.02,
+const BREATH := {"upper_arm_near":.05,"forearm_near":.11,"upper_arm_far":-.03,"forearm_far":.11,"chest":.02,"head":-.02,
 	"thigh_near":.05,"shin_near":-.04,"thigh_far":-.05,"shin_far":-.04}
 # Arm cocked up behind the head, the far arm pointing the way (set live in aim).
 const AIM := {"upper_arm_near":2.75,"forearm_near":1.45,"hand_near":.3,"spine":.05,"chest":.1,"head":.06,
@@ -241,10 +241,19 @@ func setup(close_up: bool = false, full: bool = true) -> void:
 # while the hero turns (top_level) and light only the hero (HERO_LAYER).
 func _add_lights(close_up: bool, full: bool) -> void:
 	# In the climb the level's sun adds to the key, so it is weaker there.
-	var key_energy := (2.1 if full else 2.4) if close_up else 1.6
-	var specs := [[Vector3(.55,-.65,-.55),Color(1.0,.86,.68),key_energy,close_up and full]]
-	if full: specs.append([Vector3(-.8,-.15,-.6),Color(.62,.72,.9),.55,false])
-	if full and close_up: specs.append([Vector3(.2,-.4,1.0),Color(1.0,.88,.7),.9,false])
+	var specs: Array
+	if close_up:
+		# The character screen turns the hero three-quarters to the viewer's
+		# right (+X); the key comes from the side he faces, high and in front,
+		# so the face and chest are lit (from the left they sat in shadow).
+		specs = [[Vector3(-.5,-.62,-.6),Color(1.0,.9,.78),1.35 if full else 1.8,full]]
+		if full:
+			specs.append([Vector3(.85,-.2,-.5),Color(.7,.78,.92),.45,false]) # Fill from the left.
+			specs.append([Vector3(.35,-.35,1.0),Color(1.0,.92,.8),.8,false]) # Rim from behind.
+			specs.append([Vector3(-.15,-.1,-1.0),Color(1,1,1),.18,false]) # A soft front fill.
+	else:
+		specs = [[Vector3(.55,-.65,-.55),Color(1.0,.86,.68),1.6,false]]
+		if full: specs.append([Vector3(-.8,-.15,-.6),Color(.62,.72,.9),.55,false])
 	for spec in specs:
 		var light := DirectionalLight3D.new()
 		light.top_level = true
@@ -268,8 +277,9 @@ static func showcase_environment(parent: Node) -> void:
 	var environment := Environment.new()
 	environment.background_mode = Environment.BG_CLEAR_COLOR
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color(.52,.57,.66)
-	environment.ambient_light_energy = .55
+	# Neutral-warm: a blue fill turned the white and yellow parts grey.
+	environment.ambient_light_color = Color(.62,.63,.66)
+	environment.ambient_light_energy = .5
 	environment.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	var world := WorldEnvironment.new()
 	world.environment = environment

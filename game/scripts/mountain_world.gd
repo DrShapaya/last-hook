@@ -4,6 +4,9 @@ extends Node3D
 const FloraModels := preload("res://scripts/flora_models.gd")
 
 const GENERATION_VERSION := 16
+# How far past its ends a rest ledge carries the hero: as far as the timber
+# deck's boards reach (WoodPlatform.OVERHANG).
+const LEDGE_REACH: float = preload("res://scripts/wood_platform.gd").OVERHANG
 # A timed root holds this long before it breaks (see GripSpec).
 const FRAGILE_SECONDS := GripSpec.ROOT_SECONDS
 const COLORS := [Color("e3b95e"),Color("e8624d"),Color("70c995"),Color("78d8e5"),Color("a994df"),Color("f1d27b")]
@@ -185,6 +188,7 @@ func generate_to(height: float, finite: bool, summit: float = 120) -> void:
 	stream_dirty = true
 	# The top chunk changes when the summit is added; refresh it if loaded.
 	if layout.summit_added:
+		_mark_summit()
 		var key := int(floor(summit/24))
 		if chunks.has(key): _release_chunk(key)
 	if visuals_enabled: update_visibility(camera_center.y,camera_center.x,visual_build_budget)
@@ -197,6 +201,7 @@ func load_bake(level: LevelBake) -> void:
 	bake = level
 	LevelBake.apply(layout,level.layout_data)
 	route_edges = layout.edges
+	_mark_summit()
 	generated_height = maxf(generated_height,minf(level.height+6,layout.summit+6))
 	stream_pending = true
 	stream_dirty = true
@@ -622,7 +627,9 @@ func move_player(from: Vector2, to: Vector2, velocity: Vector2) -> Dictionary:
 				var fraction := (top-position_value.y)/remaining.y
 				if fraction<-.001 or fraction>1: continue
 				var x := position_value.x+remaining.x*maxf(0,fraction)
-				if x<float(ledge["left"])-.24 or x>float(ledge["right"])+.24: continue
+				# Carried as far as the drawn boards reach past the ledge
+				# (they used to carry .24, twice the boards' .12 overhang).
+				if x<float(ledge["left"])-LEDGE_REACH or x>float(ledge["right"])+LEDGE_REACH: continue
 				if best.is_empty() or fraction<best["fraction"]:
 					best = {"fraction":maxf(0,fraction),"normal":Vector2(0,1),"depth":0.0,"object":{"rest":true}}
 		if best.is_empty():
@@ -936,6 +943,7 @@ func _build_chunk_objects(key: int, chunk: Node3D) -> void:
 		if int(floor(object["top"]/24))!=key: continue
 		if not await build_pause(chunk): return
 		visuals.build_ledge(object,chunk)
+	if key==0 and layout.finite: visuals.build_base_camp(chunk)
 	for find in finds:
 		if int(floor(find["pos"].y/24))!=key: continue
 		if not await build_pause(chunk): return
@@ -945,6 +953,138 @@ func _build_chunk_objects(key: int, chunk: Node3D) -> void:
 		if visuals is MassifVisuals: p = (visuals as MassifVisuals).summit_foot(p)
 		# The summit flag: a tall mast with the expedition's hook on its cloth.
 		FloraModels.flag(chunk,"mast_high","yellow",Vector3(p.x,p.y,2),3.0,1.0,visual_quality!="battery","hook")
+		_build_summit_beacon(chunk,p)
+
+# The last grip of the main route is the summit's own (docs/LEVEL_OBJECTS_PLAN.md,
+# stage 5); -1 until the summit is laid out.
+func summit_grip_id() -> int:
+	if not layout.summit_added or main_route.is_empty(): return -1
+	return main_route[-1]
+
+# Marks the summit's grip for the HUD and the builders; nothing else reads it.
+func _mark_summit() -> void:
+	var id := summit_grip_id()
+	if id>=0: anchors[id]["summit"] = true
+
+# Seen from below, the summit is marked: a pale beam rising high over the
+# flag and a garland of pennants from the mast top down to the summit grip.
+const BEACON_HEIGHT := 14.0
+const PENNANT_COLORS := [Color("f2b24a"),Color("e8652a"),Color("5cc0ea"),Color("57b84a"),Color("f4e3b0")]
+
+func _build_summit_beacon(chunk: Node3D, foot: Vector2) -> void:
+	var beacon := Node3D.new()
+	beacon.name = "Маяк вершины"
+	chunk.add_child(beacon)
+	beacon.position = Vector3(foot.x,foot.y,1.6)
+	# The beam: an open cylinder fading upwards, unlit and additive, so it
+	# glows against sky and rock alike.
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var sides := 10
+	var rows := 6
+	for row in range(rows):
+		for side in range(sides):
+			var a := TAU*side/sides
+			var b := TAU*(side+1)/sides
+			var y0 := BEACON_HEIGHT*row/rows
+			var y1 := BEACON_HEIGHT*(row+1)/rows
+			var r0 := lerpf(.32,.7,float(row)/rows)
+			var r1 := lerpf(.32,.7,float(row+1)/rows)
+			var c0 := Color(1,.9,.6,.55*(1.0-float(row)/rows))
+			var c1 := Color(1,.9,.6,.55*(1.0-float(row+1)/rows))
+			var quad := [[Vector3(cos(a)*r0,y0,sin(a)*r0),c0],[Vector3(cos(b)*r0,y0,sin(b)*r0),c0],[Vector3(cos(b)*r1,y1,sin(b)*r1),c1],[Vector3(cos(a)*r1,y1,sin(a)*r1),c1]]
+			for index in [0,1,2,0,2,3]:
+				surface.set_color(quad[index][1])
+				surface.add_vertex(quad[index][0])
+	var beam := MeshInstance3D.new()
+	beam.name = "Луч"
+	beam.mesh = surface.commit()
+	var glow := StandardMaterial3D.new()
+	glow.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	glow.vertex_color_use_as_albedo = true
+	glow.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glow.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	glow.cull_mode = BaseMaterial3D.CULL_DISABLED
+	beam.material_override = glow
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	beacon.add_child(beam)
+	# The garland: a sagging cord from the mast top to above the summit grip,
+	# pennants hanging along it.
+	var grip := anchor_by_id(summit_grip_id())
+	var to := Vector3(float(grip["pos"].x)-foot.x,float(grip["pos"].y)-foot.y+.9,.2) if not grip.is_empty() else Vector3(-2.4,.9,.2)
+	if absf(to.x)<1.2: to.x = -2.4
+	var from := Vector3(0,2.8,.2)
+	var garland := Node3D.new()
+	garland.name = "Гирлянда"
+	beacon.add_child(garland)
+	var cord := SurfaceTool.new()
+	cord.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var count := 9
+	var previous := from
+	for index in range(1,count+1):
+		var t := float(index)/count
+		var point := from.lerp(to,t)+Vector3(0,-sin(PI*t)*.55,0)
+		_flat_quad(cord,previous+Vector3(0,.015,0),point+Vector3(0,.015,0),point-Vector3(0,.015,0),previous-Vector3(0,.015,0),Color("5a4632"))
+		if index<count:
+			var color: Color = PENNANT_COLORS[index%PENNANT_COLORS.size()]
+			var tip := point+Vector3(0,-.26,.01)
+			for k in range(3):
+				var v: Vector3 = [point+Vector3(-.11,0,.01),point+Vector3(.11,0,.01),tip][k]
+				cord.set_color(color)
+				cord.add_vertex(v)
+		previous = point
+	var line := MeshInstance3D.new()
+	line.name = "Флажки гирлянды"
+	line.mesh = cord.commit()
+	var cloth := StandardMaterial3D.new()
+	cloth.vertex_color_use_as_albedo = true
+	cloth.cull_mode = BaseMaterial3D.CULL_DISABLED
+	cloth.roughness = .9
+	line.material_override = cloth
+	line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	garland.add_child(line)
+
+func _flat_quad(surface: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, color: Color) -> void:
+	for v in [a,b,c,a,c,d]:
+		surface.set_color(color)
+		surface.add_vertex(v)
+
+# The end of a climb: the location's accent bursts round the summit while the
+# camera pulls back (main.gd, summit scene). Leaves in summer, dust in the
+# canyon, snow off the peak.
+func summit_celebration() -> void:
+	if not visuals_enabled or not layout.summit_added: return
+	var foot := summit_flag_point()
+	var burst := CPUParticles3D.new()
+	burst.name = "Праздник вершины"
+	burst.position = Vector3(foot.x,foot.y+1.5,2.4)
+	burst.one_shot = true
+	burst.explosiveness = .7
+	burst.amount = 24 if visual_quality=="battery" else 60
+	burst.lifetime = 2.6
+	burst.direction = Vector3.UP
+	burst.spread = 70.0
+	burst.gravity = Vector3(0,-2.5,0)
+	burst.initial_velocity_min = 2.5
+	burst.initial_velocity_max = 5.5
+	var form := (layout as MaskLayout).rock_form if layout is MaskLayout else "boulder"
+	var colors := {"boulder":[Color("7fa645"),Color("e9a332")],"desert":[Color("d9b07a"),Color("f2cf9a")],"winter":[Color("f4f8fb"),Color("bfe4f4")]}.get(form,[Color("f2b24a"),Color("e8652a")]) as Array
+	var ramp := Gradient.new()
+	ramp.set_color(0,colors[0])
+	ramp.set_color(1,Color(colors[1],0.0))
+	burst.color_ramp = ramp
+	var piece := QuadMesh.new()
+	piece.size = Vector2(.16,.1) if form!="winter" else Vector2(.09,.09)
+	var material := StandardMaterial3D.new()
+	material.vertex_color_use_as_albedo = true
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	piece.material = material
+	burst.mesh = piece
+	add_child(burst)
+	burst.emitting = true
+	get_tree().create_timer(burst.lifetime+.5).timeout.connect(burst.queue_free)
 
 # Where the summit flag belongs: beside the last grip.
 func summit_flag_point() -> Vector2:
@@ -1103,6 +1243,48 @@ func _crumble(object: Dictionary) -> void:
 # Ice shavings falling from the hook while it runs down a plate.
 const ICE_SHAVING_SECONDS := .07
 var ice_shaving_clock := 0.0
+# The plate blinks white over its last moments before it sheds the hook.
+const ICE_WARN_SECONDS := .5
+const ICE_BLINK_SECONDS := .12
+const ICE_CRACKLE_SECONDS := .35
+var ice_blink_clock := 0.0
+var ice_crackle_clock := 0.0
+var ice_flash: StandardMaterial3D
+
+# One frame of a hook held on an ice grip, `held` seconds after it caught at
+# `caught` and now at `contact`: shavings fall while the hook runs down the
+# plate, the plate blinks before it lets go. True when the ice should crackle.
+func ice_hold(object: Dictionary, caught: Vector2, held: float, contact: Vector2, delta: float) -> bool:
+	if not GripSpec.plate(object):
+		if held>=GripSpec.ICE_GRACE: ice_scrape(contact,delta)
+		return false
+	if held<GripSpec.plate_grace(object,caught): return false
+	ice_scrape(contact,delta)
+	if GripSpec.seconds_to_slip(object,caught)-held<=ICE_WARN_SECONDS: ice_blink(object,delta)
+	ice_crackle_clock -= delta
+	if ice_crackle_clock>0: return false
+	ice_crackle_clock = ICE_CRACKLE_SECONDS
+	return true
+
+func ice_blink(object: Dictionary, delta: float) -> void:
+	ice_blink_clock -= delta
+	if ice_blink_clock>0 or not visuals_enabled: return
+	ice_blink_clock = ICE_BLINK_SECONDS
+	var holder: Node3D = object.get("visual")
+	if holder==null or not is_instance_valid(holder): return
+	if ice_flash==null:
+		ice_flash = StandardMaterial3D.new()
+		ice_flash.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		ice_flash.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		ice_flash.albedo_color = Color(1,1,1,.55)
+	var block := holder.find_child("Блок",true,false)
+	if block==null: return
+	var meshes := block.find_children("*","MeshInstance3D",true,false)
+	for mesh: MeshInstance3D in meshes: mesh.material_overlay = ice_flash
+	# Each pulse clears itself, so a hook that lets go leaves no lit plate.
+	get_tree().create_timer(ICE_BLINK_SECONDS*.5).timeout.connect(func() -> void:
+		for mesh: MeshInstance3D in meshes:
+			if is_instance_valid(mesh) and mesh.material_overlay==ice_flash: mesh.material_overlay = null)
 
 func ice_scrape(contact: Vector2, delta: float) -> void:
 	ice_shaving_clock -= delta

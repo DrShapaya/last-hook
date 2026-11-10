@@ -583,6 +583,55 @@ func surface_query(point: Vector2) -> RockSurfaceHit:
 
 # The location's own rock, where objects stand on what the player sees and the
 # masses only say where stone is.
+# The location's own face, whether or not it carries the objects: it is what
+# the player sees round a grip.
+var face_rock: RockSurface
+var face_rock_asked := false
+
+func _face_rock() -> RockSurface:
+	if not face_rock_asked and layout is MaskLayout and not (layout as MaskLayout).rock_grid.is_empty():
+		face_rock_asked = true
+		face_rock = RockSurface.make(layout as MaskLayout)
+	return face_rock
+
+# On a location's own rock: the face's own facet colour averaged over a patch
+# round the point, as stone turned to the viewer (no sun-lit top, sand or
+# snow; the grip's top is dressed for those itself). On the summer boulders:
+# the host boulder's own palette.
+func surface_tone(point: Vector2, reach: float = 1.0) -> Color:
+	var rock := _face_rock()
+	if rock!=null:
+		var sum := Color(0,0,0,0)
+		var count := 0
+		for ring in range(2):
+			for step in range(8):
+				var at := point+Vector2.from_angle(TAU*(step+.5*ring)/8.0)*(reach+.6*ring)
+				if rock.distance(at)<0.0: continue
+				var normal := rock.normal_at(at)
+				normal = Vector3(normal.x,minf(normal.y,.1),maxf(normal.z,.6)).normalized()
+				sum += rock.facet_color(Vector3(at.x,at.y,rock.height(at)),normal)
+				count += 1
+		if count>0: return Color(sum.r/count,sum.g/count,sum.b/count)
+	var hit := surface_query(point)
+	if hit.valid() and masses_by_id.has(hit.mass_id):
+		var palette := _palette(profile_at(point.y),point.y,masses_by_id[hit.mass_id])
+		var tone: Color = palette["base"]
+		for facet: Color in palette["facets"]: tone += facet
+		tone /= 1.0+palette["facets"].size()
+		return Color(tone.r,tone.g,tone.b)
+	return super.surface_tone(point,reach)
+
+# A grip's top wears what the face round it wears: snow on the winter peak,
+# drifted sand in the canyon, moss on the summer boulders (as much as the
+# boulders carry there). The paint stroke lies over it in its own colour.
+func grip_top_color(stone: Color, profile: GripBiomeProfile, point: Vector2) -> Color:
+	if layout is MaskLayout:
+		match (layout as MaskLayout).rock_form:
+			"winter": return WinterRock.SNOW.lerp(Color("f4f8fb"),.4)
+			"desert": return stone.lerp(DesertRock.SAND,.7)
+			"boulder": return stone.lerp(MOSS_TOP,clampf(summer_moss(point),0,1)*.55)
+	return super.grip_top_color(stone,profile,point)
+
 func _seen_rock() -> RockSurface:
 	if not seen_rock_asked and layout is MaskLayout and not (layout as MaskLayout).rock_grid.is_empty():
 		seen_rock_asked = true
@@ -1547,11 +1596,38 @@ func build_ledge(object: Dictionary, parent: Node3D) -> void:
 	object["mount"] = mount
 	_place_platform(holder,object,mount)
 
-# On the snow peak a rest is a slab of its own rock: a snow top on the walking
-# line, a dark stone front and ice hanging under it, as the shelves of the
-# face are. Other places keep their timber platforms.
+# Each location's grips are its own stone.
+func grip_character() -> String:
+	if not layout is MaskLayout: return "plain"
+	match (layout as MaskLayout).rock_form:
+		"boulder": return "boulder"
+		"desert": return "layered"
+		"winter": return "angular"
+	return "plain"
+
+# Each location dresses its timber platforms its own way.
+func platform_look(_point: Vector2) -> String:
+	if not layout is MaskLayout: return ""
+	match (layout as MaskLayout).rock_form:
+		"boulder": return "summer"
+		"desert": return "desert"
+		"winter": return "winter"
+	return ""
+
+# One rest in three on the snow peak, counted up from the foot (the second,
+# fifth, ...), is a slab of its own rock instead of timber (the plan's
+# platform without wood).
+func snow_slab(object: Dictionary) -> bool:
+	var below := 0
+	for ledge in layout.ledges:
+		if float(ledge["top"])<float(object["top"]): below += 1
+	return below%3==1
+
+# On the snow peak such a rest is a slab of its own rock: a snow top on the
+# walking line, a dark stone front and ice hanging under it, as the shelves
+# of the face are. Every other rest is a snowy timber platform.
 func _place_platform(holder: Node3D, object: Dictionary, mount: SurfaceMount) -> Node3D:
-	if not (layout is MaskLayout and (layout as MaskLayout).rock_form=="winter"): return super._place_platform(holder,object,mount)
+	if not (layout is MaskLayout and (layout as MaskLayout).rock_form=="winter") or not snow_slab(object): return super._place_platform(holder,object,mount)
 	var left: float = object["left"]
 	var right: float = object["right"]
 	var top: float = object["top"]

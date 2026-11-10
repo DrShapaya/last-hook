@@ -68,6 +68,7 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_economy.gd') (Join-
 Invoke-TaskGodot @('--headless','--script','res://tests/test_integration.gd') (Join-Path $taskArtifacts 'build-integration.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_hook.gd') (Join-Path $taskArtifacts 'build-hook.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_controls.gd') (Join-Path $taskArtifacts 'build-controls.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_platforms.gd') (Join-Path $taskArtifacts 'build-platforms.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_generation.gd') (Join-Path $taskArtifacts 'build-generation.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_masks.gd') (Join-Path $taskArtifacts 'build-masks.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_routes.gd') (Join-Path $taskArtifacts 'build-routes.log')

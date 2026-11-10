@@ -13,8 +13,6 @@ var sky_viewport: SubViewport
 var sky_camera: Camera3D
 var sky_canvas: MeshInstance3D
 var cached_material: StandardMaterial3D
-var cloud_offset := Vector2.ZERO
-var ridge_offset := Vector2.ZERO
 var render_accumulator := 0.0
 var last_sky_time := -1.0
 var render_scale := 1.0
@@ -153,8 +151,6 @@ func set_view(center: Vector2) -> void:
 				(mesh as QuadMesh).size = wanted
 			if size.y > 0: _set_param("aspect",size.x/size.y)
 			if sky_viewport!=null: _resize()
-	cloud_offset = Vector2(center.x*.04,(center.y-7)*.02)
-	_set_param("cloud_offset",cloud_offset)
 	_set_param("altitude",maxf(0.0,center.y-8.0))
 	_set_param("view_x",center.x)
 

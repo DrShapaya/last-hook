@@ -21,6 +21,11 @@ var sun_light: DirectionalLight3D
 var hud: GameHud
 var state := "menu"
 var run_mode := "summit"
+# The summit scene (docs/LEVEL_OBJECTS_PLAN.md, stage 5): seconds left before
+# the results, and how far the camera has pulled back (0..1). A tap skips it.
+const SUMMIT_SCENE_SECONDS := 2.6
+var summit_scene := 0.0
+var summit_pull := 0.0
 var selected_location := 0
 var lobby_location := 0
 var lobby_endless := false
@@ -452,11 +457,11 @@ const SUN_DIRECTION := Vector3(.30,-.50,-.81)
 const SUN_ENERGY := .46
 const SUN_ENERGY_ULTRA := .62
 
-func _set_shadow_atlas(atlas_size: int, filter_quality: int = RenderingServer.SHADOW_QUALITY_SOFT_LOW) -> void:
+func _set_shadow_atlas(atlas_size: int) -> void:
 	if atlas_size==shadow_atlas_size: return
 	shadow_atlas_size = atlas_size
 	RenderingServer.directional_shadow_atlas_set_size(atlas_size,true)
-	RenderingServer.directional_soft_shadow_filter_set_quality(filter_quality)
+	RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_LOW)
 
 func _apply_shadow_preset(preset: String) -> void:
 	if not is_instance_valid(sun_light): return
@@ -469,11 +474,11 @@ func _apply_shadow_preset(preset: String) -> void:
 			# Deeper than high, but finds and tags must not stamp dark shapes on the rock.
 			sun_light.shadow_opacity = .58
 			sun_light.light_energy = SUN_ENERGY
-			sun_light.shadow_bias = .03
-			sun_light.shadow_normal_bias = 1.0
+			sun_light.shadow_bias = .04
+			sun_light.shadow_normal_bias = 1.2
 			sun_light.shadow_blur = 3.0
 			sun_light.directional_shadow_max_distance = 50
-			_set_shadow_atlas(8192,RenderingServer.SHADOW_QUALITY_SOFT_HIGH)
+			_set_shadow_atlas(GameSettings.ultra_passes(OS.has_feature("mobile"))["shadow_atlas"])
 		"high":
 			sun_light.shadow_enabled = true
 			# Readable cast shadows between rock masses; ambient fill keeps them blue-grey.
@@ -503,10 +508,12 @@ func _apply_shadow_preset(preset: String) -> void:
 			_set_shadow_atlas(2048)
 
 # The ultra light model: the sun models the rock instead of the painted form
-# light, and the sky and occlusion replace the flat fill. The tone curve stays
+# light, and the sky replaces the flat fill. No SSAO: under Compatibility its
+# noise stays on the rock as a dot pattern at any quality. The tone curve stays
 # linear: AgX and Filmic grey out the sky, coins and grips.
 func _apply_lighting(lighting: String) -> void:
 	var ultra := lighting=="ultra"
+	var passes := GameSettings.ultra_passes(OS.has_feature("mobile"))
 	RenderingServer.global_shader_parameter_set("light_quality",1.0 if ultra else 0.0)
 	if ultra: sun_light.light_energy = SUN_ENERGY_ULTRA
 	sun_light.light_specular = .6 if ultra else .35
@@ -515,11 +522,7 @@ func _apply_lighting(lighting: String) -> void:
 	scene_environment.ambient_light_sky_contribution = .45 if ultra else 1.0
 	scene_environment.ambient_light_color = Color("d6d2c8") if ultra else Color("b6c7d6")
 	scene_environment.ambient_light_energy = .46 if ultra else .62
-	scene_environment.ssao_enabled = ultra
-	scene_environment.ssao_radius = 1.0
-	scene_environment.ssao_intensity = 1.4
-	scene_environment.ssao_light_affect = .35
-	var msaa := Viewport.MSAA_4X if ultra else ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d") as Viewport.MSAA
+	var msaa := Viewport.MSAA_4X if ultra and passes["msaa_4x"] else ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d") as Viewport.MSAA
 	if get_viewport().msaa_3d!=msaa: get_viewport().msaa_3d = msaa
 
 func _settings() -> Dictionary:
@@ -751,6 +754,9 @@ func ensure_menu_explorer() -> void:
 
 func start_run(endless: bool) -> void:
 	if ads.fullscreen: return
+	summit_scene = 0.0
+	summit_pull = 0.0
+	if is_instance_valid(hud): hud.set_play_hidden(false)
 	ads.preload_fullscreen()
 	if endless and not model.profile["summit_cleared"]:
 		toast("Бесконечный режим откроется после первой вершины")
@@ -985,6 +991,10 @@ func _input(event: InputEvent) -> void:
 	if ads.fullscreen:
 		get_viewport().set_input_as_handled()
 		return
+	if summit_scene>0.0 and (event is InputEventScreenTouch or event is InputEventMouseButton) and event.pressed:
+		skip_summit_scene()
+		get_viewport().set_input_as_handled()
+		return
 	# Finish an owned touch even over GUI controls. Extra fingers never take
 	# over the stick or turn an ignored touch into a later shot.
 	if state!="play" or preview:
@@ -1213,6 +1223,13 @@ func fire_hook(direction: Vector2) -> void:
 func can_walk() -> bool:
 	return sim.grounded and not sim.attached and not bolt_active
 
+# The hero raises the hook to aim while a finger holds the stick, but not
+# while that same hold walks it along a platform: a touch walk keeps the
+# finger down, and the aim pose (HeroState AIM outranks WALK) froze the walk
+# cycle on phones. Once a hold has walked it throws nothing (pointer_up).
+func hero_aiming() -> bool:
+	return pressed and not sim.attached and not bolt_active and not walk_used and walk==0.0
+
 func ground_ahead(direction: float, distance: float = EDGE_PROBE) -> bool:
 	# A short downward sweep just past the body centre in the walking direction.
 	var probe := sim.pos+Vector2(direction*distance,.04)
@@ -1333,8 +1350,8 @@ func shot_window_open(contact: Vector2) -> bool:
 	return true
 
 func _position_camera() -> void:
-	var view_y := camera_y-camera_dip+camera_view_offset
-	camera.size = camera_base_size/maxf(1.0,camera_zoom_current)
+	var view_y := camera_y-camera_dip+camera_view_offset-summit_pull*camera_base_size*.12
+	camera.size = camera_base_size/maxf(1.0,camera_zoom_current)*(1.0+summit_pull*1.2)
 	camera.position = Vector3(camera_x,view_y,28)
 	camera.look_at(Vector3(camera_x,view_y,0))
 
@@ -1495,7 +1512,7 @@ func _physics_process(delta: float) -> void:
 				var before_slide := sim.anchor
 				sim.anchor = world.anchor_contact_after(point,anchor_contact,anchor_time)
 				anchor_slide_velocity = (sim.anchor-before_slide)/step if step>0 else Vector2.ZERO
-				if anchor_time>=GripSpec.ICE_GRACE: world.ice_scrape(sim.anchor,delta)
+				if world.ice_hold(point,anchor_contact,anchor_time,sim.anchor,delta): _sfx("ice")
 				if GripSpec.slipped(point,anchor_contact,anchor_time):
 					release_hook(true,"ice_slip")
 					_sfx("ice")
@@ -2225,9 +2242,21 @@ func finish_run(success: bool) -> void:
 		model.profile["run_history"][-1].merge({"build":GameModel.build_version(),"mode":run_mode,"location":selected_location,"height_gold":settlement["height"],"loot_gold":settlement["loot"],"finish_gold":settlement["finish"],"diamond_reward":settlement["diamonds"],"coin_gold":settlement["coins"],"contract_gold":settlement["contract"],"items_spent":settlement["spent"],"zone_diamonds":zone_diamonds,"first_summit":settlement["first"]})
 		model.profile["run_history"] = model.profile["run_history"].slice(-30)
 		model.save()
+	if success and run_mode=="summit" and not preview and is_instance_valid(world):
+		# The climb is settled; the results wait for a short scene.
+		summit_scene = SUMMIT_SCENE_SECONDS
+		world.summit_celebration()
+		hud.set_play_hidden(true)
+		return
 	hud.show_result(settlement)
-	if success and run_mode=="summit" and not preview:
-		ads.show_level_complete()
+
+func skip_summit_scene() -> void:
+	if summit_scene<=0.0: return
+	summit_scene = 0.0
+	summit_pull = 0.0
+	hud.set_play_hidden(false)
+	hud.show_result(settlement)
+	if not preview: ads.show_level_complete()
 
 func restart_failed_run() -> void:
 	# The failure screen can start a fresh attempt directly. Settle the failed
@@ -2447,6 +2476,12 @@ func _move_camera(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	if summit_scene>0.0:
+		summit_scene -= delta
+		summit_pull = smoothstep(0.0,.7,1.0-summit_scene/SUMMIT_SCENE_SECONDS)
+		if summit_scene<=0.0:
+			summit_scene = .001
+			skip_summit_scene()
 	_update_music()
 	if not AssetWarmup.done(): AssetWarmup.poll()
 	_update_prepared_world()
@@ -2496,7 +2531,7 @@ func _process(delta: float) -> void:
 	var warning := fragile and GripSpec.warning(held_grip,anchor_time)
 	var shot_visual := {"velocity":return_velocity if bolt_returning else hook_flight.velocity,"age":hook_flight.age,
 		"trail":hook_flight.trail,"returning":bolt_returning,"shot":shot_serial,"impact":impact_serial,
-		"impact_position":hook_impact,"impact_kind":hook_impact_kind,"aiming":pressed and not sim.attached and not bolt_active,"aim":aim_direction}
+		"impact_position":hook_impact,"impact_kind":hook_impact_kind,"aiming":hero_aiming(),"aim":aim_direction}
 	shot_visual["hook_count"] = model.hook_count()
 	# The hero slips instead of letting go when the grip failed (HeroState).
 	shot_visual["release_reason"] = last_release_reason

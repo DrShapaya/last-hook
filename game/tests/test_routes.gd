@@ -147,6 +147,11 @@ func run_tests() -> void:
 	var near_low := ice_world.anchor_surface_point(ice,under+slope*.35,Vector2(0,1))
 	check(GripSpec.seconds_to_slip(ice,near_high)>GripSpec.seconds_to_slip(ice,near_low)+.15,"a catch near the high end buys more time than one near the low end")
 	check(GripSpec.seconds_to_slip(ice,low_end)>=GripSpec.ICE_GRACE,"even the very end of the plate holds the hook for a moment")
+	# Wherever the hook catches, the plate holds it long enough to aim the
+	# next throw (docs/LEVEL_OBJECTS_PLAN.md, stage 3).
+	var shortest := INF
+	for point in outline: shortest = minf(shortest,GripSpec.seconds_to_slip(ice,point))
+	check(shortest>=GripSpec.ICE_MIN_HOLD-.001 and GripSpec.ICE_MIN_HOLD>=2.0,"an ice plate holds a hook for at least %.1f s wherever it catches (%.2f s)" % [GripSpec.ICE_MIN_HOLD,shortest])
 	check(ice_world.anchor_contact_after(ice,contact,100).distance_to(ice_world.anchor_contact_after(ice,under,100))<.01,"a hook that lands on top still ends at the low end of the plate")
 	check(ice_world.cast_hook(low_end+Vector2(0,-3),low_end+Vector2(0,.05),.34).get("object",{}).get("id",-1)==ice["id"],"the hook catches the plate where it is drawn, on its low end")
 	check(not GripSpec.slipped({"kind":0,"pos":Vector2(0,20)},contact,100),"other types never slip")

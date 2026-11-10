@@ -24,6 +24,8 @@ import time
 import bpy
 import numpy
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
+from mathutils.interpolate import poly_3d_calc
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import export_hero as hero  # noqa: E402
@@ -136,6 +138,46 @@ def owner_of(detail, sources):
     return best
 
 
+def surface_index(sources):
+    """One BVH over the weighted large parts, in world space."""
+    verts, polys, owners = [], [], []
+    for o in sources:
+        base = len(verts)
+        verts.extend(o.matrix_world @ v.co for v in o.data.vertices)
+        for p in o.data.polygons:
+            polys.append([base + i for i in p.vertices])
+            owners.append((o, p.index))
+    return BVHTree.FromPolygons(verts, polys), verts, polys, owners
+
+
+def glue_weights(detail, surface):
+    """Weights of the nearest point on the large parts, interpolated over its
+    face: the detail rides on exactly what it sits on."""
+    tree, verts, polys, owners = surface
+    groups = {}
+    for v in detail.data.vertices:
+        hit = tree.find_nearest(detail.matrix_world @ v.co)
+        if hit[2] is None:
+            continue
+        src, poly_index = owners[hit[2]]
+        poly = src.data.polygons[poly_index]
+        bary = poly_3d_calc([verts[i] for i in polys[hit[2]]], hit[0])
+        acc = {}
+        for share, vi in zip(bary, poly.vertices):
+            for g in src.data.vertices[vi].groups:
+                name = src.vertex_groups[g.group].name
+                acc[name] = acc.get(name, 0.0) + share * g.weight
+        top = sorted(acc.items(), key=lambda item: -item[1])[:3]
+        total = sum(w for _, w in top)
+        if total <= 0:
+            continue
+        for name, w in top:
+            if name not in groups:
+                groups[name] = detail.vertex_groups.get(name) or detail.vertex_groups.new(name=name)
+            if w / total > 0.02:
+                groups[name].add([v.index], w / total, "REPLACE")
+
+
 def pack(o, metal, code):
     """COLOR_0 = colour + occlusion; TEXCOORD_0 = (code + metal, roughness)."""
     mesh = o.data
@@ -236,10 +278,18 @@ def main():
         # A detail takes its part's slot (the hem and cuffs dye with the
         # jacket); the shader's hue window keeps straps and buckles theirs.
         pack(o, metal_of(o), CODES.get(hero.slot_of(owner.name), 0))
-        if o in sources:
-            soften(o)
+    for o in sources:
+        soften(o)
         decimate(o)
-        hero.weight_part(o, owner.name)
+        hero.weight_part(o)
+    # Each detail vertex moves exactly as the surface under it. One owner
+    # per detail left seam stitches on the jacket while the sleeve moved
+    # away (dots in the air) and buckles poking out of a raised arm.
+    surface = surface_index(sources)
+    for o in objects:
+        if o not in sources:
+            decimate(o)
+            glue_weights(o, surface)
     total = sum(tris(o) for o in objects)
     print("SHOWCASE_TRIS", total, flush=True)
     bpy.ops.object.select_all(action="DESELECT")

@@ -659,7 +659,11 @@ def build_head(M):
 def build_torso(M):
     z0, z1 = 0.39, J["neck"] + 0.005
     parts = [
-        rounded((0.245, 0.27, z1 - z0 - 0.06), (0.0, 0, (z0 + z1) / 2 - 0.01), 0.07, segments=6),
+        # A padded barrel, not a box: rounder edges, and a chest and a belly
+        # that fill the jacket out (the owner: "the body is square").
+        rounded((0.235, 0.26, z1 - z0 - 0.06), (0.0, 0, (z0 + z1) / 2 - 0.01), 0.1, segments=8),
+        ball(0.128, (0.006, 0, 0.575), (1.0, 1.06, 0.82)),
+        ball(0.12, (0.004, 0, 0.47), (1.02, 1.08, 0.78)),
         ball(0.06, (0.0, -ARM_Y + 0.05, J["shoulder"][1] - 0.02), (1.1, 1, 0.8)),
         ball(0.06, (0.0, ARM_Y - 0.05, J["shoulder"][1] - 0.02), (1.1, 1, 0.8)),
         # Slightly flared hem.
@@ -717,7 +721,9 @@ def build_torso(M):
     ok, zl, zn, _ = jacket.closest_point_on_mesh(Vector((0.16, -0.01, z1 - 0.04)))
     pull = rounded((0.006, 0.012, 0.03), zl + zn * 0.006 - Vector((0, 0, 0.018)), 0.003)
     finish(pull, M["strap"], "Бегунок")
-    ok, bl, bn, _ = jacket.closest_point_on_mesh(Vector((0.06, -0.14, 0.60)))
+    # On the strap itself, down on the chest: at the shoulder (y -0.14) the
+    # buckle sat in the arm's joint and poked out of the sleeve.
+    ok, bl, bn, _ = jacket.closest_point_on_mesh(strap_path[int(len(strap_path) * 0.62)])
     bk = buckle(bl + bn * 0.012, bn, 0.03, M["metal"], M["strap"], "Пряжка лямки")
     return ([jacket, hood, neck, pocket, flap, stud, zipper, teeth, hem, strap, bk, flap_seam, pocket_seam, chest, chest_bk, pull]
             + hem_seams + strap_seams + chest_seams)
@@ -726,8 +732,8 @@ def build_torso(M):
 def arm_points(side):
     y = -ARM_Y if side == "near" else ARM_Y
     s, e, w = J["shoulder"], J["elbow"], J["wrist"]
-    return Vector((s[0], y, s[1])), Vector((e[0] + 0.02, y - 0.01 * (1 if side == "near" else -1), e[1])), \
-        Vector((w[0] + 0.035, y - 0.012 * (1 if side == "near" else -1), w[1]))
+    return Vector((s[0], y, s[1])), Vector((e[0] + 0.012, y - 0.01 * (1 if side == "near" else -1), e[1])), \
+        Vector((w[0] + 0.02, y - 0.012 * (1 if side == "near" else -1), w[1]))
 
 
 def build_arm(M, side):
@@ -927,9 +933,12 @@ def spiral_end(centre, y_dir, r_out, turns, mat, name, thick=0.0042):
 def build_backpack(M):
     back_x = -0.105  # The hero's back surface.
     bx = back_x - 0.095
-    body = rounded((0.19, 0.26, 0.28), (bx, 0, 0.55), 0.06, segments=6)
-    belly = ball(0.11, (bx - 0.02, 0, 0.47), (1.0, 1.2, 0.8))
-    body = fuse([body, belly], "Рюкзак", M["leather"], voxel=0.004)
+    # One soft leather bag from top to bottom: the box with a ball under it
+    # read as half a crate, half a sack. A pillow filling the whole body
+    # bulges it evenly; the bottom rounds off like a loaded pack.
+    body = rounded((0.18, 0.25, 0.28), (bx, 0, 0.55), 0.075, segments=8)
+    fill = ball(0.13, (bx - 0.012, 0, 0.545), (0.78, 1.0, 1.04))
+    body = fuse([body, fill], "Рюкзак", M["leather"], voxel=0.004, smooth=10)
     drape(body, (0, 0, 1), 0.035, 0.0025, (bx - 0.06, 0, 0.5), 0.14, seed=0.9)
     cloth_relief(body, 0.002, 0.04)
     # Lid over the top, a little wider than the body.

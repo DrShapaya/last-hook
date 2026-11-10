@@ -65,8 +65,8 @@ def arm(side):
     y = -ARM_Y if side == "near" else ARM_Y
     k = 1 if side == "near" else -1
     sh = Vector((S[0], y, S[1]))
-    el = Vector((E[0] + 0.02, y - 0.01 * k, E[1]))
-    wr = Vector((W[0] + 0.035, y - 0.012 * k, W[1]))
+    el = Vector((E[0] + 0.012, y - 0.01 * k, E[1]))
+    wr = Vector((W[0] + 0.02, y - 0.012 * k, W[1]))
     return sh, el, wr
 
 

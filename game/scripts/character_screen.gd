@@ -67,6 +67,8 @@ void fragment() {
 var location := 0
 var stage: Panel
 var viewport: SubViewport
+var holder: SubViewportContainer
+var stage_inner := Vector2.ZERO
 var camera: Camera3D
 var hero: HeroModel
 var ledge: MeshInstance3D
@@ -152,10 +154,13 @@ func build_stage(rect: Rect2) -> void:
 	painting.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	painting.modulate = Color(.86,.88,.92)
 	stage.add_child(painting)
-	var holder := SubViewportContainer.new()
-	holder.stretch = true
-	holder.size = inner
+	# The hero renders at the screen's own pixels: a stretched container
+	# renders at the 540x960 canvas units and the phone blows that up 2-3x,
+	# which made the model look soapy. _fit_viewport keeps it sharp.
+	holder = SubViewportContainer.new()
+	holder.stretch = false
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stage_inner = inner
 	stage.add_child(holder)
 	viewport = SubViewport.new()
 	viewport.own_world_3d = true
@@ -227,8 +232,21 @@ func build_stage(rect: Rect2) -> void:
 	fade_out.colors = PackedColorArray([COIN_LIGHT,Color(HOLD,0)])
 	sparkles.color_ramp = fade_out
 	stage.add_child(sparkles)
+	_fit_viewport()
 	_update_camera(1.0)
 	_pose(0.0)
+
+# Screen pixels per canvas unit at the stage, capped so a tablet does not
+# render a huge target.
+const MAX_PIXEL_SCALE := 3.0
+func _fit_viewport() -> void:
+	if not is_instance_valid(holder) or not holder.is_inside_tree(): return
+	var pixel_scale := clampf((get_viewport().get_final_transform()*stage.get_global_transform_with_canvas()).get_scale().x,1.0,MAX_PIXEL_SCALE)
+	var pixels := Vector2i((stage_inner*pixel_scale).round())
+	if viewport.size==pixels: return
+	viewport.size = pixels
+	holder.size = Vector2(pixels)
+	holder.scale = Vector2.ONE*(stage_inner.x/float(pixels.x))
 
 func _build_wallet() -> void:
 	for node in wallet_nodes:
@@ -480,6 +498,7 @@ func _process(delta: float) -> void:
 	if next_look<=0:
 		next_look = randf_range(2.2,4.5)
 		look_goal = 0.0 if randf()<.35 else randf_range(-.55,.45)
+	_fit_viewport() # The window can change size (rotation, split screen).
 	_update_camera(1-exp(-delta*5))
 	_pose(delta)
 	if is_instance_valid(hint) and idle_for<1.0 and hint.modulate.a>0:

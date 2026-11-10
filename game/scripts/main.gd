@@ -12,6 +12,9 @@ var prepared_world: MountainWorld
 var prepared_key: Dictionary = {}
 var prepared_seed := 0
 var prepared_rows_left := false
+# Frames left of the prepared world's warm-up draw (0: not yet, -1: done).
+var prepared_warm := 0
+var warm_view: SubViewport
 # Off in headless runs (tests, tools) unless a tool turns it on.
 var prepare_worlds := DisplayServer.get_name()!="headless"
 var camera: Camera3D
@@ -662,6 +665,8 @@ func _discard_prepared_world() -> void:
 	prepared_world = null
 	prepared_key = {}
 	prepared_rows_left = false
+	prepared_warm = 0
+	_end_warm_view()
 
 # Off the run, builds the next attempt's world a slice per frame: the route
 # graph in one pass when the screen changes, then the sections round the
@@ -702,6 +707,45 @@ func _update_prepared_world() -> void:
 		return
 	if prepared_world.stream_pending or prepared_world.stream_dirty:
 		prepared_world.update_visibility(START_CAMERA_Y,0,1)
+		return
+	_warm_prepared_world()
+
+# The first draw of a world compiles the shaders of its materials: drawn
+# first on the Start press, that froze the first frame of a run (300 ms on a
+# PC, far longer on a phone). Once the prepared start is built, a small
+# offscreen view draws it for a few frames while the menu still covers the
+# screen, so the run opens on shaders that are ready.
+const WARM_FRAMES := 3
+func _warm_prepared_world() -> void:
+	if prepared_warm<0 or preview or DisplayServer.get_name()=="headless": return
+	if prepared_warm==0:
+		if not is_instance_valid(warm_view):
+			warm_view = SubViewport.new()
+			warm_view.name = "Прогрев шейдеров"
+			warm_view.size = Vector2i(96,170)
+			var eye := Camera3D.new()
+			eye.projection = Camera3D.PROJECTION_ORTHOGONAL
+			eye.near = camera.near
+			eye.far = camera.far
+			warm_view.add_child(eye)
+			add_child(warm_view)
+		var eye := warm_view.get_child(0) as Camera3D
+		eye.size = camera_base_size
+		eye.position = Vector3(0,START_CAMERA_Y+camera_view_offset,28)
+		eye.look_at(Vector3(0,START_CAMERA_Y+camera_view_offset,0))
+		eye.current = true
+		warm_view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		prepared_world.visible = true
+		prepared_warm = WARM_FRAMES
+		return
+	prepared_warm -= 1
+	if prepared_warm>0: return
+	prepared_world.visible = false
+	prepared_warm = -1
+	_end_warm_view()
+
+func _end_warm_view() -> void:
+	if is_instance_valid(warm_view): warm_view.render_target_update_mode = SubViewport.UPDATE_DISABLED
 
 # Generates prepared rows for up to `slice` microseconds (0: all of them);
 # the last step adds the summit and resolves the loot as generate_to does.
@@ -737,6 +781,8 @@ func _adopt_prepared_world() -> void:
 	world.build_urgency = true
 	prepared_world = null
 	prepared_key = {}
+	prepared_warm = 0
+	_end_warm_view()
 	world.name = "MountainWorld"
 	scene_environment.background_color = Color("88bfd9") if world.location==0 else Color("142438")
 	_attach_explorer()

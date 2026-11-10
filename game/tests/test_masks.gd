@@ -188,7 +188,13 @@ func grip_tone_tests(world: MountainWorld, layout: MaskLayout, location: int) ->
 	print("GRIP_TONE location ",location," grips ",hue_gaps.size()," hue p90 %.3f light p90 %.3f" % [hue_p90,light_p90])
 	check(hue_gaps.size()>=10,"grip tones are measured on location %d" % location)
 	check(hue_p90<.03,"grips of location %d take the hue of the face round them (p90 gap %.3f)" % [location,hue_p90])
-	check(light_p90<.12,"grips of location %d stay near the brightness of the face round them (p90 gap %.3f)" % [location,light_p90])
+	if location==1:
+		# Canyon holds are varnished darker than the pale face, so they read
+		# at a glance, but stay its stone, never near black.
+		var light_p10: float = light_gaps[int(light_gaps.size()*.1)]
+		check(light_p10>.07 and light_p90<.22,"canyon grips stand apart from the face by brightness (p10 %.3f, p90 %.3f)" % [light_p10,light_p90])
+	else:
+		check(light_p90<.12,"grips of location %d stay near the brightness of the face round them (p90 gap %.3f)" % [location,light_p90])
 	# The top of a grip is dressed as the face is: snow, sand or moss.
 	var sample: Dictionary = layout.anchors[layout.main_route[layout.main_route.size()/3]]
 	var body := visuals.grip_tone(sample)
@@ -346,7 +352,8 @@ func platform_look_tests(world: MountainWorld, layout: MaskLayout, location: int
 	check(timber>0 and own_ok,"rest platforms of location %d carry only the %s dressing" % [location,look])
 	check(tint_ok,"the timber of location %d takes the %s tint" % [location,look])
 	check(light_ok,"on battery the %s platforms draw no more than bare timber did" % look)
-	if location==2: check(slabs>0 and timber>0,"the snow peak rests on snowy timber and on slabs of its rock (%d, %d)" % [timber,slabs])
+	# The snow peak's rests are all snowy timber; other kinds come later.
+	if location==2: check(slabs==0 and timber>0,"the snow peak rests on snowy timber only (%d, %d slabs)" % [timber,slabs])
 
 # Each location has a generator of its own, with its own rock and mask.
 func style_tests() -> void:
@@ -908,17 +915,15 @@ func winter_decor_tests() -> void:
 		var near := 0
 		for other in spots: if other!=spot and other.distance_to(spot)<1.0: near += 1
 		if near>=2: heaped += 1
-	var slabs := 0
+	# Every rest is snowy timber: the stone slab read as a flat grey box
+	# (owner, 0.18.1); other kinds of rests come later.
+	var timber := 0
 	var rests := Node3D.new()
 	world.add_child(rests)
 	for ledge in world.layout.ledges:
 		visuals.build_ledge(ledge,rests)
-		var slab: bool = is_instance_valid(ledge.get("visual")) and (ledge["visual"] as Node).find_child("Снежная плита",false,false)!=null
-		if slab: slabs += 1
-		if slab!=visuals.snow_slab(ledge): slabs = -1000
-	# One rest in three is a slab of the rock, the others snowy timber
-	# (docs/LEVEL_OBJECTS_PLAN.md, stage 4).
-	check(slabs>0,"the rests the peak marks as slabs are slabs of its rock (%d of %d)" % [slabs,world.layout.ledges.size()])
+		if is_instance_valid(ledge.get("visual")) and (ledge["visual"] as Node).find_child("Деревянная площадка",false,false)!=null: timber += 1
+	check(timber==world.layout.ledges.size(),"every rest on the snow peak is a snowy timber platform (%d of %d)" % [timber,world.layout.ledges.size()])
 	rests.free()
 	print("WINTER_DECOR shelf ice ",shelf_ice," crystals ",crystals," heaped ",heaped)
 	check(shelf_ice>=8,"ice hangs in rows under the snow shelves (%d)" % shelf_ice)

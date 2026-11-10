@@ -45,7 +45,9 @@ const CATALOGUE := {
 	"icicle":{"folder":"vegetation","mode":"hang","size":[.9,1.35],"measure":"height","sway":.0,"use":[1,2,3,4,5,6,7,8],"sizes":{2:[.75,1.0],5:[.7,.95]}},
 	"stone_grey":{"folder":"stones","mode":"stand","size":[.55,.85],"measure":"extent","sway":.0,"use":[1,2,3,4,5]},
 	"scree_grey":{"folder":"stones","mode":"stand","size":[.75,1.05],"measure":"extent","sway":.0,"use":[1,2,3,4,5]},
-	"stone_desert":{"folder":"stones","mode":"stand","size":[.55,.85],"measure":"extent","sway":.0},
+	# Loose desert rocks: only the shard and the grey pebble. The round, red
+	# and pitted blocks read as grips on the canyon face.
+	"stone_desert":{"folder":"stones","mode":"stand","size":[.55,.85],"measure":"extent","sway":.0,"use":[2,4]},
 	"scree_desert":{"folder":"stones","mode":"stand","size":[.8,1.1],"measure":"extent","sway":.0},
 	"stone_snow":{"folder":"stones","mode":"stand","size":[.55,.85],"measure":"extent","sway":.0},
 	"scree_snow":{"folder":"stones","mode":"stand","size":[.75,1.05],"measure":"extent","sway":.0},

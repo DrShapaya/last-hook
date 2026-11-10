@@ -7,8 +7,13 @@ extends RefCounted
 # main thread in the middle of a climb: a 30-100 ms stall on a PC, far more
 # on a phone. Loaded resources are held here so the cache keeps them.
 
-const FOLDERS := ["res://assets/models","res://assets/sprites"]
+# The 3D hero too: each run builds a new one, and once the menu had freed
+# the last, its model was read from disk again on the Start press (~100 ms
+# on a PC).
+const FOLDERS := ["res://assets/models","res://assets/sprites","res://assets/hero"]
 const EXTENSIONS := ["glb","png","tres","res"]
+# Single files the climber builds with on every Start (ExplorerView).
+const FILES := ["res://assets/art/modular-pack-v1/rope-albedo.png","res://assets/art/modular-pack-v1/hook-head.png"]
 
 static var _pending: Array[String] = []
 static var _held: Array[Resource] = []
@@ -18,6 +23,7 @@ static func start() -> void:
 	if _started: return
 	_started = true
 	for folder in FOLDERS: _collect(folder)
+	_pending.append_array(FILES)
 	for path in _pending: ResourceLoader.load_threaded_request(path)
 
 static func _collect(folder: String) -> void:

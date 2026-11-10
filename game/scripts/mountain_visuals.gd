@@ -118,6 +118,18 @@ func ledge_materials(_profile: GripBiomeProfile, look: String = "") -> Dictionar
 # face under the ledge, its back plane on the frontmost stone anywhere over
 # its footprint (deck and supports), so no part of it enters the mountain,
 # and its front short of the hero's plane.
+# How far over the walking line the stone counts for a platform's back: the
+# wall right above the deck. Measured only under the deck, a wall bulging
+# out just above it left the deck's back half inside the stone, and the deck
+# read as set into the rock with the hero walking in it.
+const PLATFORM_WALL_ABOVE := .5
+
+# The back plane of a platform over a ledge: on the frontmost stone of its
+# supports, its deck and the wall just above.
+func platform_back(left: float, right: float, top: float, drop: float) -> float:
+	var reach: float = WoodPlatform.OVERHANG
+	return _front_over(Rect2(left-reach,top-drop-.02,right-left+reach*2.0,drop+.02+PLATFORM_WALL_ABOVE))+PLATFORM_GAP
+
 func _place_platform(holder: Node3D, object: Dictionary, mount: SurfaceMount) -> Node3D:
 	var left: float = object["left"]
 	var right: float = object["right"]
@@ -125,11 +137,12 @@ func _place_platform(holder: Node3D, object: Dictionary, mount: SurfaceMount) ->
 	var width := right-left+WoodPlatform.OVERHANG*2.0
 	var style := WoodPlatform.style_for(_room_under_ledge(object))
 	var drop: float = WoodPlatform.DROP[style]
-	var back := _front_over(Rect2(left-WoodPlatform.OVERHANG,top-drop-.02,width,drop+.02))+PLATFORM_GAP
+	var back := platform_back(left,right,top,drop)
 	var look := platform_look(Vector2((left+right)*.5,top))
 	var model := WoodPlatform.instantiate(style,width,ledge_materials(mount.profile,look),quality!="battery",look,quality!="battery")
 	model.scale.z = clampf((PLATFORM_FRONT-back)/WoodPlatform.DEPTH,.55,1.0)
-	model.position = Vector3(0,0,back-holder.position.z)
+	# A snow cap's top is the walking line (WoodPlatform.cap_rise).
+	model.position = Vector3(0,-float(model.get_meta("rise",0.0)),back-holder.position.z)
 	holder.add_child(model)
 	object["platform_style"] = style
 	return model
@@ -153,7 +166,7 @@ func build_base_camp(parent: Node3D) -> Node3D:
 	var look := platform_look(Vector2((left+right)*.5,top))
 	if look=="": return null
 	var drop: float = WoodPlatform.DROP["braced"]
-	var back := _front_over(Rect2(left-WoodPlatform.OVERHANG,top-drop-.02,right-left+WoodPlatform.OVERHANG*2.0,drop+.02))+PLATFORM_GAP
+	var back := platform_back(left,right,top,drop)
 	var front := back+WoodPlatform.DEPTH*clampf((PLATFORM_FRONT-back)/WoodPlatform.DEPTH,.55,1.0)
 	return BaseCamp.build(parent,look,left,right,top,(back+front)*.5,front-back,quality!="battery")
 

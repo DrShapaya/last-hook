@@ -209,7 +209,8 @@ def soften(o):
     """Takes the fine dents (the wear noise in the detailed shape) off the
     large fabric and leather parts; decimated, they turned into sharp pits,
     each lit as a dark dash. Folds and seams stay."""
-    if tris(o) < 4000:
+    # The gloves keep their shape: smoothed, the fingers melted into a mitten.
+    if tris(o) < 4000 or o.name.startswith("Перчатка"):
         return
     mod = o.modifiers.new("soften", "SMOOTH")
     mod.factor = 0.6
@@ -223,6 +224,9 @@ def soften(o):
 def decimate(o):
     t = tris(o)
     ratio = 1.0 if t < 800 else (0.6 if t < 4000 else 0.35)
+    if o.name.startswith("Перчатка"):
+        ratio = 0.45  # Fingers are small: a third of the triangles made them lumps.
+        # (Under 0.45 keeps the hero inside the 320k budget of test_hero_model.)
     if ratio < 1.0:
         mod = o.modifiers.new("decimate", "DECIMATE")
         mod.ratio = ratio

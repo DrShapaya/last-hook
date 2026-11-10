@@ -268,12 +268,13 @@ public final class LastHookAds extends GodotPlugin {
             float density = activity.getResources().getDisplayMetrics().density;
             if (density <= 0f) density = 1f;
             int widthDp = Math.round(widthPixels / density);
-            // A sticky size spans the whole screen width and picks its height
-            // from that width. The former inline size capped the height at
-            // 55dp, so on phones wider than about 350dp the creative was
-            // scaled to that height and left empty strips at both sides.
-            // Both placements use the same rule, so they are the same size.
-            BannerAdSize size = BannerAdSize.sticky(activity, widthDp);
+            // An inline size as wide as the screen, no taller than the old
+            // strip (55dp, 90dp on tablets). A sticky size picked its height
+            // from the width and grew to about 100dp on a phone, too tall for
+            // the top of the screen. Both placements use the same rule, so
+            // they are the same size.
+            int maxBannerHeightDp = widthDp > 728 ? 90 : 55;
+            BannerAdSize size = BannerAdSize.inline(activity, widthDp, maxBannerHeightDp);
             slot.size = size;
             slot.loadedHeight = 0;
             slot.banner = new BannerAdView(activity);

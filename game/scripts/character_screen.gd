@@ -243,10 +243,22 @@ func _fit_viewport() -> void:
 	if not is_instance_valid(holder) or not holder.is_inside_tree(): return
 	var pixel_scale := clampf((get_viewport().get_final_transform()*stage.get_global_transform_with_canvas()).get_scale().x,1.0,MAX_PIXEL_SCALE)
 	var pixels := Vector2i((stage_inner*pixel_scale).round())
-	if viewport.size==pixels: return
+	if viewport.size==pixels and not render_lost: return
+	render_lost = false
+	# A new size recreates the render target (also after the phone dropped it).
+	if viewport.size==pixels: viewport.size = pixels+Vector2i.ONE
 	viewport.size = pixels
 	holder.size = Vector2(pixels)
 	holder.scale = Vector2.ONE*(stage_inner.x/float(pixels.x))
+
+# The owner saw an empty stage (background only) after leaving the app or an
+# ad: Android can drop the GL surface while the app is away, and the
+# SubViewport's target did not come back. Returning rebuilds it.
+var render_lost := false
+func _notification(what: int) -> void:
+	if what in [NOTIFICATION_APPLICATION_RESUMED,NOTIFICATION_APPLICATION_FOCUS_IN,NOTIFICATION_WM_WINDOW_FOCUS_IN]:
+		render_lost = true
+		if is_instance_valid(viewport): viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 
 func _build_wallet() -> void:
 	for node in wallet_nodes:

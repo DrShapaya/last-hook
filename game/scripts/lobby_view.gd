@@ -917,7 +917,10 @@ func build_header() -> void:
 # The character screen covers the lobby; the lobby's swipes and keys pause
 # under it.
 func open_character() -> void:
-	if is_instance_valid(character_screen): return
+	if is_instance_valid(character_screen):
+		# A tap during the closing fade opens a fresh screen instead of being lost.
+		if not character_screen.closing: return
+		character_screen.queue_free()
 	character_screen = CharacterScreen.new()
 	get_parent().add_child(character_screen)
 	character_screen.open(self)

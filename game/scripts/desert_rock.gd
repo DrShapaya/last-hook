@@ -54,6 +54,10 @@ const CAVE_FLOOR_RISE := 3.2
 # How far in from the outline and past a ledge the large facets of the body
 # begin. The roll of the edge is cut by them too, in a few broad planes.
 const BODY_MARGIN := 1.2
+# A ledge's crest and foot wander up and down along it: drawn as straight
+# rows they ran across the whole screen like the seam of two layers laid
+# one on another.
+const CREST_WAVE := .75
 
 var warp := FastNoiseLite.new()
 var relief := FastNoiseLite.new()
@@ -62,6 +66,7 @@ var mouth := FastNoiseLite.new()
 var bands := FastNoiseLite.new()
 var blocks := FastNoiseLite.new()
 var cracks := FastNoiseLite.new()
+var crest := FastNoiseLite.new()
 # Bed borders bottom-up, in warped height.
 var beds := PackedFloat32Array()
 
@@ -87,6 +92,9 @@ func _init(level: MaskLayout) -> void:
 	cracks.seed = random_seed+16
 	cracks.frequency = .5
 	cracks.fractal_octaves = 2
+	crest.seed = random_seed+17
+	crest.frequency = .16
+	crest.fractal_octaves = 2
 	var random := RandomNumberGenerator.new()
 	random.seed = random_seed+14
 	var y := origin.y-8.0
@@ -207,12 +215,13 @@ func lumps(low: float, high: float) -> Array:
 			var wide := random.randf_range(1.0,2.0)
 			result.append([Vector3(at.x,at.y+wide*.12,spot.z-.1),Vector3(wide,wide*.28,wide*.6)])
 		elif roll<.34:
-			var size := random.randf_range(.55,1.1)
-			result.append([Vector3(at.x,at.y+size*.62,spot.z+.2),Vector3(size*1.15,size*.85,size)])
+			# A small round stone, well under the size of a grip block.
+			var size := random.randf_range(.3,.55)
+			result.append([Vector3(at.x,at.y+size*.45,spot.z+.15),Vector3(size*1.2,size*.75,size*.9)])
 		else:
 			for stone in range(random.randi_range(2,5)):
-				var small := random.randf_range(.09,.24)
-				result.append([Vector3(at.x+random.randf_range(-.9,.9),at.y+small*.5+random.randf_range(-.08,.08),spot.z+.12),Vector3(small*1.3,small,small)])
+				var small := random.randf_range(.07,.17)
+				result.append([Vector3(at.x+random.randf_range(-.9,.9),at.y+small*.4+random.randf_range(-.06,.06),spot.z+.12),Vector3(small*1.3,small*.8,small)])
 		if result.size()>110: break
 	return result
 
@@ -221,8 +230,9 @@ func lumps(low: float, high: float) -> Array:
 # the hollow under the ledge, 0 to 1.
 func _on_ledge(point: Vector2) -> Vector3:
 	for ledge in layout.rock_marks:
-		var low := float(ledge[0])-LEDGE_BELOW
-		var high := float(ledge[1])+LEDGE_ABOVE
+		var shift := _ledge_shift(ledge,point.x)
+		var low := float(ledge[0])-LEDGE_BELOW+shift
+		var high := float(ledge[1])+LEDGE_ABOVE+shift
 		var along := absf(point.x-float(ledge[3]))
 		if point.y<low-HOLLOW_FALL or point.y>high or along>float(ledge[2]): continue
 		var fade := 1.0-smoothstep(float(ledge[2])-2.5,float(ledge[2]),along)
@@ -230,12 +240,17 @@ func _on_ledge(point: Vector2) -> Vector3:
 		return Vector3(share if share>=0.0 else -1.0,fade,fade*smoothstep(low-HOLLOW_FALL,low,minf(point.y,low+(low-point.y))))
 	return Vector3(-1,0,0)
 
+# How far a ledge's crest and foot lie above their straight line at x.
+func _ledge_shift(ledge: Array, x: float) -> float:
+	return crest.get_noise_2d(x,float(ledge[0])*5.3)*CREST_WAVE
+
 # Rows of corners lie along a ledge's crest and along its foot.
 func _snapped(point: Vector2, row: int, height: float) -> Vector2:
 	for ledge in layout.rock_marks:
 		if absf(point.x-float(ledge[3]))>float(ledge[2]): continue
-		var low := float(ledge[0])-LEDGE_BELOW
-		for line in [low,lerpf(low,float(ledge[1])+LEDGE_ABOVE,NOSE)]:
+		var shift := _ledge_shift(ledge,point.x)
+		var low := float(ledge[0])-LEDGE_BELOW+shift
+		for line in [low,lerpf(low,float(ledge[1])+LEDGE_ABOVE+shift,NOSE)]:
 			if roundi(line/height)==row: return Vector2(point.x,line)
 	return point
 

@@ -188,8 +188,19 @@ def weight_part(obj, as_name=None):
         scores.sort(reverse=True)
         top = scores[:2]
         total = sum(sc for sc, _ in top)
-        for sc, n in top:
-            w = sc / total
+        weights = {n: sc / total for sc, n in top}
+        if as_name.startswith("Куртка"):
+            # The front of the hem rides on the thigh under it: a raised knee
+            # went straight through the jacket. Only the lower front, and
+            # only partly, so the jacket bends instead of tearing.
+            lift = min(1.0, max(0.0, (0.47 - co.z) / 0.07)) * min(1.0, max(0.0, (co.x + 0.03) / 0.08)) * 0.55
+            if lift > 0:
+                thigh = "thigh_near" if co.y < 0 else "thigh_far"
+                weights = {n: w * (1 - lift) for n, w in weights.items()}
+                weights[thigh] = weights.get(thigh, 0.0) + lift
+                if thigh not in groups:
+                    groups[thigh] = obj.vertex_groups.get(thigh) or obj.vertex_groups.new(name=thigh)
+        for n, w in weights.items():
             if w > 0.02:
                 groups[n].add([v.index], w, "REPLACE")
 

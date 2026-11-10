@@ -88,4 +88,25 @@ static func instantiate(style: String, width: float, materials: Dictionary, shad
 		# Snow and sand lie on the deck: they take no part in its shadow.
 		var casts := shadows and part in TIMBER
 		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if casts else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	node.set_meta("rise",cap_rise(node))
 	return node
+
+# Parts that cover the whole deck: the hero walks on their top, not on the
+# boards under them.
+const CAPS := ["snow"]
+
+# How far a cap's visible top stands over the walking line: the mean, along
+# the deck, of the highest point at each step (what the camera sees as the
+# top edge). The game lowers the model by this, so the hero's boots rest on
+# the snow instead of sinking into it.
+static func cap_rise(node: Node3D) -> float:
+	var tops := {}
+	for mesh: MeshInstance3D in node.find_children("*","MeshInstance3D",true,false):
+		if not part_of(mesh) in CAPS or mesh.mesh==null: continue
+		for point in mesh.mesh.get_faces():
+			var key := roundi(point.x/.1)
+			tops[key] = maxf(float(tops.get(key,-INF)),point.y)
+	if tops.is_empty(): return 0.0
+	var total := 0.0
+	for key in tops: total += float(tops[key])
+	return maxf(0.0,total/tops.size())

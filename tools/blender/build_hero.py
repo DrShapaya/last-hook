@@ -648,12 +648,17 @@ def build_head(M):
     path.sort(key=lambda p: math.atan2(p.y, p.x - cx) % math.tau)
     strap = band(core, path, 0.045, 0.01, M["strap"], "Ремень головы", lift=0.003)
     seams = band_edges(core, strap, path, 0.045, M["thread"], "Строчка ремня головы")
-    plate = rounded((0.11, 0.022, 0.095), (cx - 0.04, -w / 2 - 0.012, strap_z), 0.014)
-    finish(plate, M["sole"], "Пластина")
-    bk = buckle((cx - 0.035, -w / 2 - 0.026, strap_z), (0, -1, 0), 0.06, M["metal"], M["strap"], "Пряжка головы")
-    tab = rounded((0.05, 0.016, 0.07), (cx - 0.075, -w / 2 - 0.03, strap_z), 0.01)
-    finish(tab, M["strap"], "Язычок")
-    return [core, ridge, strap, plate, bk, tab] + eyes + seams
+    # The same plate, buckle and tab on both sides: turned around, the far
+    # side showed a bare strap.
+    hardware = []
+    for s in (-1, 1):
+        plate = rounded((0.11, 0.022, 0.095), (cx - 0.04, s * (w / 2 + 0.012), strap_z), 0.014)
+        finish(plate, M["sole"], "Пластина")
+        bk = buckle((cx - 0.035, s * (w / 2 + 0.026), strap_z), (0, s, 0), 0.06, M["metal"], M["strap"], "Пряжка головы")
+        tab = rounded((0.05, 0.016, 0.07), (cx - 0.075, s * (w / 2 + 0.03), strap_z), 0.01)
+        finish(tab, M["strap"], "Язычок")
+        hardware += [plate, bk, tab]
+    return [core, ridge, strap] + hardware + eyes + seams
 
 
 def build_torso(M):
@@ -771,24 +776,31 @@ def build_glove(M, wrist, down, side):
     # Back of the hand: a broad flat block, wider than the wrist, like a glove.
     # Rotation is set at creation: after apply_all the origin is the world
     # origin, and rotating then would swing the block out of the hand.
-    palm = rounded((0.088, 0.046, 0.074), palm_c, 0.02, rot=Vector((0, 0, 1)).rotation_difference(down).to_euler(), segments=5)
-    parts = [rod(wrist - down * 0.015, wrist + down * 0.012, 0.031, 0.033, 24), palm]
+    # A palm slightly cupped and narrower at the wrist, so the hand tapers
+    # into the cuff instead of reading as a block.
+    palm = rounded((0.084, 0.04, 0.07), palm_c, 0.018, rot=Vector((0, 0, 1)).rotation_difference(down).to_euler(), segments=6)
+    heel_pad = ball(0.026, palm_c + inward * 0.012 - down * 0.012, (1.3, 0.8, 1.0))
+    parts = [rod(wrist - down * 0.015, wrist + down * 0.012, 0.029, 0.031, 32), palm, heel_pad]
     # Index, middle, ring, little: offset along the row, length, thickness.
-    fingers = [(0.03, 1.0, 0.0108), (0.01, 1.08, 0.0112), (-0.01, 1.02, 0.0108), (-0.03, 0.85, 0.0096)]
+    # Spread far enough apart that each finger keeps its own outline after
+    # the remesh (they fused into a mitten), each tapering in three segments
+    # with a crease at every joint.
+    fingers = [(0.0315, 1.0, 0.0102), (0.0105, 1.1, 0.0106), (-0.0105, 1.04, 0.0102), (-0.0305, 0.84, 0.0092)]
     for row, length, r in fingers:
-        knuckle = palm_c + down * 0.034 + fwd * row - inward * 0.006
-        parts.append(ball(r * 1.2, knuckle))  # Knuckle bump on the back of the hand.
-        # Relaxed curl: down, then in toward the palm, the tip tucked under.
-        p1 = knuckle + down * 0.028 * length
-        p2 = p1 + (down * 0.45 + inward).normalized() * 0.024 * length
-        p3 = p2 + (-down * 0.35 + inward).normalized() * 0.017 * length
-        parts += [rod(knuckle, p1, r, r * 0.96, 16), rod(p1, p2, r * 0.96, r * 0.92, 16), rod(p2, p3, r * 0.92, r * 0.85, 16)]
-    # Thumb: a thick pad from the inner front of the palm, tip resting on the index finger.
-    t0 = palm_c + fwd * 0.036 + inward * 0.016 + down * 0.008
-    t1 = t0 + (down + fwd * 0.3 + inward * 0.3).normalized() * 0.026
-    t2 = t1 + (down * 0.7 + inward * 0.5).normalized() * 0.018
-    parts += [ball(0.019, t0), rod(t0, t1, 0.0145, 0.0135, 16), rod(t1, t2, 0.0135, 0.012, 16)]
-    glove = fuse(parts, "Перчатка " + side, M["glove"], voxel=0.0022, smooth=4)
+        knuckle = palm_c + down * 0.032 + fwd * row - inward * 0.005
+        parts.append(ball(r * 1.15, knuckle))  # Knuckle bump on the back of the hand.
+        # Relaxed curl: down, then in toward the palm; the tip stays visible.
+        p1 = knuckle + down * 0.026 * length
+        p2 = p1 + (down * 0.7 + inward).normalized() * 0.02 * length
+        p3 = p2 + (down * 0.15 + inward).normalized() * 0.016 * length
+        parts += [rod(knuckle, p1, r, r * 0.93, 20), rod(p1, p2, r * 0.9, r * 0.86, 20), rod(p2, p3, r * 0.84, r * 0.74, 20)]
+    # Thumb: a fleshy base on the inner front of the palm, two segments, the
+    # tip resting against the side of the index finger.
+    t0 = palm_c + fwd * 0.034 + inward * 0.016 + down * 0.004
+    t1 = t0 + (down + fwd * 0.35 + inward * 0.25).normalized() * 0.024
+    t2 = t1 + (down * 0.75 + inward * 0.45).normalized() * 0.018
+    parts += [ball(0.017, t0, (1.0, 1.0, 1.25)), rod(t0, t1, 0.0135, 0.0125, 20), rod(t1, t2, 0.012, 0.0102, 20)]
+    glove = fuse(parts, "Перчатка " + side, M["glove"], voxel=0.0016, smooth=3)
     # Seam along the back of the hand and stitched cuff edge of the glove.
     seams = [stitches(glove, [palm_c - inward * 0.035 + fwd * x - down * 0.012 for x in (0.04, 0.0, -0.04)],
                       M["thread"], "Строчка перчатки " + side),
@@ -829,7 +841,9 @@ def build_pants(M):
         tz = hip - 0.085
         path = ring_path((0.0, y, tz), 0.078, 0.078)
         strap = band(pants, path, 0.026, 0.007, M["strap"], "Ремень бедра " + side)
-        out = Vector((0, -1 if side == "near" else 1, 0))
+        # On the front of the thigh: on its outer side the hanging hand went
+        # right through the buckle.
+        out = Vector((1, 0, 0))
         bk = buckle(Vector((0.0, y, tz)) + out * 0.084, out, 0.024, M["metal"], M["strap"], "Пряжка бедра " + side)
         extra += [patch, strap, bk]
     # Cargo pocket on the outer side of the near thigh, stitched, with a flap.
@@ -854,6 +868,45 @@ def build_pants(M):
     return [pants, belt] + extra
 
 
+SOLE_BACK, SOLE_FRONT = -0.061, 0.148
+
+
+def sole_half_width(x):
+    """Half the sole's width at x: round toe, a waist, a round heel."""
+    t = (x - SOLE_BACK) / (SOLE_FRONT - SOLE_BACK)
+    t = min(1.0, max(0.0, t))
+    toe = math.sqrt(max(0.0, 1.0 - ((t - 0.72) / 0.28) ** 2)) if t > 0.72 else 1.0
+    heel = math.sqrt(max(0.0, 1.0 - ((0.2 - t) / 0.2) ** 2)) if t < 0.2 else 1.0
+    waist = 1.0 - 0.1 * math.exp(-((t - 0.42) / 0.12) ** 2)
+    return 0.06 * min(toe, heel) * waist * (1.0 if t > 0.5 else 0.95)
+
+
+def sole_slab(y, z, thick, grow, heel_only=False):
+    """An extruded foot-shaped outline with softly rounded edges."""
+    back, front = SOLE_BACK - grow, (SOLE_BACK + 0.07 if heel_only else SOLE_FRONT + grow)
+    steps = 40
+    xs = [back + (front - back) * i / steps for i in range(steps + 1)]
+    ring = [(x, -(sole_half_width(x) + grow)) for x in xs] + [(x, sole_half_width(x) + grow) for x in reversed(xs)]
+    bm = bmesh.new()
+    bottom = [bm.verts.new((x, y + dy, z - thick / 2)) for x, dy in ring]
+    face = bm.faces.new(bottom)
+    ext = bmesh.ops.extrude_face_region(bm, geom=[face])
+    for v in [e for e in ext["geom"] if isinstance(e, bmesh.types.BMVert)]:
+        v.co.z += thick
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    mesh = bpy.data.meshes.new("Подошва")
+    bm.to_mesh(mesh)
+    bm.free()
+    obj = bpy.data.objects.new("Подошва", mesh)
+    link(obj)
+    mod = obj.modifiers.new("bevel", "BEVEL")
+    mod.width = min(0.006, thick * 0.35)
+    mod.segments = 3
+    mod.limit_method = "ANGLE"
+    apply_all(obj)
+    return obj
+
+
 def build_boot(M, side):
     y = -LEG_Y if side == "near" else LEG_Y
     shaft = rod((0.0, y, 0.075), (0.0, y, 0.165), 0.06, 0.056, 32)  # Its round bottom stays inside the sole.
@@ -862,15 +915,19 @@ def build_boot(M, side):
     upper = fuse([shaft, foot, toe], "Ботинок " + side, M["boot"], voxel=0.004)
     cloth_relief(upper, 0.0012, 0.03)
     # Chunky sole: a stitched welt band, the sole, a heel block and deep lugs.
-    welt_band = rounded((0.204, 0.116, 0.014), (0.043, y, 0.04), 0.006)
+    # The sole follows the foot: a round toe, a slight waist under the arch
+    # and a rounded heel, not a rectangular slab.
+    welt_band = sole_slab(y, 0.04, 0.014, 0.002)
     finish(welt_band, M["welt"], "Рант подошвы " + side)
-    sole = rounded((0.208, 0.12, 0.03), (0.043, y, 0.022), 0.012)
+    sole = sole_slab(y, 0.022, 0.03, 0.004)
     finish(sole, M["sole"], "Подошва " + side)
-    heel = rounded((0.06, 0.116, 0.02), (-0.03, y, 0.004), 0.006)
+    heel = sole_slab(y, 0.004, 0.02, -0.002, heel_only=True)
     finish(heel, M["sole"], "Каблук " + side)
     lugs = [heel]
     for i in range(6):
-        lug = rounded((0.016, 0.118, 0.018), (0.02 + i * 0.022, y, 0.004), 0.005, segments=2)
+        x = 0.02 + i * 0.022
+        half = sole_half_width(x) - 0.004
+        lug = rounded((0.016, 2 * half, 0.018), (x, y, 0.004), 0.005, segments=2)
         finish(lug, M["sole"], "Протектор")
         lugs.append(lug)
     collar = torus(0.056, 0.011, (0.0, y, 0.162), scale=(1, 1, 0.9))  # Padded top, under the pant hem.

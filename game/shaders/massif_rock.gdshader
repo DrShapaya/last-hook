@@ -27,6 +27,14 @@ uniform float shade_floor : hint_range(0.0,1.0) = 0.56;
 // Macro light from the real geometry: tops of large forms warm and light,
 // undersides and flanks cool, never black. Noise never fakes this volume.
 uniform float macro_strength : hint_range(0.0,1.0) = 1.0;
+// Volume at the outline: the rock darkens towards its edge, most on the
+// side away from the form light, so it reads as a mass rounding off
+// backwards, never as a cut-out plane. A location's face carries how near
+// the outline each vertex lies in its colour's alpha (1 well inside, 0 on
+// the edge; see RockSurface); rim_shade darkens by it. limb_shade darkens
+// any facet by how far it turns from the viewer.
+uniform float rim_shade : hint_range(0.0,1.0) = 0.5;
+uniform float limb_shade : hint_range(0.0,1.0) = 0.0;
 uniform float roughness_value : hint_range(0.0,1.0) = 0.95;
 // Bedding of the rock: broad slanted bands, scaled per profile (sandstone
 // strong, limestone faint). World space, so it never stretches on a wall.
@@ -123,16 +131,24 @@ void fragment() {
 	stone=mix(stone,dust_color,dust_amount*upwards*smoothstep(0.35,0.7,weather)*0.35);
 	stone=mix(stone,vec3(0.86,0.90,0.92),snow*0.65);
 	ALBEDO=mix(stone,aerial_color,aerial_depth);
+	// A facet faces the camera's axis, never the per-pixel VIEW: at the
+	// silhouette a facet is nearly edge-on, and a test against VIEW flipped
+	// it between lit and shaded as the camera scrolled. The camera never
+	// turns, so the axis keeps every facet on one side.
 	vec3 flat_normal=normalize(cross(dFdx(VERTEX),dFdy(VERTEX)));
-	if (dot(flat_normal,VIEW)<0.0) { flat_normal=-flat_normal; }
+	if (flat_normal.z<0.0) { flat_normal=-flat_normal; }
 	vec3 smooth_normal=normalize(NORMAL);
-	if (dot(smooth_normal,VIEW)<0.0) { smooth_normal=-smooth_normal; }
+	if (smooth_normal.z<0.0) { smooth_normal=-smooth_normal; }
 	NORMAL=normalize(mix(smooth_normal,flat_normal,facet_strength));
 	vec3 form_dir=normalize((VIEW_MATRIX*vec4(normalize(form_light_world),0.0)).xyz);
 	float form=dot(NORMAL,form_dir);
 	// Facets turned from the form light drop below the base tone and lit ones
 	// rise above it, so neighbouring planes separate without washing out.
 	ALBEDO*=mix(1.0,mix(form_shade,form_lit,smoothstep(-0.2,0.9,form)),form_strength*mix(1.0,0.6,light_quality));
+	float shade_side=mix(0.45,1.0,1.0-smoothstep(-0.35,0.75,form));
+	float rim=1.0-COLOR.a;
+	float limb=1.0-smoothstep(0.1,0.85,clamp(NORMAL.z,0.0,1.0));
+	ALBEDO*=(1.0-rim_shade*rim*rim*shade_side)*(1.0-limb_shade*limb*shade_side);
 	ROUGHNESS=roughness_value;
 	SPECULAR=0.5*light_quality;
 	if(light_quality>0.5){

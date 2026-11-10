@@ -14,6 +14,11 @@ const BACK_Z := -4.2
 # which only grips and the hero stand.
 const RIM_Z := -2.6
 const FRONT_Z := 1.0
+# How far in from the outline the rock darkens as it rounds off backwards.
+# The vertex colour's alpha carries it to the shader (massif_rock rim_shade):
+# 0 on the edge, 1 from this far in. Per vertex, so the shade runs smoothly
+# across the facets and never steps from one to the next.
+const RIM_REACH := 2.6
 
 var field: PackedFloat32Array
 var size := Vector2i.ZERO
@@ -66,6 +71,18 @@ func lumps(_low: float, _high: float) -> Array:
 func _clear_of_grips(point: Vector2, reach: float) -> bool:
 	for id in layout.nearby_ids(point.y-reach-1.0,point.y+reach+1.0):
 		if layout.anchors[id]["pos"].distance_to(point)<reach: return false
+	return _clear_of_rests(point)
+
+# Boulders and sand heaps keep off the rest platforms: one on a deck's
+# footprint stood through the timber, so the platform read as set in stone
+# and the hero walked inside it. The band covers the supports below and a
+# boulder's height above the walking line.
+const REST_CLEAR := Vector2(1.2,1.6)
+func _clear_of_rests(point: Vector2) -> bool:
+	for ledge in layout.ledges:
+		var top := float(ledge["top"])
+		if point.y<top-REST_CLEAR.y or point.y>top+REST_CLEAR.y: continue
+		if point.x>float(ledge["left"])-REST_CLEAR.x and point.x<float(ledge["right"])+REST_CLEAR.x: return false
 	return true
 
 # The face's depth at a point.
@@ -308,9 +325,10 @@ func _emit(triangle: Array, vertices: PackedVector3Array, normals: PackedVector3
 		pc = swap
 		normal = -normal
 	var color := facet_color((pa+pb+pc)/3.0,normal)
-	for point in [pa,pb,pc]:
+	for point: Vector3 in [pa,pb,pc]:
 		vertices.append(point)
 		normals.append(normal)
+		color.a = rim_alpha(Vector2(point.x,point.y))
 		colors.append(color)
 	# Where the mask ends the rock turns back into the mountain.
 	if not _closes_edge(): return
@@ -323,6 +341,10 @@ func _emit(triangle: Array, vertices: PackedVector3Array, normals: PackedVector3
 		if outward.dot(mid-middle)<0: outward = -outward
 		if distance(mid+outward*cell*.7)>.0: continue
 		_emit_wall(from,to,outward,vertices,normals,colors)
+
+# How far in from the outline a point lies, 0 on the edge to 1 at RIM_REACH.
+func rim_alpha(point: Vector2) -> float:
+	return smoothstep(0.0,1.0,clampf((distance(point)-.1)/RIM_REACH,0,1))
 
 # A rough low stone: rings of shaken corners between two poles.
 func _emit_lump(center: Vector3, half: Vector3, vertices: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray) -> void:

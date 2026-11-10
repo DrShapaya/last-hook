@@ -57,6 +57,9 @@ func _init(owner_world: Node3D, source: MountainLayout) -> void:
 	massif = source as MassifLayout
 	rock_material.shader = preload("res://shaders/massif_rock.gdshader")
 	rock_material.set_shader_parameter("facet_strength",1.0)
+	# Facets turning from the viewer darken a little, so every mass rounds
+	# off backwards at its outline (grips keep their own light).
+	rock_material.set_shader_parameter("limb_shade",.22)
 	_apply_rock_profile(rock_material,profile_at(0))
 	# Distant ranges: one flat facet light, no shadow lookups, mixed into the
 	# sky colour. Cheap enough for every preset, including phones.
@@ -628,9 +631,23 @@ func grip_top_color(stone: Color, profile: GripBiomeProfile, point: Vector2) -> 
 	if layout is MaskLayout:
 		match (layout as MaskLayout).rock_form:
 			"winter": return WinterRock.SNOW.lerp(Color("f4f8fb"),.4)
-			"desert": return stone.lerp(DesertRock.SAND,.7)
+			# A thin drift of sand: the yellow stroke must stand on darker
+			# stone, not on sand of nearly its own colour.
+			"desert": return stone.lerp(DesertRock.SAND,.35)
 			"boulder": return stone.lerp(MOSS_TOP,clampf(summer_moss(point),0,1)*.55)
 	return super.grip_top_color(stone,profile,point)
+
+# Canyon holds are the face's own sandstone darkened by desert varnish: the
+# hue stays the host's, the brightness drops well under the pale face, so a
+# hold stands out of it at a glance (owner, 0.18.1: grips merged into the
+# rock). Loose rocks and the face itself stay pale.
+const DESERT_VARNISH := .7
+
+func grip_stone_color(rock: Color, profile: GripBiomeProfile, kind: int) -> Color:
+	if layout is MaskLayout and (layout as MaskLayout).rock_form=="desert":
+		var stone := rock.lerp(profile.material_color(kind),.05)
+		return Color(stone.r*DESERT_VARNISH,stone.g*DESERT_VARNISH,stone.b*DESERT_VARNISH)
+	return super.grip_stone_color(rock,profile,kind)
 
 func _seen_rock() -> RockSurface:
 	if not seen_rock_asked and layout is MaskLayout and not (layout as MaskLayout).rock_grid.is_empty():
@@ -1613,64 +1630,6 @@ func platform_look(_point: Vector2) -> String:
 		"desert": return "desert"
 		"winter": return "winter"
 	return ""
-
-# One rest in three on the snow peak, counted up from the foot (the second,
-# fifth, ...), is a slab of its own rock instead of timber (the plan's
-# platform without wood).
-func snow_slab(object: Dictionary) -> bool:
-	var below := 0
-	for ledge in layout.ledges:
-		if float(ledge["top"])<float(object["top"]): below += 1
-	return below%3==1
-
-# On the snow peak such a rest is a slab of its own rock: a snow top on the
-# walking line, a dark stone front and ice hanging under it, as the shelves
-# of the face are. Every other rest is a snowy timber platform.
-func _place_platform(holder: Node3D, object: Dictionary, mount: SurfaceMount) -> Node3D:
-	if not (layout is MaskLayout and (layout as MaskLayout).rock_form=="winter") or not snow_slab(object): return super._place_platform(holder,object,mount)
-	var left: float = object["left"]
-	var right: float = object["right"]
-	var top: float = object["top"]
-	var width := right-left+.5
-	var thick := .7
-	var back := _front_over(Rect2(left-.25,top-thick,width,thick))+PLATFORM_GAP
-	var front := maxf(PLATFORM_FRONT,back+.6)
-	var model := Node3D.new()
-	model.name = "Снежная плита"
-	holder.add_child(model)
-	model.position = Vector3((left+right)*.5,top,(back+front)*.5)-holder.position
-	var depth := front-back
-	var stone := StandardMaterial3D.new()
-	stone.albedo_color = Color("5f6d86")
-	stone.roughness = .9
-	var snow := StandardMaterial3D.new()
-	snow.albedo_color = Color("e6edf6")
-	snow.roughness = .8
-	for part in [["Камень плиты",Vector3(0,-thick*.5-.06,0),Vector3(width,thick-.12,depth),stone],["Снег плиты",Vector3(0,-.07,.02),Vector3(width+.14,.14,depth+.06),snow]]:
-		var mesh := BoxMesh.new()
-		mesh.size = part[2]
-		var piece := MeshInstance3D.new()
-		piece.name = part[0]
-		piece.mesh = mesh
-		piece.material_override = part[3]
-		piece.position = part[1]
-		piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if quality!="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		model.add_child(piece)
-	# Ice along the front edge, short enough to stay clear of what is below.
-	var random := layout.rng(int(roundf(top*10)),908)
-	var room := _room_under_ledge(object)
-	var count := int(width/.7)
-	for k in range(count):
-		var entry := FloraModels.pick("icicle",random,"hang")
-		if entry.is_empty() or room<1.0: break
-		var scale := clampf(random.randf_range(.6,.9),.4,room*.5)
-		var hang := Node3D.new()
-		hang.name = "Сосульки плиты_%d" % k
-		hang.position = Vector3(-width*.5+(k+.5)*width/count,-thick,depth*.5-.02)
-		model.add_child(hang)
-		FloraModels.plant(hang,entry,quality!="battery",scale)
-	object["platform_style"] = "snow"
-	return model
 
 # --- Decor --------------------------------------------------------------------------
 

@@ -3,6 +3,10 @@ extends SceneTree
 # Rest platforms: the physics surface matches the drawn timber deck (no
 # standing on air past the boards, no sinking, snagging or falling through),
 # and a touch walk along a platform plays the hero's walk, not the aim pose.
+# Platforms stand out of the rock: no boulder or sand heap of the rock stands
+# on a deck, the deck's back is on the frontmost wall over it, and a snow cap
+# is lowered so the hero's boots rest on the snow. The Start press finds the
+# hero's model and textures already loaded (AssetWarmup).
 # LASTHOOK_SAVE_DIR must point to a throwaway save folder.
 
 const WoodPlatform := preload("res://scripts/wood_platform.gd")
@@ -21,6 +25,8 @@ func check(ok: bool, description: String) -> void:
 
 func run_tests() -> void:
 	model_matches_reach()
+	snow_cap_is_walking_line()
+	hero_assets_warm()
 	if OS.get_environment("LASTHOOK_SAVE_DIR").is_empty():
 		check(false,"LASTHOOK_SAVE_DIR is set")
 	else:
@@ -33,6 +39,7 @@ func run_tests() -> void:
 		game.start_run(false)
 		landing_and_walking(game)
 		touch_walk_animates(game)
+		await platforms_out_of_rock(game)
 		game.queue_free()
 	print("PLATFORM_TESTS ",checks," checks, ",failures.size()," failures")
 	for failure in failures: print("  FAILED: ",failure)
@@ -148,3 +155,50 @@ func touch_walk_animates(game) -> void:
 	check(states.has("walk") and not states.has("aim"),"the hero plays its walk while walking by touch (states %s)" % [states.keys()])
 	game.pointer_up(Vector2(380,404))
 	check(not game.hero_aiming(),"letting go ends the hold")
+
+func snow_cap_is_walking_line() -> void:
+	var bare: Node3D = WoodPlatform.instantiate("braced",3.6,{},false,"summer")
+	check(is_zero_approx(float(bare.get_meta("rise"))),"a platform without a snow cap is not lowered")
+	bare.free()
+	var winter: Node3D = WoodPlatform.instantiate("braced",3.6,{},false,"winter")
+	var rise := float(winter.get_meta("rise"))
+	check(rise>.05 and rise<.25,"a snow cap lifts the walking surface (%.3f)" % rise)
+	check(is_equal_approx(rise,WoodPlatform.cap_rise(winter)),"the rise is the cap's mean top")
+	winter.free()
+
+func hero_assets_warm() -> void:
+	check("res://assets/hero" in AssetWarmup.FOLDERS,"the hero's model loads with the climb art")
+	for path in ["res://assets/art/modular-pack-v1/rope-albedo.png","res://assets/art/modular-pack-v1/hook-head.png"]:
+		check(path in AssetWarmup.FILES and ResourceLoader.exists(path),"%s loads ahead of the Start press" % path.get_file())
+
+# On the desert route (rock with boulders and sand heaps on its ledges) and
+# the snow peak: nothing of the rock stands on a deck, and the deck's back
+# is on the frontmost wall under, at and just above it.
+func platforms_out_of_rock(game) -> void:
+	for location in [1,2]:
+		for route in range(3):
+			game.model.profile["locations"] = [0,1,2]
+			game.model.set_route_choice(location,route)
+			game.selected_location = location
+			game.start_run(false)
+			var world = game.world
+			var rock = world.visuals._seen_rock() if world.visuals.has_method("_seen_rock") else null
+			var on_deck := 0
+			var embedded := 0
+			for ledge in world.ledges:
+				var left: float = ledge["left"]
+				var right: float = ledge["right"]
+				var top: float = ledge["top"]
+				if rock!=null:
+					for lump in rock.lumps(top-4.0,top+4.0):
+						var at: Vector3 = lump[0]
+						if at.x>left-.12 and at.x<right+.12 and at.y>top-.5 and at.y<top+1.0: on_deck += 1
+				var back: float = world.visuals.platform_back(left,right,top,WoodPlatform.DROP["braced"])
+				var x := left-.1
+				while x<=right+.1:
+					for y in [top-.2,top,top+.3]:
+						if world.visuals.wall_depth(Vector2(x,y))>back+.001: embedded += 1
+					x += .25
+			check(on_deck==0,"location %d route %d: no boulder or sand heap stands on a platform (%d)" % [location,route,on_deck])
+			check(embedded==0,"location %d route %d: platforms stand in front of the wall at the deck (%d)" % [location,route,embedded])
+			await process_frame

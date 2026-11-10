@@ -2129,6 +2129,7 @@ func _return_to_safety(plan: Dictionary) -> void:
 	focus_cooldown = 0.0
 	sim.vel = Vector2.ZERO
 	sim.pos = safe_position
+	if is_instance_valid(explorer): explorer.hero_event("revive")
 	sim.flight_peak = sim.pos.y
 	sim.attached = false
 	sim.grounded = true
@@ -2205,6 +2206,7 @@ func finish_run(success: bool) -> void:
 		model.profile["active"] = {}
 		settlement = {"mode":"practice","success":success,"highest":maxi(0,roundi((sim.highest-START_Y)*10)),"seconds":run_seconds,"shots":shots,"catches":catches,"reason":failure_reason}
 		hud.show_result(settlement)
+		if is_instance_valid(explorer): explorer.hero_event("summit")
 		return
 	var rewarded_height := maxf(0,sim.highest-START_Y)
 	if success:
@@ -2314,6 +2316,7 @@ func cycle_location(direction: int) -> bool:
 	lobby_location = next
 	if model.profile["locations"].has(lobby_location):
 		selected_location = lobby_location
+			if is_instance_valid(hud.lobby_view) and hud.lobby_view.close_character(): return
 		model.profile["selected_location"] = selected_location
 		if not preview:
 			model.save()
@@ -2523,6 +2526,8 @@ func _update_music() -> void:
 	sounds.set_key(MusicPlayer.tonality(theme))
 	sounds.set_wind(_wind_level())
 
+	# The hero slips instead of letting go when the grip failed (HeroState).
+	shot_visual["release_reason"] = last_release_reason
 # Air rushing past the hero, quieter while time is slowed.
 func _wind_level() -> float:
 	if state!="play" or sim==null or sim.grounded or int(_settings()["sfx_volume"])<=0: return 0.0

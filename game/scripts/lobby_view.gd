@@ -202,7 +202,7 @@ var navigation_bar: Control
 var nav_pill: Panel
 var nav_marker: ColorRect
 var nav_symbols: Array = []
-var soon_badge: Panel
+var character_screen: CharacterScreen
 var supplies_badge: Panel
 # The profile's mini icon: the launch splash flies the big icon into it.
 var profile_mark: TextureRect
@@ -896,10 +896,9 @@ func _navigation_input(event: InputEvent) -> void:
 func build_header() -> void:
 	# Tight to the top edge: right under the banner or the screen cut-out.
 	var top := 12.0
-	# The character section is not built yet. Its entry is a real raised
-	# button (portrait, name, arrow) that says so and answers a tap with a note.
-	var character := action(self,"",Vector2(20,top),Vector2(236,52),_character_soon,"secondary")
-	character.tooltip_text = "Персонаж: скоро"
+	# The character screen (CharacterScreen): portrait, name, arrow.
+	var character := action(self,"",Vector2(20,top),Vector2(236,52),open_character,"secondary")
+	character.tooltip_text = "Персонаж"
 	var mark := TextureRect.new()
 	mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	mark.texture = preload("res://assets/icon.png")
@@ -911,12 +910,28 @@ func build_header() -> void:
 	character.add_child(mark)
 	profile_mark = mark
 	text(character,"Персонаж",Vector2(52,4),Vector2(120,24),18,INK,"display")
-	soon_badge = soon_tag(character,Vector2(53,27))
+	text(character,"Гардероб и герой",Vector2(52,27),Vector2(140,18),12,INK_SOFT)
 	symbol(character,11,Vector2(200,12),Vector2(24,24),INK_SOFT)
 	wallet(Vector2(size.x-236,top+3))
 
-func _character_soon() -> void:
-	wiggle_soon(soon_badge,"Раздел «Персонаж» скоро откроется")
+# The character screen covers the lobby; the lobby's swipes and keys pause
+# under it.
+func open_character() -> void:
+	if is_instance_valid(character_screen): return
+	character_screen = CharacterScreen.new()
+	get_parent().add_child(character_screen)
+	character_screen.open(self)
+	set_process_input(false)
+	visible = false
+	character_screen.closed.connect(func():
+		set_process_input(true)
+		visible = true)
+
+# Back closes the character screen first. Returns true when it did.
+func close_character() -> bool:
+	if not is_instance_valid(character_screen) or character_screen.closing: return false
+	character_screen.close()
+	return true
 
 # The section bar is built once per screen and kept: a slate pill glides
 # under the chosen section and the hold-yellow marker follows it. Keeping the

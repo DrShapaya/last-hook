@@ -7,7 +7,10 @@ const MODEL := "res://assets/hero/model/hero.glb"
 const BONES := ["root","pelvis","spine","chest","neck","head","backpack",
 	"upper_arm_near","forearm_near","hand_near","upper_arm_far","forearm_far","hand_far",
 	"thigh_near","shin_near","foot_near","thigh_far","shin_far","foot_far"]
-const MAX_TRIANGLES := 20000
+# The detailed hero (export_showcase.py): buckles, laces and treads as
+# geometry. One skinned mesh; the owner chose it over a simplified model.
+const MIN_TRIANGLES := 150000
+const MAX_TRIANGLES := 320000
 
 var checks := 0
 var failures: Array[String] = []
@@ -46,10 +49,11 @@ func run_tests() -> void:
 		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
 		triangles += indices.size()/3 if indices.size()>0 else (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()/3
 	print("hero model: %d triangles, %d bones" % [triangles,skeleton.get_bone_count()])
-	check(triangles>5000 and triangles<MAX_TRIANGLES,"the mesh fits the mobile budget (%d triangles)" % triangles)
-	var material := mesh_instance.mesh.surface_get_material(0) as BaseMaterial3D
-	check(material!=null and material.albedo_texture!=null,"the colour texture is baked in")
-	check(material!=null and material.normal_enabled and material.normal_texture!=null,"the normal map carries the stitches and buckles")
+	check(triangles>MIN_TRIANGLES and triangles<MAX_TRIANGLES,"the model keeps its details within budget (%d triangles)" % triangles)
+	# Colour and occlusion in the vertices, slot and roughness in the UVs.
+	var arrays := mesh_instance.mesh.surface_get_arrays(0)
+	check(arrays[Mesh.ARRAY_COLOR]!=null and (arrays[Mesh.ARRAY_COLOR] as PackedColorArray).size()>0,"the model carries its colour in the vertices")
+	check(arrays[Mesh.ARRAY_TEX_UV]!=null,"the model carries slot and roughness")
 	# Height: head top about 1.0 model units above the feet.
 	var aabb := mesh_instance.get_aabb()
 	check(absf(aabb.size.y-1.0)<.08,"the hero is one unit tall (%.2f)" % aabb.size.y)
@@ -76,6 +80,21 @@ func hero_model_tests() -> void:
 	root.add_child(model)
 	model.setup()
 	check(model.mesh.material_override is ShaderMaterial,"the hero carries its own shading")
+	var shading := model.mesh.material_override as ShaderMaterial
+	check(model.mesh.layers==HeroModel.HERO_LAYER,"the hero sits on his own light layer")
+	check(model.lights.size()==2 and model.lights.all(func(l): return l.light_cull_mask==HeroModel.HERO_LAYER and not l.shadow_enabled),"in the climb two own lights, no shadows")
+	check(shading.next_pass!=null,"the climb keeps the outline")
+	var close := HeroModel.new()
+	root.add_child(close)
+	close.setup(true)
+	check(close.lights.size()==3 and close.lights[0].shadow_enabled,"close-ups get a rim light and shadows")
+	check((close.mesh.material_override as ShaderMaterial).next_pass==null,"close-ups go without the outline")
+	close.queue_free()
+	var battery := HeroModel.new()
+	root.add_child(battery)
+	battery.setup(true,false)
+	check(battery.lights.size()==1 and not battery.lights[0].shadow_enabled,"battery: one light, no shadows")
+	battery.queue_free()
 	var sim := RopeSim.new()
 	var time := 0.0
 	for i in range(30):
@@ -164,12 +183,67 @@ func hero_model_tests() -> void:
 	check(flips==0,"swinging does not turn the hero around (%d turns)" % flips)
 	check(mid_turn==0,"no frame shows the hero mid-turn while swinging (%d)" % mid_turn)
 	swinger.queue_free()
+	game_event_tests()
 	model.forced_state = "summit"
 	for i in range(10):
 		time += 1.0/30
 		model.animate(sim,sim.pos+Vector2(2,3),false,time)
 	check(model.state=="summit","a forced state holds for previews")
 	model.queue_free()
+
+# What main.gd sends: the release reason in the frame data, and the summit
+# and revive events. Each one must show in the hero's state and pose.
+func game_event_tests() -> void:
+	var events := HeroModel.new()
+	root.add_child(events)
+	events.setup()
+	var rope := RopeSim.new()
+	rope.grounded = false
+	rope.attached = true
+	rope.anchor = Vector2(0,4)
+	rope.pos = Vector2(0,1)
+	var time := 0.0
+	for i in range(30):
+		time += 1.0/30
+		events.animate(rope,rope.anchor,true,time)
+	rope.attached = false
+	events.flight_info = {"release_reason":"ice_slip"}
+	time += 1.0/30
+	events.animate(rope,rope.anchor,false,time)
+	check(events.state=="slip","a grip that fails makes the hero slip (%s)" % events.state)
+	events.flight_info = {"release_reason":"manual"}
+	rope.attached = true
+	for i in range(10):
+		time += 1.0/30
+		events.animate(rope,rope.anchor,true,time)
+	rope.attached = false
+	time += 1.0/30
+	events.animate(rope,rope.anchor,false,time)
+	check(events.state=="release","letting go by hand releases (%s)" % events.state)
+	rope.grounded = true
+	rope.vel = Vector2.ZERO
+	for i in range(30):
+		time += 1.0/30
+		events.animate(rope,rope.pos+Vector2(2,3),false,time)
+	events.hero_event("revive")
+	time += 1.0/30
+	events.animate(rope,rope.pos+Vector2(2,3),false,time)
+	check(events.state=="revive","the revive event plays the revive (%s)" % events.state)
+	for i in range(40):
+		time += 1.0/30
+		events.animate(rope,rope.pos+Vector2(2,3),false,time)
+	# Summit: the result screen stops the game clock; the cheer still moves.
+	events.hero_event("summit")
+	var hand: int = events.bone_index["hand_near"]
+	var poses: Array[Vector3] = []
+	for i in range(12):
+		OS.delay_msec(25)
+		events.animate(rope,rope.pos+Vector2(2,3),false,time)
+		events.skeleton.force_update_all_bone_transforms()
+		poses.append(events.skeleton.get_bone_global_pose(hand).origin)
+	check(events.state=="summit","the summit event plays the cheer (%s)" % events.state)
+	check(poses[0].distance_to(poses[-1])>.03,"the cheer moves while the game clock is stopped")
+	events.queue_free()
 
 func finish() -> void:
 	print("HERO_MODEL_TESTS ",checks," checks, ",failures.size()," failures")

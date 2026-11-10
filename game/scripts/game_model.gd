@@ -89,7 +89,7 @@ static func fresh_profile() -> Dictionary:
 		"cleared_locations": [], "runs": 0, "wins": 0, "last_settled": "", "active": {},
 		"vibration": true, "notifications": true, "graphics_quality": "high", "loot_prices": "always",
 		"selected_location":0,"run_history":[],"learned_controls":[],"camera_zoom":1.0,
-		"records":{},"route_choices":{},"settings":GameSettings.defaults()}
+		"records":{},"route_choices":{},"settings":GameSettings.defaults(),"outfit":{},"outfit_owned":[]}
 
 static func build_version() -> String:
 	return str(ProjectSettings.get_setting("application/config/version",""))
@@ -128,6 +128,7 @@ func load_profile() -> void:
 		if source_version<7: _migrate_settings(parsed)
 		if str(profile["loot_prices"]) not in ["near","always"]: profile["loot_prices"] = "always"
 		_sanitize_progress()
+		HeroOutfit.sanitize(profile)
 		if not profile["learned_controls"] is Array: profile["learned_controls"] = []
 		profile["learned_controls"] = profile["learned_controls"].filter(func(action): return action in ["aim","swing","rope","release"])
 		if not profile["run_history"] is Array: profile["run_history"] = []

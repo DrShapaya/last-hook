@@ -300,11 +300,12 @@ func test_route_fill(game) -> void:
 
 func test_small_plates(game) -> void:
 	await open_section(game,"graphics")
-	var badge: Panel = game.hud.lobby_view.soon_badge
+	var badge: Panel = game.hud.lobby_view.soon_tag(game.hud.content,Vector2.ZERO)
 	var box := badge.get_theme_stylebox("panel") as StyleBoxFlat
 	check(box.corner_radius_top_left*2+box.border_width_bottom+4<=badge.size.y,"the corners of a small plate fit inside it with room to spare")
 
 func test_about(game) -> void:
+	badge.queue_free()
 	await open_section(game,"about")
 	var names := all_buttons(game)
 	check(names.has("Что нового"),"the about page offers the news")

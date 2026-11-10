@@ -6,12 +6,14 @@ extends ExplorerRig
 # state. Same interface as ExplorerSprite (animate, grip_position, hero),
 # so ExplorerView can drive either.
 #
-# Light: the model carries its own shading (HERO_SHADER): warm key from the
-# upper left, cool fill, rim and baked normals. The level's light is weak and
-# cold (the painted hero is unshaded), and with the Compatibility renderer each
-# extra light is another pass, so the hero lights itself in one pass.
+# One model everywhere (the owner, 2026-11-10: no simplified game model):
+# tools/blender/export_showcase.py exports the detailed hero with every
+# buckle, lace and tread as geometry, colour and occlusion in its vertices.
+# The hero brings his own lights, which light only him (HERO_LAYER): the
+# level's light is weak and cold. Shadows only in close-ups.
 
 const MODEL := "res://assets/hero/model/hero.glb"
+const HERO_LAYER := 1 << 19 # Render layer 20: the hero's own lights reach only him.
 # Drawn as large as the painted hero reads on screen (ExplorerSprite is
 # painted bigger than the physics body); the rope still leaves from the hand.
 const HEIGHT := 1.16
@@ -29,41 +31,57 @@ const ROPE_STATES := ["latch","swing","release","slip"]
 
 const HERO_SHADER := """
 shader_type spatial;
-render_mode unshaded, cull_back;
-uniform sampler2D albedo_tex : source_color, filter_linear_mipmap;
-uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap;
-uniform sampler2D rough_tex : hint_default_white, filter_linear_mipmap;
-uniform vec3 key_dir = vec3(-.55, .65, .55);
-uniform vec3 key_color : source_color = vec3(1.0, .93, .80);
-uniform float key_energy = 1.05;
-uniform vec3 fill_dir = vec3(.8, .1, .6);
-uniform vec3 fill_color : source_color = vec3(.62, .72, .86);
-uniform float fill_energy = .32;
-uniform vec3 ambient : source_color = vec3(.42, .43, .46);
-uniform vec3 rim_color : source_color = vec3(1.0, .86, .62);
-uniform float rim_energy = .35;
-uniform float tint_mix = 0.0;
-uniform vec3 tint : source_color = vec3(1.0);
+render_mode cull_back, specular_schlick_ggx;
+uniform vec3 slot_base[7];
+uniform vec3 slot_target[7];
+uniform float slot_window[7];
+uniform float flash_code = 0.0;
+uniform float flash = 0.0;
+varying float slot_code;
+varying float metal;
+varying float rough;
+vec3 rgb2hsv(vec3 c) {
+	vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+	vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+	vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+	float d = q.x - min(q.w, q.y);
+	return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);
+}
+vec3 hsv2rgb(vec3 c) {
+	vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+	return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+void vertex() {
+	// UV carries data: x = wardrobe slot code (+ 0.5 for metal), y = roughness
+	// (glTF stores V flipped).
+	// Import compresses UVs: 1.0 arrives as 0.9997, so decode with margins
+	// (floor/fract of the raw value made fabric read as dark metal in patches).
+	slot_code = floor(UV.x + .25);
+	metal = step(.25, abs(UV.x - slot_code));
+	rough = 1.0 - UV.y;
+}
 void fragment() {
-	vec3 albedo = texture(albedo_tex, UV).rgb;
-	// Z rebuilt from X and Y: correct however the normal map is compressed.
-	vec2 nxy = texture(normal_tex, UV).rg * 2.0 - 1.0;
-	vec3 nm = vec3(nxy, sqrt(max(0.0, 1.0 - dot(nxy, nxy))));
-	vec3 n = normalize(TANGENT * nm.x + BINORMAL * nm.y + NORMAL * nm.z);
-	vec3 key = normalize((VIEW_MATRIX * vec4(key_dir, 0.0)).xyz);
-	vec3 fill = normalize((VIEW_MATRIX * vec4(fill_dir, 0.0)).xyz);
-	float rough = texture(rough_tex, UV).r;
-	// Wrapped diffuse: soft terminator like the reference renders.
-	float k = clamp((dot(n, key) + .25) / 1.25, 0.0, 1.0);
-	float f = clamp((dot(n, fill) + .4) / 1.4, 0.0, 1.0);
-	vec3 h = normalize(key + VIEW);
-	// Moderate gloss: smooth metal (the thermos cap) burned out to white.
-	float gloss = mix(36.0, 6.0, rough);
-	float spec = pow(max(dot(n, h), 0.0), gloss) * (1.0 - rough) * .28;
-	float rim = pow(1.0 - max(dot(n, VIEW), 0.0), 3.0) * rim_energy;
-	vec3 light = ambient + key_color * key_energy * k + fill_color * fill_energy * f;
-	vec3 color = albedo * light + key_color * spec + rim_color * rim * albedo;
-	ALBEDO = mix(color, color * tint, tint_mix);
+	// Vertex colours arrive linear (glTF); this renderer shades in the space
+	// colours are stored in (sRGB, like the textures and the wardrobe's colours).
+	vec3 srgb = pow(max(COLOR.rgb, vec3(0.0)), vec3(1.0 / 2.2));
+	int code = clamp(int(slot_code + .5), 0, 6);
+	float window = slot_window[code];
+	if (window > 0.0) {
+		vec3 hsv = rgb2hsv(srgb);
+		vec3 base = slot_base[code];
+		vec3 target = slot_target[code];
+		float dh = abs(fract(hsv.x - base.x + .5) - .5);
+		float fabric = (1.0 - smoothstep(window * .6, window, dh)) * smoothstep(.08, .2, hsv.y);
+		vec3 dyed = vec3(fract(target.x + hsv.x - base.x), clamp(hsv.y * target.y / max(base.y, .01), 0.0, 1.0),
+			clamp(hsv.z * target.z / max(base.z, .01), 0.0, 1.0));
+		srgb = mix(srgb, hsv2rgb(dyed), fabric);
+	}
+	if (flash > 0.0 && abs(slot_code - flash_code) < .5) srgb = mix(srgb, vec3(1.0, .95, .8), flash * .6);
+	ALBEDO = srgb;
+	AO = COLOR.a;
+	AO_LIGHT_AFFECT = .5;
+	ROUGHNESS = clamp(rough, .3, 1.0);
+	METALLIC = metal * .8;
 }
 """
 
@@ -72,10 +90,16 @@ void fragment() {
 const OUTLINE_SHADER := """
 shader_type spatial;
 render_mode unshaded, cull_front;
-uniform float width = .0075;
-uniform vec3 color : source_color = vec3(.10, .07, .05);
+// Width on screen in pixels, the same near and far: a model-space shell grew
+// thick in the character screen's close-ups and thin in the climb.
+uniform float width_px = 1.5;
+uniform vec3 color : source_color = vec3(.12, .085, .06);
 void vertex() {
-	VERTEX += NORMAL * width;
+	vec4 clip = PROJECTION_MATRIX * (MODELVIEW_MATRIX * vec4(VERTEX, 1.0));
+	vec3 view_normal = normalize((MODELVIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	vec2 dir = (PROJECTION_MATRIX * vec4(view_normal, 0.0)).xy;
+	if (dot(dir, dir) > 1e-8) clip.xy += normalize(dir) * width_px * 2.0 / VIEWPORT_SIZE * clip.w;
+	POSITION = clip;
 }
 void fragment() {
 	ALBEDO = color;
@@ -157,6 +181,7 @@ var walk_speed := 2.6
 var state := "idle"
 var state_time := 0.0
 var last_time := -1.0
+var last_real := -1.0
 var current := {} # bone -> applied angle
 var turn := 0.0
 var stride := 0.0
@@ -166,8 +191,18 @@ var impact := 0.0
 var last_vertical_speed := 0.0
 var previous_grounded := true
 var forced_state := "" # Preview only: hold a state regardless of the motion.
+# Head turn to the side (radians, + toward the hero's left); the character
+# screen sets it, the climb leaves it at 0.
+var look_yaw := 0.0
+# Extra bone angles on top of the clip (the character screen's small actions).
+var pose_offset := {}
+const LOOK_SHARE := {"head":.7,"neck":.2,"chest":.15}
 
-func setup() -> void:
+var lights: Array[DirectionalLight3D] = []
+
+# close_up: the character screen (shadows, rim light); full: false on the
+# battery setting (one light, no shadows).
+func setup(close_up: bool = false, full: bool = true) -> void:
 	if is_instance_valid(model): return
 	name = "HeroModel"
 	model = (load(MODEL) as PackedScene).instantiate()
@@ -176,27 +211,69 @@ func setup() -> void:
 	add_child(model)
 	skeleton = _find(model,"Skeleton3D") as Skeleton3D
 	mesh = _find(model,"MeshInstance3D") as MeshInstance3D
+	mesh.layers = HERO_LAYER
 	for index in range(skeleton.get_bone_count()):
 		bone_index[skeleton.get_bone_name(index)] = index
 		bone_rest[index] = skeleton.get_bone_rest(index).basis.get_rotation_quaternion()
 		bone_axis[index] = (skeleton.get_bone_global_rest(index).basis.inverse()*Vector3(0,0,1)).normalized()
-	var baked := mesh.mesh.surface_get_material(0) as BaseMaterial3D
 	var shader := Shader.new()
 	shader.code = HERO_SHADER
 	shader_material = ShaderMaterial.new()
 	shader_material.shader = shader
-	shader_material.set_shader_parameter("albedo_tex",baked.albedo_texture)
-	shader_material.set_shader_parameter("normal_tex",baked.normal_texture)
-	shader_material.set_shader_parameter("rough_tex",baked.roughness_texture)
-	var outline_shader := Shader.new()
-	outline_shader.code = OUTLINE_SHADER
-	var outline := ShaderMaterial.new()
-	outline.shader = outline_shader
-	shader_material.next_pass = outline
+	# The climb keeps a thin outline: the small hero must read on grey rock.
+	# Close-ups go without (lights and shadows carry the form, as in Blender).
+	if not close_up:
+		var outline_shader := Shader.new()
+		outline_shader.code = OUTLINE_SHADER
+		var outline := ShaderMaterial.new()
+		outline.shader = outline_shader
+		shader_material.next_pass = outline
 	mesh.material_override = shader_material
+	_add_lights(close_up,full)
+	set_outfit(HeroOutfit.worn)
 	grip = Marker3D.new()
 	add_child(grip)
 	_apply(STAND)
+
+# The hero's own lights, as in the Blender renders: a warm key from the upper
+# left (with soft shadows in close-ups: buckles, laces and straps cast them),
+# a cool fill from the right, a rim from behind in close-ups. They stay put
+# while the hero turns (top_level) and light only the hero (HERO_LAYER).
+func _add_lights(close_up: bool, full: bool) -> void:
+	# In the climb the level's sun adds to the key, so it is weaker there.
+	var key_energy := (2.1 if full else 2.4) if close_up else 1.6
+	var specs := [[Vector3(.55,-.65,-.55),Color(1.0,.86,.68),key_energy,close_up and full]]
+	if full: specs.append([Vector3(-.8,-.15,-.6),Color(.62,.72,.9),.55,false])
+	if full and close_up: specs.append([Vector3(.2,-.4,1.0),Color(1.0,.88,.7),.9,false])
+	for spec in specs:
+		var light := DirectionalLight3D.new()
+		light.top_level = true
+		light.light_cull_mask = HERO_LAYER
+		light.light_color = spec[1]
+		light.light_energy = spec[2]
+		light.shadow_enabled = spec[3]
+		if light.shadow_enabled:
+			# Biased off the surface: curved fabric shadowed itself in dashes.
+			light.shadow_bias = .08
+			light.shadow_normal_bias = 4.0
+			light.shadow_blur = 1.6
+			light.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+			light.directional_shadow_max_distance = 8.0
+		add_child(light)
+		light.global_transform = Transform3D(Basis.looking_at(spec[0],Vector3.UP),Vector3.ZERO)
+		lights.append(light)
+
+# The close-up world's sky light (the climb has the level's own).
+static func showcase_environment(parent: Node) -> void:
+	var environment := Environment.new()
+	environment.background_mode = Environment.BG_CLEAR_COLOR
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	environment.ambient_light_color = Color(.52,.57,.66)
+	environment.ambient_light_energy = .55
+	environment.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+	var world := WorldEnvironment.new()
+	world.environment = environment
+	parent.add_child(world)
 
 static func _find(node: Node, type: String) -> Node:
 	if node.is_class(type): return node
@@ -218,6 +295,10 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	if new_state!=state:
 		state = new_state
 		state_time = 0.0
+	# The result screen stops the game clock; the summit cheer keeps going.
+	var now := Time.get_ticks_usec()/1000000.0
+	if dt==0.0 and state=="summit" and last_real>=0: dt = clampf(now-last_real,0,.1)
+	last_real = now
 	# On the rope the hero keeps the facing it caught with: the anchor passes
 	# overhead every half swing, and following it turned the body around twice
 	# a swing (a flat sprite hides that, a 3D body shows its back mid-turn).
@@ -261,6 +342,7 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	if sim.grounded: applied["spine"] = float(applied.get("spine",0.0))+lean
 	applied["backpack"] = float(applied.get("backpack",0.0))+pack
 	applied["head"] = float(applied.get("head",0.0))-pack*.25
+	for bone in pose_offset: applied[bone] = float(applied.get(bone,0.0))+float(pose_offset[bone])
 	_apply(applied)
 	_plant_feet(sim.grounded,dt)
 	grip.position = to_local(grip_position())
@@ -360,7 +442,13 @@ func _plant_feet(grounded: bool, dt: float) -> void:
 func _apply(angles: Dictionary) -> void:
 	for bone in bone_index:
 		var index: int = bone_index[bone]
-		skeleton.set_bone_pose_rotation(index,bone_rest[index]*Quaternion(bone_axis[index],float(angles.get(bone,0.0))))
+		var rotation_: Quaternion = bone_rest[index]*Quaternion(bone_axis[index],float(angles.get(bone,0.0)))
+		# Looking around (the character screen): the head and a little of the
+		# chest turn about the body's up axis, which the side-on clips never use.
+		if look_yaw!=0.0 and bone in LOOK_SHARE:
+			var up: Vector3 = (skeleton.get_bone_global_rest(index).basis.inverse()*Vector3.UP).normalized()
+			rotation_ = rotation_*Quaternion(up,look_yaw*float(LOOK_SHARE[bone]))
+		skeleton.set_bone_pose_rotation(index,rotation_)
 
 # Where the rope leaves the near hand, in world space.
 func grip_position() -> Vector3:
@@ -368,6 +456,13 @@ func grip_position() -> Vector3:
 	var hand: Transform3D = skeleton.get_bone_global_pose(bone_index["hand_near"])
 	var tip := hand*Vector3(0,.06,0) # Along the hand bone, inside the fist.
 	return skeleton.global_transform*tip
+
+# Recolours the wardrobe slots (HeroOutfit ids per slot).
+func set_outfit(outfit: Dictionary) -> void:
+	var values := HeroOutfit.shader_values(outfit)
+	shader_material.set_shader_parameter("slot_base",values["base"])
+	shader_material.set_shader_parameter("slot_target",values["target"])
+	shader_material.set_shader_parameter("slot_window",values["window"])
 
 func hero_event(name_: String) -> void:
 	hero.event(name_)

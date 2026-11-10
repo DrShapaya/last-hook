@@ -31,7 +31,10 @@ func shown_rect(control: Control) -> Rect2:
 
 func buttons_do_not_overlap(node: Node) -> bool:
 	var buttons: Array[Button] = []
-	for child in node.find_children("*","Button",true,false): buttons.append(child)
+	# A button scrolled out of its clip shows nothing and overlaps nothing
+	# (its empty rect, shrunk by grow(-1), went negative and logged errors).
+	for child in node.find_children("*","Button",true,false):
+		if shown_rect(child).has_area(): buttons.append(child)
 	for i in range(buttons.size()):
 		for j in range(i+1,buttons.size()):
 			if shown_rect(buttons[i]).grow(-1).intersects(shown_rect(buttons[j]).grow(-1)):

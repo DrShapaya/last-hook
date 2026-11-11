@@ -13,6 +13,7 @@ extends ExplorerRig
 # level's light is weak and cold. Shadows only in close-ups.
 
 const MODEL := "res://assets/hero/model/hero.glb"
+const DETAIL := "res://assets/hero/model/hero_detail.png"
 const HERO_LAYER := 1 << 19 # Render layer 20: the hero's own lights reach only him.
 # Drawn as large as the painted hero reads on screen (ExplorerSprite is
 # painted bigger than the physics body); the rope still leaves from the hand.
@@ -37,8 +38,18 @@ uniform vec3 slot_target[7];
 uniform float slot_window[7];
 uniform float flash_code = 0.0;
 uniform float flash = 0.0;
+// Tiling surface detail (tools/blender/make_detail_maps.py): R woven nylon,
+// G twill, B leather grain, A suede, laid on the detail UV (hero units).
+uniform sampler2D detail_map : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform float detail_tile = .05;
+uniform float detail_depth = 1.0; // Relief strength; the climb's small hero needs less.
+// Close-ups: a rim of light round the silhouette from one side (view space),
+// so the hero stands off the painted background whichever way he turns.
+uniform vec3 rim_color = vec3(0.0);
+uniform vec3 rim_side = vec3(-.6, .55, 0.0);
+uniform float rim_power = 3.0;
 varying float slot_code;
-varying float metal;
+varying float kind;
 varying float rough;
 vec3 rgb2hsv(vec3 c) {
 	vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
@@ -52,13 +63,12 @@ vec3 hsv2rgb(vec3 c) {
 	return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
 }
 void vertex() {
-	// UV carries data: x = wardrobe slot code (+ 0.5 for metal), y = roughness
-	// (glTF stores V flipped).
-	// Import compresses UVs: 1.0 arrives as 0.9997, so decode with margins
-	// (floor/fract of the raw value made fabric read as dark metal in patches).
-	slot_code = floor(UV.x + .25);
-	metal = step(.25, abs(UV.x - slot_code));
-	rough = 1.0 - UV.y;
+	// UV2 carries data (tools/blender/export_showcase.py): x = wardrobe slot
+	// code + .05 + material kind / 10, y = roughness (glTF stores V flipped).
+	// Import compresses UVs a little, so decode with margins.
+	slot_code = floor(UV2.x + .02);
+	kind = floor((UV2.x - slot_code) * 10.0 + .02);
+	rough = 1.0 - UV2.y;
 }
 void fragment() {
 	// Vertex colours arrive linear (glTF); this renderer shades in the space
@@ -77,11 +87,36 @@ void fragment() {
 		srgb = mix(srgb, hsv2rgb(dyed), fabric);
 	}
 	if (flash > 0.0 && abs(slot_code - flash_code) < .5) srgb = mix(srgb, vec3(1.0, .95, .8), flash * .6);
+	// Detail per material kind: 1 nylon, 2 twill, 3 leather, 4 suede,
+	// 5 rubber, 6 paint, 7 metal, 8 felt (0 plain).
+	int k = int(kind + .5);
+	vec4 pick = vec4(float(k == 1 || k == 8), float(k == 2), float(k == 3 || k == 5 || k == 6), float(k == 4));
+	float scale = k == 6 ? 3.0 : (k == 8 ? 1.6 : (k == 5 ? .7 : 1.0));
+	float amount = k == 6 ? .25 : (k == 5 ? .5 : (k == 4 ? .7 : (k == 2 ? .7 : (k == 0 || k == 7 ? 0.0 : 1.0))));
+	float h = dot(texture(detail_map, UV / (detail_tile * scale)), pick);
+	float relief = amount * detail_depth;
+	// Bump from the height's screen derivatives (no tangents needed).
+	vec3 n = normalize(NORMAL);
+	vec3 dp1 = dFdx(VERTEX);
+	vec3 dp2 = dFdy(VERTEX);
+	vec3 r1 = cross(dp2, n);
+	vec3 r2 = cross(n, dp1);
+	float det = dot(dp1, r1);
+	float hs = h * .0007 * relief;
+	vec3 grad = sign(det) * (dFdx(hs) * r1 + dFdy(hs) * r2);
+	NORMAL = normalize(abs(det) * n - grad);
+	// Weave hollows and grain cracks a little darker; raised threads catch light.
+	srgb *= mix(1.0, .84 + .3 * h, relief * .4);
 	ALBEDO = srgb;
 	AO = COLOR.a;
 	AO_LIGHT_AFFECT = .5;
-	ROUGHNESS = clamp(rough, .3, 1.0);
-	METALLIC = metal * .8;
+	ROUGHNESS = clamp(rough + (.5 - h) * .12 * relief, .3, 1.0);
+	METALLIC = k == 7 ? .8 : 0.0;
+	if (rim_color != vec3(0.0)) {
+		float facing = 1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0);
+		float side = clamp(dot(NORMAL, normalize(rim_side)) * .7 + .3, 0.0, 1.0);
+		EMISSION = rim_color * pow(facing, rim_power) * side * (.3 + .7 * srgb) * COLOR.a;
+	}
 }
 """
 
@@ -220,6 +255,9 @@ func setup(close_up: bool = false, full: bool = true) -> void:
 	shader.code = HERO_SHADER
 	shader_material = ShaderMaterial.new()
 	shader_material.shader = shader
+	shader_material.set_shader_parameter("detail_map",load(DETAIL))
+	# The small climbing hero shows the weave only as a texture, not relief.
+	shader_material.set_shader_parameter("detail_depth",1.0 if close_up else .5)
 	# The climb keeps a thin outline: the small hero must read on grey rock.
 	# Close-ups go without (lights and shadows carry the form, as in Blender).
 	if not close_up:
@@ -235,22 +273,26 @@ func setup(close_up: bool = false, full: bool = true) -> void:
 	add_child(grip)
 	_apply(STAND)
 
-# The hero's own lights, as in the Blender renders: a warm key from the upper
-# left (with soft shadows in close-ups: buckles, laces and straps cast them),
-# a cool fill from the right, a rim from behind in close-ups. They stay put
-# while the hero turns (top_level) and light only the hero (HERO_LAYER).
+# The hero's own lights. They stay put while the hero turns (top_level) and
+# light only the hero (HERO_LAYER).
+#
+# Close-ups (the character screen) get a studio setup tuned to its camera,
+# which looks from the front and a little to the right (+X): a warm key high
+# on the camera's right with soft shadows, a cool fill low on the left that
+# keeps the shadow side readable (the face is never black, whichever way he
+# turns), a strong back light for a bright edge, and in the shader a rim of
+# sky light round the silhouette that separates him from the painting. Kept
+# below clipping: the white "Пурга" jacket and the yellow head stay
+# coloured, not burnt white.
 func _add_lights(close_up: bool, full: bool) -> void:
 	# In the climb the level's sun adds to the key, so it is weaker there.
 	var specs: Array
 	if close_up:
-		# The character screen turns the hero three-quarters to the viewer's
-		# right (+X); the key comes from the side he faces, high and in front,
-		# so the face and chest are lit (from the left they sat in shadow).
-		specs = [[Vector3(-.5,-.62,-.6),Color(1.0,.9,.78),1.35 if full else 1.8,full]]
+		specs = [[Vector3(-.78,-.55,-.34),Color(1.0,.95,.88),1.4 if full else 1.6,full]] # Key, from the right side.
 		if full:
-			specs.append([Vector3(.85,-.2,-.5),Color(.7,.78,.92),.45,false]) # Fill from the left.
-			specs.append([Vector3(.35,-.35,1.0),Color(1.0,.92,.8),.8,false]) # Rim from behind.
-			specs.append([Vector3(-.15,-.1,-1.0),Color(1,1,1),.18,false]) # A soft front fill.
+			specs.append([Vector3(.85,-.1,-.5),Color(.72,.8,.95),.4,false]) # Fill from the left.
+			specs.append([Vector3(.45,-.4,1.0),Color(1.0,.9,.74),1.25,false]) # Back light: the bright edge.
+			specs.append([Vector3(-.1,.2,-1.0),Color(.95,.95,1.0),.1,false]) # Low front fill: under the head.
 	else:
 		specs = [[Vector3(.55,-.65,-.55),Color(1.0,.86,.68),1.6,false]]
 		if full: specs.append([Vector3(-.8,-.15,-.6),Color(.62,.72,.9),.55,false])
@@ -262,15 +304,20 @@ func _add_lights(close_up: bool, full: bool) -> void:
 		light.light_energy = spec[2]
 		light.shadow_enabled = spec[3]
 		if light.shadow_enabled:
-			# Biased off the surface: curved fabric shadowed itself in dashes.
-			light.shadow_bias = .08
-			light.shadow_normal_bias = 4.0
-			light.shadow_blur = 1.6
+			# A small, tight shadow box round the hero (sharp map), softened by
+			# blur; a light bias so straps, the head and the arms cast shadows
+			# without the curved cloth shadowing itself in dashes.
+			light.shadow_bias = .03
+			light.shadow_normal_bias = 1.2
+			light.shadow_blur = 2.2
 			light.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
-			light.directional_shadow_max_distance = 8.0
+			light.directional_shadow_max_distance = 6.5
 		add_child(light)
 		light.global_transform = Transform3D(Basis.looking_at(spec[0],Vector3.UP),Vector3.ZERO)
 		lights.append(light)
+	if close_up and full:
+		shader_material.set_shader_parameter("rim_color",Color(.55,.62,.75))
+		shader_material.set_shader_parameter("rim_power",2.6)
 
 # The close-up world's sky light (the climb has the level's own).
 static func showcase_environment(parent: Node) -> void:
@@ -278,8 +325,8 @@ static func showcase_environment(parent: Node) -> void:
 	environment.background_mode = Environment.BG_CLEAR_COLOR
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	# Neutral-warm: a blue fill turned the white and yellow parts grey.
-	environment.ambient_light_color = Color(.62,.63,.66)
-	environment.ambient_light_energy = .5
+	environment.ambient_light_color = Color(.64,.65,.68)
+	environment.ambient_light_energy = .46
 	environment.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	var world := WorldEnvironment.new()
 	world.environment = environment
@@ -450,6 +497,13 @@ func _plant_feet(grounded: bool, dt: float) -> void:
 	model.position.y = FEET_Y-plant
 
 func _apply(angles: Dictionary) -> void:
+	# The jacket's hem bones (tools/blender/export_hero.py): the front follows
+	# a thigh swinging forward, the back a thigh swinging back.
+	angles = angles.duplicate()
+	for side in ["near","far"]:
+		var thigh := float(angles.get("thigh_"+side,0.0))
+		angles["hem_fwd_"+side] = maxf(thigh,0.0)
+		angles["hem_back_"+side] = minf(thigh,0.0)
 	for bone in bone_index:
 		var index: int = bone_index[bone]
 		var rotation_: Quaternion = bone_rest[index]*Quaternion(bone_axis[index],float(angles.get(bone,0.0)))

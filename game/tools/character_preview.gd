@@ -9,6 +9,7 @@ extends SceneTree
 #   [--gold=N]
 #   [--demo] (a scripted visit, a frame every 1/15 s: idle, a spin, try-ons
 #   and a purchase in the jacket slot, boots, the backpack, a tap; use --gold)
+#   [--yaw=-1.57] (hold the hero turned: -.72 three-quarters, -1.57 front, 1.57 back)
 # Needs a window. LASTHOOK_SAVE_DIR must point to a throwaway save folder.
 
 var out := "user://character"
@@ -21,6 +22,7 @@ var tag := ""
 var open_slot := ""
 var try_on := ""
 var gold := -1
+var yaw := INF # --yaw=radians: hold the hero turned (REST_YAW is -.72, front -1.57).
 var window_size := Vector2i(540,960)
 
 func _initialize() -> void:
@@ -40,6 +42,7 @@ func run() -> void:
 		if argument.begins_with("--slot="): open_slot = argument.trim_prefix("--slot=")
 		if argument.begins_with("--try="): try_on = argument.trim_prefix("--try=")
 		if argument.begins_with("--gold="): gold = int(argument.trim_prefix("--gold="))
+		if argument.begins_with("--yaw="): yaw = float(argument.trim_prefix("--yaw="))
 		if argument.begins_with("--outfit="):
 			for id in argument.trim_prefix("--outfit=").split(","): outfit[HeroOutfit.slot_of(id)] = id
 	DirAccess.make_dir_recursive_absolute(out)
@@ -61,6 +64,9 @@ func run() -> void:
 		var screen: CharacterScreen = game.hud.lobby_view.character_screen
 		if not open_slot.is_empty(): screen.pick_slot(open_slot)
 		if not try_on.is_empty(): screen.pick_colour(try_on)
+		if yaw!=INF:
+			screen.yaw = yaw
+			screen.yaw_goal = yaw
 		await create_timer(1.6).timeout
 	if demo:
 		await play_demo(game.hud.lobby_view.character_screen,name)

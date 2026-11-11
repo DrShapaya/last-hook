@@ -49,7 +49,8 @@ REUSE_BAKE = "--reuse-bake" in args
 DETAIL_WORDS = ("Строчка", "Шов", "Рант", "Зубцы", "Носок", "Край", "Пряжка", "Люверс", "Шнурок", "Бант",
                 "Блик", "Кнопка", "Протектор", "Рифление", "Бегунок", "Торец", "Держатель", "Стяжка",
                 "Ремешок", "Пластина", "Язычок", "Манжета", "Ремень", "Лямка", "Пояс", "Подол",
-                "Планка", "Нагрудный", "Наколенник", "Отворот", "Каблук", "Клапан", "Карман брюк")
+                "Планка", "Нагрудный", "Наколенник", "Отворот", "Каблук", "Клапан", "Карман брюк", "Язык",
+                "Боковой", "Карман куртки")
 # Kept as low parts even though they are small or match a word above.
 # The head strap and its buckle stand off the head: baked flat they read as
 # a blurred sticker past the head's edge, so they stay geometry.
@@ -57,17 +58,11 @@ KEEP = ("Глаз", "Подошва", "Карман рюкзака", "Клапа
 
 # ---------------------------------------------------------------- skeleton
 
-S, E, W = (-0.005, 0.655), (0.0, 0.555), (0.01, 0.46)
-ARM_Y, LEG_Y = 0.145, 0.076  # Must match build_hero.py.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hero_joints as HJ  # noqa: E402  The same joints as the model (build_hero.py).
 
-
-def arm(side):
-    y = -ARM_Y if side == "near" else ARM_Y
-    k = 1 if side == "near" else -1
-    sh = Vector((S[0], y, S[1]))
-    el = Vector((E[0] + 0.012, y - 0.01 * k, E[1]))
-    wr = Vector((W[0] + 0.02, y - 0.012 * k, W[1]))
-    return sh, el, wr
+ARM_Y, LEG_Y = HJ.ARM_Y, HJ.LEG_Y
+arm = HJ.arm_points
 
 
 BONES = {}  # name -> (head, tail, parent)
@@ -75,22 +70,28 @@ BONES = {}  # name -> (head, tail, parent)
 
 def define_bones():
     BONES["root"] = (Vector((0, 0, 0)), Vector((0, 0, 0.1)), None)
-    BONES["pelvis"] = (Vector((0, 0, 0.40)), Vector((0, 0, 0.46)), "root")
-    BONES["spine"] = (Vector((0, 0, 0.46)), Vector((0, 0, 0.56)), "pelvis")
-    BONES["chest"] = (Vector((0, 0, 0.56)), Vector((0.005, 0, 0.68)), "spine")
-    BONES["neck"] = (Vector((0.005, 0, 0.68)), Vector((0.01, 0, 0.72)), "chest")
-    BONES["head"] = (Vector((0.01, 0, 0.72)), Vector((0.03, 0, 1.0)), "neck")
-    BONES["backpack"] = (Vector((-0.2, 0, 0.45)), Vector((-0.2, 0, 0.75)), "chest")
+    BONES["pelvis"] = (Vector((0, 0, HJ.HIP - 0.05)), Vector((0, 0, HJ.HIP + 0.012)), "root")
+    BONES["spine"] = (Vector((0, 0, HJ.HIP + 0.012)), Vector((0, 0, 0.565)), "pelvis")
+    BONES["chest"] = (Vector((0, 0, 0.565)), Vector((0.005, 0, HJ.NECK - 0.03)), "spine")
+    BONES["neck"] = (Vector((0.005, 0, HJ.NECK - 0.03)), Vector((0.01, 0, HJ.HEAD_BOTTOM - 0.01)), "chest")
+    BONES["head"] = (Vector((0.01, 0, HJ.HEAD_BOTTOM - 0.01)), Vector((0.03, 0, HJ.HEAD_TOP)), "neck")
+    BONES["backpack"] = (Vector((-0.19, 0, 0.45)), Vector((-0.19, 0, 0.75)), "chest")
     for side in ("near", "far"):
         sh, el, wr = arm(side)
         down = (wr - el).normalized()
         BONES["upper_arm_" + side] = (sh, el, "chest")
         BONES["forearm_" + side] = (el, wr, "upper_arm_" + side)
         BONES["hand_" + side] = (wr, wr + down * 0.1, "forearm_" + side)
-        y = -LEG_Y if side == "near" else LEG_Y
-        BONES["thigh_" + side] = (Vector((-0.005, y, 0.44)), Vector((0.012, y, 0.255)), "pelvis")
-        BONES["shin_" + side] = (Vector((0.012, y, 0.255)), Vector((0.0, y, 0.085)), "thigh_" + side)
-        BONES["foot_" + side] = (Vector((0.0, y, 0.085)), Vector((0.12, y, 0.03)), "shin_" + side)
+        hip, knee, ankle = HJ.leg_points(side)
+        BONES["thigh_" + side] = (hip, knee, "pelvis")
+        BONES["shin_" + side] = (knee, ankle, "thigh_" + side)
+        BONES["foot_" + side] = (ankle, Vector((0.12, ankle.y, 0.03)), "shin_" + side)
+        # Jacket hem, driven by the game (hero_model.gd): the front follows
+        # the thigh only when it swings forward, the back only when it swings
+        # back. Plain thigh weights either tore the back on a stride or pushed
+        # it into the seat in a crouch. Same axis as the thigh.
+        BONES["hem_fwd_" + side] = (hip, knee, "pelvis")
+        BONES["hem_back_" + side] = (hip, knee, "pelvis")
 
 
 def allowed_bones(name):
@@ -100,7 +101,9 @@ def allowed_bones(name):
         return ["head"]
     if name.startswith("Шея"):
         return ["neck", "head"]
-    if name.startswith(("Куртка", "Капюшон", "Карман")) and "рюкзака" not in name:
+    if name.startswith("Куртка"):
+        return ["spine", "chest", "neck", "pelvis"]  # Plus the hem bones, given in weight_part.
+    if name.startswith(("Капюшон", "Карман")) and "рюкзака" not in name:
         # Not the arms: a raised arm dragged half the jacket's side into a
         # curtain from the elbow to the waist. The sleeve follows the arm.
         return ["spine", "chest", "neck", "pelvis"]
@@ -189,17 +192,53 @@ def weight_part(obj, as_name=None):
         top = scores[:2]
         total = sum(sc for sc, _ in top)
         weights = {n: sc / total for sc, n in top}
+        if as_name.startswith("Рукав"):
+            # Set-in sleeve: only the armhole, deep inside the jacket, stays
+            # with the chest; the shoulder cap turns with the arm (held to
+            # the chest it tore into a dark wedge under a raised arm).
+            share = min(1.0, max(0.0, (ARM_Y - 0.032 - abs(co.y)) / 0.02)) * min(1.0, max(0.0, (co.z - (HJ.SHOULDER[1] - 0.06)) / 0.03))
+            if share > 0:
+                weights = {n: w * (1 - share) for n, w in weights.items()}
+                weights["chest"] = weights.get("chest", 0.0) + share
+        if pants and co.z > 0.4:
+            # The seat and the waist stay with the pelvis: weighted to the
+            # thigh they swung back through the jacket in a stride or a crouch.
+            share = min(1.0, (co.z - 0.4) / 0.06) * 0.85
+            weights = {n: w * (1 - share) for n, w in weights.items()}
+            weights["pelvis"] = weights.get("pelvis", 0.0) + share
+        if as_name.startswith("Ботинок"):
+            # The foot of the boot is rigid with the sole: half-shin weights
+            # at the heel opened a gap above the sole when the foot flexed.
+            # Only the shaft bends with the shin.
+            k = min(1.0, max(0.0, (co.z - 0.1) / 0.05))
+            weights = {"foot_" + ("near" if co.y < 0 else "far"): 1 - k, "shin_" + ("near" if co.y < 0 else "far"): k}
+            weights = {n: w for n, w in weights.items() if w > 0}
         if as_name.startswith("Куртка"):
-            # The front of the hem rides on the thigh under it: a raised knee
-            # went straight through the jacket. Only the lower front, and
-            # only partly, so the jacket bends instead of tearing.
-            lift = min(1.0, max(0.0, (0.47 - co.z) / 0.07)) * min(1.0, max(0.0, (co.x + 0.03) / 0.08)) * 0.55
+            # The lower jacket rides on the thighs under it, all round (most
+            # at the front), so a stride or a raised knee lifts the hem
+            # instead of going through it. Between the legs it follows both
+            # thighs half and half; higher up it fades back to the body.
+            # About half the leg's swing, spread over the whole lower jacket:
+            # the hem lifts over a raised knee like cloth. Following the thigh
+            # fully, it swung up crooked over each leg with a sharp crease.
+            t = min(1.0, max(0.0, (0.535 - co.z) / 0.14))
+            lift = t * t * (3 - 2 * t) * 0.55
             if lift > 0:
-                thigh = "thigh_near" if co.y < 0 else "thigh_far"
+                near = min(1.0, max(0.0, 0.5 - co.y / 0.06))
+                front = min(1.0, max(0.0, (co.x + 0.04) / 0.08))
                 weights = {n: w * (1 - lift) for n, w in weights.items()}
-                weights[thigh] = weights.get(thigh, 0.0) + lift
-                if thigh not in groups:
-                    groups[thigh] = obj.vertex_groups.get(thigh) or obj.vertex_groups.new(name=thigh)
+                for side, share in (("near", near), ("far", 1 - near)):
+                    for hem, part in (("hem_fwd_", front), ("hem_back_", 1 - front)):
+                        w = lift * share * part
+                        if w <= 0.0:
+                            continue
+                        weights[hem + side] = weights.get(hem + side, 0.0) + w
+                        if hem + side not in groups:
+                            groups[hem + side] = obj.vertex_groups.get(hem + side) or obj.vertex_groups.new(name=hem + side)
+        # glTF carries four influences per vertex: keep the strongest four.
+        top4 = sorted(weights.items(), key=lambda item: -item[1])[:4]
+        total4 = sum(w for _, w in top4) or 1.0
+        weights = {n: w / total4 for n, w in top4}
         for n, w in weights.items():
             if w > 0.02:
                 groups[n].add([v.index], w, "REPLACE")

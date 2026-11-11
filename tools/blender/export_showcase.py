@@ -10,8 +10,10 @@ which reads as painted on in a close-up.
    ~35%, small parts barely), to ~200k triangles in all.
 3. Skeleton as export_hero.py; a detail is weighted as the part it sits on
    (the buckle on a sleeve follows the arm).
-4. glTF: COLOR_0 = colour (rgb) + occlusion (a); TEXCOORD_0 = (wardrobe slot
-   code + 0.5 if metal, roughness).
+4. glTF: COLOR_0 = colour (rgb) + occlusion (a); TEXCOORD_0 = detail UV in
+   hero units (the lofts' own UVs: along and around the surface; a box
+   projection on small parts) for the game's tiling fabric and leather;
+   TEXCOORD_1 = (wardrobe slot code + .05 + material kind / 10, roughness).
 
 Run: blender --background docs/character/3d/hero.blend --python tools/blender/export_showcase.py
 Output: game/assets/hero/model/hero.glb (the only hero model: the climb and
@@ -33,6 +35,11 @@ import export_hero as hero  # noqa: E402
 OUT = os.path.join(hero.OUT_DIR, "hero.glb")
 TARGET = 200000
 CODES = {"head": 1, "jacket": 2, "boots": 3, "pants": 4, "gloves": 5, "backpack": 6}
+# Material kind per Blender material (hero_model.gd picks the tiling detail by
+# it): 0 plain, 1 woven nylon, 2 twill, 3 leather, 4 suede, 5 rubber,
+# 6 paint, 7 metal, 8 felt.
+KINDS = {"Голова": 6, "Термос": 6, "Шея": 6, "Куртка": 1, "Куртка тень": 1, "Штаны": 2, "Наколенник": 4,
+         "Кожа": 3, "Ремень": 3, "Рант": 3, "Ботинок": 3, "Перчатка": 4, "Подошва": 5, "Металл": 7, "Коврик": 8}
 
 
 def tris(o):
@@ -125,14 +132,16 @@ def metal_of(o):
 
 
 def owner_of(detail, sources):
-    """The large part a detail lies closest to."""
+    """The large part a detail lies on (closest on average)."""
     verts = detail.data.vertices
     step = max(1, len(verts) // 24)
     points = [detail.matrix_world @ verts[i].co for i in range(0, len(verts), step)]
     best, best_d = None, 1e9
     for src in sources:
         inverse = src.matrix_world.inverted()
-        d = min(((src.matrix_world @ src.closest_point_on_mesh(inverse @ p)[1]) - p).length for p in points)
+        # Mean, not nearest: a strap on the jacket's side that touches the
+        # sleeve at one end still belongs to the jacket.
+        d = sum(((src.matrix_world @ src.closest_point_on_mesh(inverse @ p)[1]) - p).length for p in points) / len(points)
         if d < best_d:
             best, best_d = src, d
     return best
@@ -178,8 +187,35 @@ def glue_weights(detail, surface):
                 groups[name].add([v.index], w / total, "REPLACE")
 
 
+def kind_of(o):
+    for slot in o.material_slots:
+        if slot.material and slot.material.name in KINDS:
+            return KINDS[slot.material.name]
+    return 7 if metal_of(o) else 0
+
+
+def detail_uv(o):
+    """The detail UV per corner: the loft's own (layer "detail"), else a box
+    projection in hero units by each face's main axis."""
+    mesh = o.data
+    n = len(mesh.loops)
+    uv = numpy.empty(n * 2, numpy.float32)
+    if "detail" in mesh.uv_layers:
+        mesh.uv_layers["detail"].data.foreach_get("uv", uv)
+        return uv
+    for poly in mesh.polygons:
+        axis = max(range(3), key=lambda i: abs(poly.normal[i]))
+        a, b = [(1, 2), (0, 2), (0, 1)][axis]
+        for li in poly.loop_indices:
+            co = mesh.vertices[mesh.loops[li].vertex_index].co
+            uv[li * 2] = co[a]
+            uv[li * 2 + 1] = co[b]
+    return uv
+
+
 def pack(o, metal, code):
-    """COLOR_0 = colour + occlusion; TEXCOORD_0 = (code + metal, roughness)."""
+    """COLOR_0 = colour + occlusion; TEXCOORD_0 = detail UV; TEXCOORD_1 =
+    (code + .05 + kind / 10, roughness)."""
     mesh = o.data
     n = len(mesh.loops)
     col = numpy.empty(n * 4, numpy.float32)
@@ -196,11 +232,13 @@ def pack(o, metal, code):
             mesh.color_attributes.remove(mesh.color_attributes[name])
     mesh.color_attributes.active_color = mesh.color_attributes["color"]
     mesh.color_attributes.render_color_index = mesh.color_attributes.find("color")
+    detail = detail_uv(o)
     while mesh.uv_layers:
         mesh.uv_layers.remove(mesh.uv_layers[0])
+    mesh.uv_layers.new(name="detail").data.foreach_set("uv", detail)
     uv = mesh.uv_layers.new(name="data")
     values = numpy.empty(n * 2, numpy.float32)
-    values[0::2] = code + (0.5 if metal else 0.0)
+    values[0::2] = code + 0.05 + kind_of(o) * 0.1
     values[1::2] = rough[0::4]
     uv.data.foreach_set("uv", values)
 
@@ -223,10 +261,9 @@ def soften(o):
 
 def decimate(o):
     t = tris(o)
-    ratio = 1.0 if t < 800 else (0.6 if t < 4000 else 0.35)
+    ratio = 1.0 if t < 800 else (0.6 if t < 4000 else 0.3)
     if o.name.startswith("Перчатка"):
-        ratio = 0.45  # Fingers are small: a third of the triangles made them lumps.
-        # (Under 0.45 keeps the hero inside the 320k budget of test_hero_model.)
+        ratio = 0.8  # Built light (one subdivision): fingers keep their shape.
     if ratio < 1.0:
         mod = o.modifiers.new("decimate", "DECIMATE")
         mod.ratio = ratio
@@ -277,8 +314,10 @@ def main():
         smooth_attribute(o, "col", 0 if o.name.startswith("Термос") else 5)
         smooth_attribute(o, "ao", 8)
         smooth_attribute(o, "rough", 4)
+    owners_by_name = {}
     for o in objects:
         owner = o if o in sources else owner_of(o, sources)
+        owners_by_name[o.name] = owner
         # A detail takes its part's slot (the hem and cuffs dye with the
         # jacket); the shader's hue window keeps straps and buckles theirs.
         pack(o, metal_of(o), CODES.get(hero.slot_of(owner.name), 0))
@@ -289,11 +328,17 @@ def main():
     # Each detail vertex moves exactly as the surface under it. One owner
     # per detail left seam stitches on the jacket while the sleeve moved
     # away (dots in the air) and buckles poking out of a raised arm.
-    surface = surface_index(sources)
+    # Each detail glues only to the part it belongs to: with the arms hanging
+    # against the jacket, the nearest surface under a strap or a seam on the
+    # jacket's side was often the sleeve, and a raised arm tore them away.
+    surfaces = {}
     for o in objects:
         if o not in sources:
             decimate(o)
-            glue_weights(o, surface)
+            owner = owners_by_name[o.name]
+            if owner not in surfaces:
+                surfaces[owner] = surface_index([owner])
+            glue_weights(o, surfaces[owner])
     total = sum(tris(o) for o in objects)
     print("SHOWCASE_TRIS", total, flush=True)
     bpy.ops.object.select_all(action="DESELECT")

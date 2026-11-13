@@ -69,7 +69,7 @@ func _place(rows: Array) -> void:
 		var height := 24.0
 		for row in part: height += float(row["height"])
 		tallest = maxf(tallest,height)
-	var content := lobby.scroll_page(HEAD_HEIGHT,tallest+12)
+	var content := lobby.scroll_page(HEAD_HEIGHT,tallest+8)
 	for column in range(columns):
 		var slab := lobby.slab(content,Vector2(28+column*(width+COLUMN_GAP),0),Vector2(width,tallest))
 		var y := 14.0
@@ -84,8 +84,18 @@ func _changed(key: String, value: Variant) -> void:
 
 # --- Row kinds ----------------------------------------------------------------------
 
+# A hint under a row's title wraps in the left column; a row grows by the
+# lines it takes, or at large text the hint ran into the row below.
 func _hint_height(hint: String) -> float:
-	return ROW+(6.0 if not hint.is_empty() else 0.0)
+	if hint.is_empty(): return ROW
+	var columns := 2 if lobby.landscape else 1
+	var width: float = (lobby.size.x-56-COLUMN_GAP*(columns-1))/columns
+	var room: float = width*.44-24
+	var font_size := lobby.scaled(12)
+	# Measured as the label wraps it. The hint starts 24 under the row's top;
+	# a row already has room for two lines at the usual size.
+	var height: float = hud.body_font.get_multiline_string_size(hint,HORIZONTAL_ALIGNMENT_LEFT,room,font_size,-1,TextServer.BREAK_MANDATORY|TextServer.BREAK_WORD_BOUND|TextServer.BREAK_ADAPTIVE).y
+	return maxf(ROW+6.0,24.0+height)
 
 func choice(title_text: String, hint: String, key: String, labels: Array, values: Array) -> Dictionary:
 	return {"height":_hint_height(hint),"build":func(slab: Control, y: float, width: float):

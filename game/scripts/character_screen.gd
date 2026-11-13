@@ -108,11 +108,38 @@ var closing := false
 func open(lobby: Control) -> void:
 	prepare(lobby.hud)
 	# The lobby's own canvas: the same size, place and scale under the banner.
+	landscape = lobby.landscape
 	size = lobby.size
 	position = lobby.position
 	scale = lobby.scale
 	location = clampi(int(game.lobby_location),0,LEDGE_TOPS.size()-1)
 	build()
+
+# The lobby moved or changed size under the open screen (the ad banner came
+# or went, the window turned): the screen follows it. It used to stay where
+# it was opened, with its top under the banner.
+func relayout(lobby: Control) -> void:
+	position = lobby.position
+	scale = lobby.scale
+	if size.is_equal_approx(lobby.size) and landscape==lobby.landscape: return
+	landscape = lobby.landscape
+	size = lobby.size
+	var open_slot := slot
+	release_stage()
+	for child in get_children():
+		remove_child(child)
+		child.queue_free()
+	slot_buttons.clear()
+	cards.clear()
+	wallet_nodes.clear()
+	slot = ""
+	build()
+	slot = open_slot
+	chosen = str(preview.get(slot,HeroOutfit.worn_id(model.profile,slot))) if not slot.is_empty() else ""
+	_paint_slots()
+	_show_slot()
+	_apply_preview()
+	_update_camera(1.0)
 
 func build() -> void:
 	# Catches taps that miss the screen's parts, so nothing reaches the lobby.
@@ -154,49 +181,8 @@ func build_stage(rect: Rect2) -> void:
 	painting.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	painting.modulate = Color(.86,.88,.92)
 	stage.add_child(painting)
-	# The hero renders at the screen's own pixels: a stretched container
-	# renders at the 540x960 canvas units and the phone blows that up 2-3x,
-	# which made the model look soapy. _fit_viewport keeps it sharp.
-	holder = SubViewportContainer.new()
-	holder.stretch = false
-	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stage_inner = inner
-	stage.add_child(holder)
-	viewport = SubViewport.new()
-	viewport.own_world_3d = true
-	viewport.transparent_bg = true
-	viewport.msaa_3d = Viewport.MSAA_DISABLED if str(model.profile["settings"].get("shadows","high"))=="off" else Viewport.MSAA_4X
-	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	holder.add_child(viewport)
-	camera = Camera3D.new()
-	camera.fov = 30
-	viewport.add_child(camera)
-	ledge = MeshInstance3D.new()
-	ledge.mesh = ledge_mesh(7)
-	var ledge_material := ShaderMaterial.new()
-	ledge_material.shader = Shader.new()
-	ledge_material.shader.code = LEDGE_SHADER
-	ledge_material.set_shader_parameter("top_color",LEDGE_TOPS[location])
-	ledge_material.set_shader_parameter("rock_color",LEDGE_ROCK[location])
-	ledge.material_override = ledge_material
-	viewport.add_child(ledge)
-	var shadow := MeshInstance3D.new()
-	var quad := PlaneMesh.new()
-	quad.size = Vector2(.95,.55)
-	shadow.mesh = quad
-	shadow.position = Vector3(0,.004,0)
-	var shadow_material := ShaderMaterial.new()
-	shadow_material.shader = Shader.new()
-	shadow_material.shader.code = SHADOW_SHADER
-	shadow.material_override = shadow_material
-	viewport.add_child(shadow)
-	hero = HeroModel.new()
-	viewport.add_child(hero)
-	hero.setup(true,str(model.profile["settings"].get("shadows","high"))!="off")
-	HeroModel.showcase_environment(viewport)
-	hero.position = Vector3(0,-HeroModel.FEET_Y,0)
-	still.grounded = true
-	still.attached = false
+	_build_scene()
 	# A soft fade under the stage edge so the panel below reads.
 	var shade := TextureRect.new()
 	var gradient := Gradient.new()
@@ -211,9 +197,9 @@ func build_stage(rect: Rect2) -> void:
 	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stage.add_child(shade)
 	var name_tag := slab(stage,Vector2(16,16),Vector2(170,34),Color(SLATE,.88),SLATE_LIP,3)
-	text(name_tag,"Первопроходец",Vector2(0,5),Vector2(170,24),16,STONE,"display").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	fit_text(text(name_tag,"Первопроходец",Vector2(6,5),Vector2(158,24),16,STONE,"display")).horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint = slab(stage,Vector2((inner.x-268)*.5,inner.y-50),Vector2(268,34),Color(SLATE,.78),SLATE_LIP,3)
-	text(hint,"Крути пальцем · коснись героя",Vector2(0,6),Vector2(268,22),14,STONE,"strong").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	fit_text(text(hint,"Крути пальцем · коснись героя",Vector2(8,6),Vector2(252,22),14,STONE,"strong")).horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sparkles = CPUParticles2D.new()
 	sparkles.position = inner*Vector2(.5,.45)
 	sparkles.emitting = false
@@ -236,13 +222,97 @@ func build_stage(rect: Rect2) -> void:
 	_update_camera(1.0)
 	_pose(0.0)
 
+# The 3D part of the stage: the hero on his ledge in a viewport of his own.
+# `plain` builds it the careful way (no MSAA, one pixel per canvas unit, no
+# shadows) after the stage was found empty twice; see _verify_stage.
+func _build_scene(plain: bool = false) -> void:
+	plain_scene = plain
+	# The hero renders at the screen's own pixels: a stretched container
+	# renders at the 540x960 canvas units and the phone blows that up 2-3x,
+	# which made the model look soapy. _fit_viewport keeps it sharp.
+	holder = SubViewportContainer.new()
+	holder.stretch = false
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stage.add_child(holder)
+	# Over the painting, under the shade and the tags.
+	stage.move_child(holder,1)
+	viewport = SubViewport.new()
+	viewport.own_world_3d = true
+	viewport.transparent_bg = true
+	var shadows: bool = str(model.profile["settings"].get("shadows","high"))!="off" and not plain
+	viewport.msaa_3d = stage_msaa(shadows,OS.has_feature("mobile"))
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	holder.add_child(viewport)
+	camera = Camera3D.new()
+	camera.fov = 30
+	viewport.add_child(camera)
+	ledge = MeshInstance3D.new()
+	ledge.mesh = shared_ledge()
+	var ledge_material := ShaderMaterial.new()
+	ledge_material.shader = ShaderBank.of(LEDGE_SHADER)
+	ledge_material.set_shader_parameter("top_color",LEDGE_TOPS[location])
+	ledge_material.set_shader_parameter("rock_color",LEDGE_ROCK[location])
+	ledge.material_override = ledge_material
+	viewport.add_child(ledge)
+	var shadow := MeshInstance3D.new()
+	var quad := PlaneMesh.new()
+	quad.size = Vector2(.95,.55)
+	shadow.mesh = quad
+	shadow.position = Vector3(0,.004,0)
+	var shadow_material := ShaderMaterial.new()
+	shadow_material.shader = ShaderBank.of(SHADOW_SHADER)
+	shadow.material_override = shadow_material
+	viewport.add_child(shadow)
+	hero = HeroModel.new()
+	viewport.add_child(hero)
+	hero.setup(true,shadows)
+	HeroModel.showcase_environment(viewport)
+	hero.position = Vector3(0,-HeroModel.FEET_Y,0)
+	still.grounded = true
+	still.attached = false
+	check_in = CHECK_AFTER
+
+# Smoothing of the hero's edges. Four samples of a stage this large took
+# 45-80 MB of video memory on a phone; two keep the edges clean at phone
+# pixel density for half of that.
+static func stage_msaa(shadows: bool, mobile: bool) -> Viewport.MSAA:
+	if not shadows: return Viewport.MSAA_DISABLED
+	return Viewport.MSAA_2X if mobile else Viewport.MSAA_4X
+
+static var _ledge: ArrayMesh
+static func shared_ledge() -> ArrayMesh:
+	if _ledge==null: _ledge = ledge_mesh(7)
+	return _ledge
+
+# Gives the stage's render target back at once. A screen that is closing
+# keeps its last frame; a new screen opened over it must not hold a second
+# target of the same size next to this one.
+func release_stage() -> void:
+	if is_instance_valid(viewport):
+		viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		viewport.size = Vector2i(2,2)
+	if is_instance_valid(holder): holder.queue_free()
+	holder = null
+	viewport = null
+	hero = null
+	camera = null
+
 # Screen pixels per canvas unit at the stage, capped so a tablet does not
 # render a huge target.
 const MAX_PIXEL_SCALE := 3.0
+# And the whole target stays under this many pixels (about 880x1250): with
+# the samples and the depth buffer a larger one is tens of megabytes, and a
+# phone that cannot find them draws an empty stage.
+const MAX_STAGE_PIXELS := 1100000.0
+
+static func stage_pixels(inner: Vector2, screen_scale: float) -> Vector2i:
+	var pixel_scale := 1.0 if is_nan(screen_scale) else clampf(screen_scale,1.0,MAX_PIXEL_SCALE)
+	pixel_scale = minf(pixel_scale,maxf(1.0,sqrt(MAX_STAGE_PIXELS/maxf(1.0,inner.x*inner.y))))
+	return Vector2i((inner*pixel_scale).round()).maxi(2)
+
 func _fit_viewport() -> void:
 	if not is_instance_valid(holder) or not holder.is_inside_tree(): return
-	var pixel_scale := clampf((get_viewport().get_final_transform()*stage.get_global_transform_with_canvas()).get_scale().x,1.0,MAX_PIXEL_SCALE)
-	var pixels := Vector2i((stage_inner*pixel_scale).round())
+	var pixels := stage_pixels(stage_inner,1.0 if plain_scene else (get_viewport().get_final_transform()*stage.get_global_transform_with_canvas()).get_scale().x)
 	if viewport.size==pixels and not render_lost: return
 	render_lost = false
 	# A new size recreates the render target (also after the phone dropped it).
@@ -257,8 +327,51 @@ func _fit_viewport() -> void:
 var render_lost := false
 func _notification(what: int) -> void:
 	if what in [NOTIFICATION_APPLICATION_RESUMED,NOTIFICATION_APPLICATION_FOCUS_IN,NOTIFICATION_WM_WINDOW_FOCUS_IN]:
+		if closing: return
 		render_lost = true
+		check_in = CHECK_AFTER
 		if is_instance_valid(viewport): viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+
+# The stage looks at what it drew, half a second after it opens and after
+# every return to the app. An empty picture (the report: "only the
+# background, no hero") is built again, the plain way the second time, and
+# the game's statistics hear about it, so we learn whether players meet it.
+const CHECK_AFTER := .5
+const MAX_REBUILDS := 2
+var check_in := -1.0
+var plain_scene := false
+var rebuilds := 0
+
+# True when the picture has no hero in it. `image` is the stage's viewport.
+static func stage_empty(image: Image) -> bool:
+	if image==null or image.is_empty(): return true
+	var width := image.get_width()
+	var height := image.get_height()
+	# The hero stands in the middle; a coarse grid over it is enough.
+	for row in range(1,24):
+		for column in range(1,16):
+			if image.get_pixel(width*column/16,height*row/24).a>.5: return false
+	return true
+
+func _verify_stage() -> void:
+	if DisplayServer.get_name()=="headless" or not is_instance_valid(viewport): return
+	if not stage_empty(viewport.get_texture().get_image()): return
+	stage_lost()
+
+# Builds the scene again; the plain way from the second time on.
+func stage_lost() -> void:
+	game.ads.report_event("character_stage_empty")
+	push_warning("The character stage drew nothing; building it again (%d)." % (rebuilds+1))
+	if rebuilds>=MAX_REBUILDS: return
+	rebuilds += 1
+	var held_yaw := yaw
+	release_stage()
+	_build_scene(rebuilds>1)
+	yaw = held_yaw
+	_apply_preview()
+	_fit_viewport()
+	_update_camera(1.0)
+	_pose(0.0)
 
 func _build_wallet() -> void:
 	for node in wallet_nodes:
@@ -275,10 +388,16 @@ func build_wardrobe(rect: Rect2) -> void:
 	var per_row := 6 if inner>=640 else 3
 	var gap := 6.0
 	var each := (inner-gap*(per_row-1))/per_row
+	# The tabs lie in a recessed groove like every switch in the menus: the
+	# open slot is the raised slate plate, the others are text in the groove.
+	# (Stone tabs on the stone panel read as underlines, and a yellow tab
+	# competed with the yellow purchase button.)
+	var rows := ceili(HeroOutfit.SLOTS.size()/float(per_row))
+	slab(panel,Vector2(14,44),Vector2(inner+8,rows*(44+gap)-gap+8),STONE_SHADE,Color.TRANSPARENT,0)
 	for index in range(HeroOutfit.SLOTS.size()):
 		var key: String = HeroOutfit.SLOTS[index]
 		var at := Vector2(18+(index%per_row)*(each+gap),48+(index/per_row)*(44+gap))
-		var tab := action(panel,str(HeroOutfit.SLOT_NAMES[key]),at,Vector2(each,40),pick_slot.bind(key),"secondary")
+		var tab := action(panel,str(HeroOutfit.SLOT_NAMES[key]),at,Vector2(each,40),pick_slot.bind(key),"ghost")
 		tab.add_theme_font_size_override("font_size",15)
 		slot_buttons[key] = tab
 	var tabs_bottom := 48.0+ceili(HeroOutfit.SLOTS.size()/float(per_row))*(44+gap)
@@ -295,7 +414,9 @@ func build_wardrobe(rect: Rect2) -> void:
 
 func _paint_slots() -> void:
 	for key in slot_buttons:
-		hud.skin_button(slot_buttons[key],"primary" if key==slot else "secondary")
+		var tab: Button = slot_buttons[key]
+		hud.skin_button(tab,"selected" if key==slot else "ghost")
+		tab.add_theme_font_size_override("font_size",15)
 
 # A slot zooms the camera onto its part (the backpack turns the hero round)
 # and shows its colours. A second tap on the open slot goes back to full height.
@@ -348,7 +469,7 @@ func _show_slot() -> void:
 			text(status,"Есть",Vector2.ZERO,Vector2(each,18),12,INK_SOFT,"strong").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		else:
 			var price := HeroOutfit.price(id)
-			var width: float = hud.heading_font.get_string_size(str(price),HORIZONTAL_ALIGNMENT_LEFT,-1,13).x+22
+			var width: float = hud.heading_font.get_string_size(str(price),HORIZONTAL_ALIGNMENT_LEFT,-1,scaled(13)).x+scaled(13)-8+5
 			coin_amount(status,price,Vector2((each-width)*.5,-1),13,COIN,12)
 		if id==chosen:
 			# The card on the hero now: a slate frame around it.
@@ -396,6 +517,7 @@ func pick_colour(id: String) -> void:
 	_show_slot()
 
 func _apply_preview() -> void:
+	if not is_instance_valid(hero): return
 	var outfit: Dictionary = HeroOutfit.worn.duplicate()
 	for key in preview: outfit[key] = preview[key]
 	hero.set_outfit(outfit)
@@ -411,7 +533,7 @@ func _buy_pressed() -> void:
 		var tween := buy_button.create_tween()
 		tween.tween_property(buy_button,"rotation",.05,.05)
 		tween.tween_property(buy_button,"rotation",-.04,.08)
-		tween.tween_property(buy_button,"rotation",0.0,.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tween.tween_property(buy_button,"rotation",0.0,RELEASE).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		return
 	model.save()
 	preview.erase(slot)
@@ -419,7 +541,7 @@ func _buy_pressed() -> void:
 	note_label.text = "Надето." if owned else "Куплено и надето."
 	if not owned:
 		bought = true
-		_build_wallet()
+		refresh_wallet()
 		_celebrate()
 	_show_slot()
 
@@ -436,11 +558,12 @@ func close() -> void:
 	if closing: return
 	closing = true
 	set_process(false)
+	# The last frame stays on while the screen fades; nothing is drawn anew.
+	if is_instance_valid(viewport): viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	var tween := create_tween()
-	tween.tween_property(self,"modulate:a",0.0,.14)
+	tween.tween_property(self,"modulate:a",0.0,PRESS*1.5)
 	tween.tween_callback(queue_free)
 	closed.emit()
-	if bought and is_instance_valid(hud.lobby_view): hud.lobby_view.rebuild.call_deferred()
 
 # ---------------------------------------------------------------- the ledge
 
@@ -511,6 +634,11 @@ func _process(delta: float) -> void:
 		next_look = randf_range(2.2,4.5)
 		look_goal = 0.0 if randf()<.35 else randf_range(-.55,.45)
 	_fit_viewport() # The window can change size (rotation, split screen).
+	if check_in>=0.0:
+		check_in -= delta
+		if check_in<0.0:
+			_verify_stage()
+			if not is_instance_valid(hero): return
 	_update_camera(1-exp(-delta*5))
 	_pose(delta)
 	if is_instance_valid(hint) and idle_for<1.0 and hint.modulate.a>0:
@@ -563,7 +691,7 @@ static func act_pose(which: String, t: float) -> Dictionary:
 # ---------------------------------------------------------------- input
 
 func _input(event: InputEvent) -> void:
-	if not is_visible_in_tree(): return
+	if not is_visible_in_tree() or closing or not is_instance_valid(hero): return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode==KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		close()

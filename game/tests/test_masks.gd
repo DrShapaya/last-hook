@@ -337,7 +337,7 @@ func platform_look_tests(world: MountainWorld, layout: MaskLayout, location: int
 				var wanted: bool = part in dress and (quality!="battery" or not part in WoodPlatform.LOOKS[look]["detail"])
 				own_ok = own_ok and parts.has(part)==wanted
 			var wood: MeshInstance3D = parts.get("wood")
-			tint_ok = tint_ok and wood!=null and (wood.material_override as StandardMaterial3D).albedo_color==WoodPlatform.LOOKS[look]["wood"]
+			tint_ok = tint_ok and wood!=null and Color((wood.material_override as ShaderMaterial).get_shader_parameter("tint"))==WoodPlatform.LOOKS[look]["wood"]
 			if quality=="battery":
 				var scene := (load(str(model.get_meta("model"))) as PackedScene).instantiate() as Node3D
 				var bare: Array = []

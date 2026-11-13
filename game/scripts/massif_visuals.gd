@@ -63,8 +63,7 @@ func _init(owner_world: Node3D, source: MountainLayout) -> void:
 	_apply_rock_profile(rock_material,profile_at(0))
 	# Distant ranges: one flat facet light, no shadow lookups, mixed into the
 	# sky colour. Cheap enough for every preset, including phones.
-	far_shader = Shader.new()
-	far_shader.code = "shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled; uniform vec3 haze : source_color = vec3(.55,.74,.92); uniform float haze_amount = .7; varying vec3 world_pos; void vertex(){ world_pos=(MODEL_MATRIX*vec4(VERTEX,1.0)).xyz; } void fragment(){ vec3 n=normalize(cross(dFdx(world_pos),dFdy(world_pos))); if(n.z<0.0){ n=-n; } float l=dot(n,normalize(vec3(-.55,.62,.56))); vec3 c=COLOR.rgb*mix(.78,1.12,smoothstep(-.2,.9,l)); ALBEDO=mix(c,haze,haze_amount); }"
+	far_shader = ShaderBank.of("shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled; uniform vec3 haze : source_color = vec3(.55,.74,.92); uniform float haze_amount = .7; varying vec3 world_pos; void vertex(){ world_pos=(MODEL_MATRIX*vec4(VERTEX,1.0)).xyz; } void fragment(){ vec3 n=normalize(cross(dFdx(world_pos),dFdy(world_pos))); if(n.z<0.0){ n=-n; } float l=dot(n,normalize(vec3(-.55,.62,.56))); vec3 c=COLOR.rgb*mix(.78,1.12,smoothstep(-.2,.9,l)); ALBEDO=mix(c,haze,haze_amount); }")
 	for settings in FAR_LAYERS:
 		var material := ShaderMaterial.new()
 		material.shader = far_shader
@@ -1351,9 +1350,7 @@ func _add_summer_air(index: int, parent: Node3D) -> void:
 		plane.size = Vector2(56,11)
 		haze.mesh = plane
 		var material := ShaderMaterial.new()
-		var shader := Shader.new()
-		shader.code = HAZE_CODE
-		material.shader = shader
+		material.shader = ShaderBank.of(HAZE_CODE)
 		haze.material_override = material
 		haze.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		haze.position = Vector3(0,2.5,-5.6)
@@ -1782,6 +1779,23 @@ func _decor_fits(rect: Rect2, hanging: bool, climbing: bool = false) -> bool:
 		if _decor_blocked(Vector2(rect.get_center().x,rect.position.y+rect.size.y*share),rect.size.x*.5): return false
 	return true
 
+# Loose stones and sand heaps of the face (RockSurface.lumps) per band.
+var lump_bands: Dictionary = {}
+
+# Whether a loose stone or sand heap of the face stands in front of a piece
+# at depth `z` across its rect. None may: a heap in front of the bench cut a
+# canyon cactus in two (owner, 0.18.3). RockSurface.lumps keeps them back.
+func _behind_lump(rect: Rect2, z: float) -> bool:
+	var rock := _seen_rock()
+	if rock==null: return false
+	for band in range(int(floor(rect.position.y/BAND))-1,int(floor(rect.end.y/BAND))+1):
+		if not lump_bands.has(band): lump_bands[band] = rock.lumps(band*BAND,(band+1)*BAND)
+		for lump: Array in lump_bands[band]:
+			var center: Vector3 = lump[0]
+			var half: Vector3 = lump[1]
+			if center.z+half.z>z and Rect2(center.x-half.x,center.y-half.y,half.x*2.0,half.y*2.0).intersects(rect): return true
+	return false
+
 # The lowest point of visible stone straight above `point` (within a metre),
 # a few centimetres inside it; INF where there is none.
 func _underside_above(point: Vector2) -> Vector2:
@@ -2196,7 +2210,8 @@ func _summer_root_vines(index: int, parent: Node3D) -> void:
 		if GripSpec.kind_of(grip)!=GripSpec.ROOT: continue
 		var at: Vector2 = grip["pos"]
 		if int(floor(at.y/BAND))!=index: continue
-		var entry := FloraModels.pick("vine_root",random,"hang")
+		# Green hanging ivy: the dry pod vine read as the canyon's.
+		var entry := FloraModels.pick("vine_green",random,"hang")
 		if entry.is_empty(): continue
 		var size := FloraModels.size_of(entry,.85)
 		var dims: Vector2 = grip.get("dimensions",Vector2(1.6,.65))

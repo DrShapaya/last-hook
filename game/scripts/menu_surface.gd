@@ -70,77 +70,50 @@ class RouteLine extends Control:
 	func track_y() -> float:
 		return 32.0
 
-	func x_of(meters: float) -> float:
-		return 6+(trail_end()-6)*clampf(meters/maxf(1,summit),0,1)
+	const THICK := 10.0
+	const BADGE := 12.0
 
-	# The groove ends at the foot of a small summit; the flag stands on top.
+	func x_of(meters: float) -> float:
+		return track_left()+(trail_end()-track_left())*clampf(meters/maxf(1,summit),0,1)
+
+	func track_left() -> float:
+		return 10.0
+
+	# The track ends where it runs into the summit badge.
 	func trail_end() -> float:
-		return size.x-34
+		return size.x-BADGE*2-6
 
 	func peak() -> Vector2:
-		return Vector2(size.x-14,track_y()-16)
+		return Vector2(size.x-BADGE-2,track_y())
 
 	func _draw() -> void:
-		var ink := STONE if on_dark else MenuSurface.INK
 		var soft := Color("c9d2d8") if on_dark else MenuSurface.INK_SOFT
 		var y := track_y()
-		var left := 6.0
-		var right := trail_end()
-		var top := peak()
-		# The summit rises from the end of the groove: one silhouette with a
-		# snow cap, so the path climbs into the flag instead of stopping short.
-		var hill := PackedVector2Array([Vector2(right-6,y+5),Vector2(right+4,y-1),top+Vector2(-4,2),top,top+Vector2(5,3),Vector2(size.x-1,y+5)])
-		draw_colored_polygon(hill,Color(SLATE_LIP if not on_dark else STONE,.32))
-		draw_polyline(hill,Color(ink,.7),1.6,true)
-		draw_colored_polygon(PackedVector2Array([top+Vector2(-4,2),top,top+Vector2(5,3),top+Vector2(2,5),top+Vector2(-1,4)]),Color(STONE,.95))
-		# Bed of the path: a recessed groove the rope lies in.
-		draw_line(Vector2(left,y),Vector2(right,y),Color(SLATE_LIP if not on_dark else Color.BLACK,.22),9,true)
-		draw_line(Vector2(left,y+1),Vector2(right,y+1),Color(STONE,.35 if not on_dark else .08),5,true)
-		var x := left+6
-		while x<right-4:
-			draw_circle(Vector2(x,y),1.4,Color(soft,.6))
-			x += 8
-		# The last stretch climbs the slope as a dotted trail.
-		for step in range(1,5):
-			draw_circle(Vector2(right,y).lerp(top,step/5.0),1.4,Color(soft,.7))
+		var marks: Array = []
 		var zone_count := int(summit/maxf(1,zone))
-		for index in range(1,zone_count):
-			var tick := x_of(index*zone)
-			draw_line(Vector2(tick,y-6),Vector2(tick,y+6),Color(soft,.55),2,true)
-		var rope_end := x_of(progress)
-		if progress>0.0:
-			draw_line(Vector2(left,y),Vector2(rope_end,y),Color("7a4a1c"),6,true)
-			draw_line(Vector2(left,y-1),Vector2(rope_end,y-1),ROPE,4,true)
-			# Strands: short diagonal twists make it read as rope, not a bar.
-			var twist := left+2
-			while twist<rope_end-3:
-				draw_line(Vector2(twist,y+2),Vector2(twist+3,y-3),Color("e0a15a",.8),1.2,true)
-				twist += 5
-		# Base camp: a small ring where the route starts, under the crown until
-		# there is a record to carry it up the path.
-		if record>0:
-			draw_circle(Vector2(left,y),4.5,ink)
-			draw_circle(Vector2(left,y),2.2,Color(STONE,.9))
-		PlayGauges.draw_flag(self,top+Vector2(0,1))
+		for index in range(1,zone_count): marks.append(index*zone/maxf(1,summit))
+		PlayGauges.draw_track(self,track_left(),trail_end(),y,progress/maxf(1,summit),marks,THICK,on_dark)
+		PlayGauges.draw_summit(self,peak(),BADGE,1.0 if progress>=summit-.5 else 0.0)
 		var taken: Array[Rect2] = []
 		if current>=0:
 			var at := Vector2(x_of(current),y)
-			PlayGauges.draw_head(self,at+Vector2(0,-2),1.25)
-			taken.append(tag("%d м" % roundi(current),at.x,strong,MenuSurface.HOLD,MenuSurface.INK,15,-16))
-		# The record: a gold crown on the path, faint at the start until there is one.
-		var crown_at := x_of(maxf(record,0.0))
-		if current<0 or absf(crown_at-x_of(current))>12: PlayGauges.draw_crown(self,Vector2(crown_at+(4 if record<=0 else 0),y+2),1.05)
+			PlayGauges.draw_head(self,at+Vector2(0,-THICK*.5+1),1.15)
+			taken.append(tag("%d м" % roundi(current),at.x,strong,MenuSurface.HOLD,MenuSurface.INK,15,-18))
+		# The record: a gold crown standing on the track where it was set.
 		if record>0:
-			var top_y := -16.0 if current>=0 else 0.0
+			var crown_at := x_of(record)
+			if current<0 or absf(crown_at-x_of(current))>14: PlayGauges.draw_crown(self,Vector2(crown_at,y-THICK*.5+1),.95)
+			var top_y := -18.0 if current>=0 else 0.0
 			var rect := tag_rect("Рекорд %d м" % roundi(record),crown_at,font,13,top_y)
 			var free := true
 			for other in taken: free = free and not other.grow(4).intersects(rect)
 			if free: tag("Рекорд %d м" % roundi(record),crown_at,font,Color(SLATE,.9) if not on_dark else Color(STONE,.92),STONE if not on_dark else MenuSurface.INK,13,top_y)
 		var use := font if font!=null else ThemeDB.fallback_font
 		if not caption.is_empty():
-			draw_string(use,Vector2(left-2,y+24),caption,HORIZONTAL_ALIGNMENT_LEFT,size.x*.6,13,soft)
+			draw_string(use,Vector2(track_left()-4,y+28),caption,HORIZONTAL_ALIGNMENT_LEFT,size.x*.6,13,soft)
+		# Under the badge, clear of it.
 		var summit_text := "%d м" % roundi(summit)
-		draw_string(use,Vector2(size.x-4-text_width(summit_text,use,13),y+24),summit_text,HORIZONTAL_ALIGNMENT_LEFT,-1,13,soft)
+		draw_string(use,Vector2(size.x-2-text_width(summit_text,use,13),y+BADGE+16),summit_text,HORIZONTAL_ALIGNMENT_LEFT,-1,13,soft)
 
 	func animate_progress(value: float) -> void:
 		var target := clampf(value,0.0,summit)
@@ -182,10 +155,10 @@ class RouteLine extends Control:
 class RopeSlider extends Control:
 	signal changed(value: float)
 	signal committed(value: float)
-	const LABEL_WIDTH := 62.0
+	const LABEL_WIDTH := 66.0
 	const HEIGHT := 44.0
-	const KNOB := Vector2(30,38)
-	const GROOVE := 20.0
+	const KNOB := Vector2(32,32)
+	const GROOVE := 12.0
 	const SLOP := 10.0
 	var value := 0.0
 	var minimum := 0.0
@@ -198,10 +171,19 @@ class RopeSlider extends Control:
 	# once the finger has clearly gone sideways.
 	var armed := false
 	var press_at := Vector2.ZERO
+	# 0 at rest, 1 held: the knob grows a little and a ring of light opens
+	# round it.
+	var held := 0.0:
+		set(amount):
+			held = amount
+			queue_redraw()
+	var held_tween: Tween
 
 	func _ready() -> void:
 		add_to_group("menu_slider")
 		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		# Keys and a controller reach it; a touch never leaves it focused.
+		focus_mode = Control.FOCUS_ALL
 
 	func track_left() -> float:
 		return KNOB.x*.5
@@ -220,16 +202,42 @@ class RopeSlider extends Control:
 		queue_redraw()
 		changed.emit(value)
 
+	func _hold(on: bool) -> void:
+		if held_tween!=null and held_tween.is_valid(): held_tween.kill()
+		held_tween = create_tween()
+		held_tween.tween_property(self,"held",1.0 if on else 0.0,MenuSurface.PRESS if on else MenuSurface.RELEASE).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	# Left and right step the value (a tenth of the range at least for coarse
+	# steps), held keys repeat.
+	func _step_by(direction: int) -> void:
+		var amount := maxf(step,(maximum-minimum)/20.0)
+		amount = maxf(step,snappedf(amount,step))
+		var next := clampf(value+direction*amount,minimum,maximum)
+		if is_equal_approx(next,value): return
+		value = next
+		queue_redraw()
+		changed.emit(value)
+		committed.emit(value)
+
 	func _gui_input(event: InputEvent) -> void:
+		if has_focus() and (event is InputEventKey or event is InputEventJoypadButton or event is InputEventJoypadMotion):
+			if event.is_action_pressed("ui_left",true): _step_by(-1)
+			elif event.is_action_pressed("ui_right",true): _step_by(1)
+			else: return
+			accept_event()
+			return
 		var pressing: bool = (event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT) or event is InputEventScreenTouch
 		if pressing and event.pressed:
 			armed = true
 			press_at = event.position
+			if has_focus(): release_focus()
+			_hold(true)
 			accept_event()
 		elif pressing and armed:
 			if not dragging: _set_from(event.position.x)
 			armed = false
 			dragging = false
+			_hold(false)
 			queue_redraw()
 			committed.emit(value)
 			accept_event()
@@ -241,46 +249,136 @@ class RopeSlider extends Control:
 			if dragging: _set_from(event.position.x)
 			accept_event()
 
-	func _plate(rect: Rect2, face: Color, lip: Color, lip_size: int) -> void:
-		var box := StyleBoxFlat.new()
-		box.bg_color = face
-		box.border_color = lip
-		box.border_width_bottom = lip_size
-		box.set_corner_radius_all(6)
-		box.corner_detail = 1
-		draw_style_box(box,rect)
+	func _notification(what: int) -> void:
+		if what in [NOTIFICATION_FOCUS_ENTER,NOTIFICATION_FOCUS_EXIT]: queue_redraw()
+		# A press that became a page scroll lets go of the knob.
+		if what==NOTIFICATION_MOUSE_EXIT and armed and not dragging:
+			armed = false
+			_hold(false)
 
 	func _draw() -> void:
 		var y := size.y*.5
 		var left := track_left()
-		var at := left+track_width()*ratio()
-		var groove := Rect2(left-KNOB.x*.5,y-GROOVE*.5,track_width()+KNOB.x,GROOVE)
-		_plate(groove,STONE_SHADE,Color.TRANSPARENT,0)
-		# The rope lies in the groove up to the knob, its strands twisted.
-		if at>groove.position.x+4:
-			var rope_y := y
-			draw_line(Vector2(groove.position.x+4,rope_y),Vector2(at,rope_y),Color("7a4a1c"),10)
-			draw_line(Vector2(groove.position.x+4,rope_y-1),Vector2(at,rope_y-1),ROPE,7)
-			var twist := groove.position.x+6
-			while twist<at-4:
-				draw_line(Vector2(twist,rope_y+3),Vector2(twist+4,rope_y-4),Color("e0a15a",.85),1.6,true)
-				twist += 6
-		# A raised block, the same as a switch knob. It sinks while held.
-		var lift := 0.0 if dragging else -1.0
-		var knob := Rect2(at-KNOB.x*.5,y-KNOB.y*.5+lift,KNOB.x,KNOB.y)
-		_plate(knob,SLATE,SLATE_LIP,2 if dragging else 4)
-		draw_rect(Rect2(at-2,knob.position.y+9,4,KNOB.y-20),MenuSurface.HOLD)
+		var right := left+track_width()
+		PlayGauges.draw_track(self,left,right,y,ratio(),[],GROOVE)
+		var at := Vector2(left+track_width()*ratio(),y)
+		var r := KNOB.x*.5+held*2.0
+		# Focus (keys, controller): a dark ring round the knob.
+		if has_focus(): draw_arc(at,r+5,0,TAU,40,MenuSurface.INK,2.0,true)
+		if held>0.0: draw_circle(at,r+7*held,Color(MenuSurface.HOLD,.28*held),true,-1.0,true)
+		# A raised slate puck: its shadow, the lip, the face, a lit top edge
+		# and a hold-gold stud. It sinks a little while held.
+		draw_circle(at+Vector2(0,3.0-held*1.5),r,Color(0,0,0,.22),true,-1.0,true)
+		draw_circle(at,r,MenuSurface.SLATE_LIP,true,-1.0,true)
+		draw_circle(at+Vector2(0,-1.5+held),r-1.5,MenuSurface.SLATE,true,-1.0,true)
+		draw_arc(at+Vector2(0,-1.5+held),r-3.0,PI*1.12,PI*1.88,16,Color(MenuSurface.STONE,.28),1.6,true)
+		draw_circle(at+Vector2(0,-1.5+held),4.0,MenuSurface.HOLD,true,-1.0,true)
+		# The value on its own small plate.
 		var use := font if font!=null else ThemeDB.fallback_font
 		var shown: String = format.call(value) if format.is_valid() else str(roundi(value))
+		var plate := Rect2(size.x-LABEL_WIDTH+8,y-15,LABEL_WIDTH-8,30)
+		var box := StyleBoxFlat.new()
+		box.bg_color = Color(MenuSurface.STONE_SHADE,.85)
+		box.set_corner_radius_all(8)
+		box.corner_detail = 1
+		draw_style_box(box,plate)
 		var width := use.get_string_size(shown,HORIZONTAL_ALIGNMENT_LEFT,-1,16).x
-		draw_string(use,Vector2(size.x-width,y+6),shown,HORIZONTAL_ALIGNMENT_LEFT,-1,16,MenuSurface.INK)
+		draw_string(use,Vector2(plate.get_center().x-width*.5,y+6),shown,HORIZONTAL_ALIGNMENT_LEFT,-1,16,MenuSurface.INK)
+
+# An on/off switch: a rounded groove, moss when on, and a round knob that
+# slides across with a tick or a dash in it. It is a Button, so it takes taps,
+# keys and a controller like every other action; `on` holds its state.
+class Toggle extends Button:
+	const SIZE := Vector2(76,44)
+	const TRACK := Vector2(64,34)
+	var on := false
+	var knob := 0.0:
+		set(amount):
+			knob = amount
+			queue_redraw()
+	var knob_tween: Tween
+	var held := false
+
+	func _init() -> void:
+		flat = true
+		text = ""
+		focus_mode = Control.FOCUS_ALL
+		custom_minimum_size = SIZE
+		size = SIZE
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		for state_name in ["normal","hover","pressed","disabled","focus","hover_pressed"]: add_theme_stylebox_override(state_name,StyleBoxEmpty.new())
+		button_down.connect(func():
+			held = true
+			queue_redraw())
+		button_up.connect(func():
+			held = false
+			queue_redraw())
+
+	func set_on(value: bool, animate: bool = true, spring: bool = true) -> void:
+		on = value
+		set_meta("on",value)
+		if knob_tween!=null and knob_tween.is_valid(): knob_tween.kill()
+		if not animate or not is_inside_tree():
+			knob = 1.0 if on else 0.0
+			return
+		knob_tween = create_tween()
+		knob_tween.tween_property(self,"knob",1.0 if on else 0.0,MenuSurface.POP).set_trans(Tween.TRANS_BACK if spring else Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	func _draw() -> void:
+		var y := size.y*.5
+		var left := size.x-TRACK.x-2
+		var r := TRACK.y*.5
+		var off := Color("cfc6b0")
+		var lit := MenuSurface.MOSS
+		var face := off.lerp(lit,clampf(knob,0,1))
+		PlayGauges.pill(self,left,left+TRACK.x,y+1.2,TRACK.y,Color(MenuSurface.STONE,.9))
+		PlayGauges.pill(self,left,left+TRACK.x,y,TRACK.y,face)
+		if has_focus(): draw_style_box(_ring(),Rect2(left-4,y-r-4,TRACK.x+8,TRACK.y+8))
+		var knob_r := r-4.0+(1.0 if held else 0.0)
+		var at := Vector2(lerpf(left+r,left+TRACK.x-r,knob),y)
+		draw_circle(at+Vector2(0,2),knob_r,Color(0,0,0,.2),true,-1.0,true)
+		draw_circle(at,knob_r,MenuSurface.STONE,true,-1.0,true)
+		draw_arc(at,knob_r-1,PI*1.1,PI*1.9,16,Color(1,1,1,.7),1.6,true)
+		# A tick when on, a dash when off: the state reads without colour.
+		var ink := MenuSurface.MOSS if knob>.5 else MenuSurface.INK_FAINT
+		if knob>.5:
+			draw_polyline(PackedVector2Array([at+Vector2(-5,0),at+Vector2(-1.5,3.5),at+Vector2(5,-3.5)]),ink,2.4,true)
+		else:
+			draw_line(at+Vector2(-4.5,0),at+Vector2(4.5,0),ink,2.4,true)
+
+	func _ring() -> StyleBoxFlat:
+		var box := StyleBoxFlat.new()
+		box.draw_center = false
+		box.border_color = MenuSurface.INK
+		box.set_border_width_all(2)
+		box.set_corner_radius_all(int(TRACK.y*.5+4))
+		box.anti_aliasing = true
+		return box
 
 var hud
 var game
 var model: GameModel
 var landscape := false
 
-func prepare(owner_hud) -> void:
+# --- Motion ----------------------------------------------------------------------
+# One set of timings for every screen: a press sinks in PRESS and comes back
+# in RELEASE, screens and plates fade in FADE, things that travel (sheets,
+# thumbs, pages) take SLIDE with a cubic ease-out, a small spring (a bump, a
+# switch knob) takes POP, numbers count for COUNT. "Без вспышек"
+# (reduce_effects) keeps the fades and drops the springs, rises and counts.
+const PRESS := .08
+const RELEASE := .16
+const FADE := .18
+const SLIDE := .24
+const POP := .22
+const COUNT := .6
+const RISE := 14.0
+const STAGGER := .035
+# False for a screen built again in place (a resize, an ad that finished
+# loading): it appears as it was, without playing its entrance twice.
+var animated := true
+
+func prepare(owner_hud, animate: bool = true) -> void:
 	hud = owner_hud
 	game = hud.game
 	model = game.model
@@ -288,8 +386,33 @@ func prepare(owner_hud) -> void:
 	size = Vector2(1080,660) if landscape else Vector2(540,960)
 	position = (hud.root.size-size)*.5
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	animated = animate
+	if not animate: return
 	modulate.a = 0
-	create_tween().tween_property(self,"modulate:a",1.0,.18).set_trans(Tween.TRANS_SINE)
+	create_tween().tween_property(self,"modulate:a",1.0,FADE).set_trans(Tween.TRANS_SINE)
+
+func lively() -> bool:
+	return animated and not hud.effects_reduced()
+
+# An entrance for a part of a screen: it fades in and rises into place after
+# `delay`. It takes input from the first frame; only the look is late.
+func reveal(node: Control, delay: float = 0.0, rise: float = RISE) -> void:
+	if not lively(): return
+	var rest := node.position.y
+	node.modulate.a = 0.0
+	node.position.y = rest+rise
+	var tween := node.create_tween().set_parallel(true)
+	tween.tween_property(node,"modulate:a",1.0,FADE).set_delay(delay).set_trans(Tween.TRANS_SINE)
+	tween.tween_property(node,"position:y",rest,SLIDE).set_delay(delay).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+# A number that counts up to its value. The label holds the final text unless
+# the count really plays.
+func count_up(node: Label, value: int, prefix: String = "+", delay: float = 0.0) -> void:
+	node.text = prefix+str(value)
+	if not lively() or value<=0: return
+	node.text = prefix+"0"
+	var tween := node.create_tween()
+	tween.tween_method(func(shown: float): node.text = prefix+str(roundi(shown)),0.0,float(value),COUNT).set_delay(delay).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 func slab(parent: Node, at: Vector2, dimensions: Vector2, face: Color = STONE, lip: Color = STONE_LIP, lip_size: int = 4) -> Panel:
 	var node := Panel.new()
@@ -299,7 +422,7 @@ func slab(parent: Node, at: Vector2, dimensions: Vector2, face: Color = STONE, l
 	# Corners that do not fit tear the box: on some screen scales its edges
 	# run off down the screen.
 	var cut := mini(10,(int(minf(dimensions.x,dimensions.y))-lip_size)/2-2)
-	node.add_theme_stylebox_override("panel",hud.slab_style(face,lip,lip_size,cut))
+	node.add_theme_stylebox_override("panel",hud.slab_box(face,lip,lip_size,cut))
 	parent.add_child(node)
 	return node
 
@@ -318,7 +441,21 @@ func text(parent: Node, value: String, at: Vector2, dimensions: Vector2, font_si
 	return node
 
 func title(parent: Node, value: String, at: Vector2, width: float, font_size: int = 34) -> Label:
-	return text(parent,value,at,Vector2(width,font_size*1.3),font_size,INK,"display")
+	return fit_text(text(parent,value,at,Vector2(width,font_size*1.3),font_size,INK,"display"))
+
+# The size a label's text is drawn at: the accessibility text scale applied.
+func scaled(font_size: int) -> int:
+	return roundi(font_size*hud.text_scale)
+
+# A one-line label whose text would be cut (large text, a long name) is set a
+# little smaller instead, down to `minimum` points; below that it is cut.
+func fit_text(node: Label, minimum: int = 11) -> Label:
+	var font := node.get_theme_font("font")
+	var font_size := node.get_theme_font_size("font_size")
+	var room := node.size.x-2
+	while font_size>minimum and font.get_string_size(node.text,HORIZONTAL_ALIGNMENT_LEFT,-1,font_size).x>room: font_size -= 1
+	node.add_theme_font_size_override("font_size",font_size)
+	return node
 
 func paragraph(parent: Node, value: String, at: Vector2, dimensions: Vector2, font_size: int = 15, color: Color = INK_SOFT) -> Label:
 	var node := text(parent,value,at,dimensions,font_size,color)
@@ -342,8 +479,7 @@ func symbol(parent: Node, kind: int, at: Vector2, dimensions: Vector2 = Vector2(
 	return node
 
 func action(parent: Node, value: String, at: Vector2, dimensions: Vector2, callback: Callable, tone: String = "secondary") -> Button:
-	var node: Button = hud.button(parent,value,callback,tone=="primary")
-	hud.skin_button(node,tone)
+	var node: Button = hud.button(parent,value,callback,tone=="primary",tone)
 	node.position = at
 	node.custom_minimum_size = dimensions
 	node.size = dimensions
@@ -389,9 +525,11 @@ func segmented(parent: Node, at: Vector2, width: float, options: Array, selected
 	hover.bg_color = Color(STONE,.35)
 	for index in range(options.size()):
 		var button := action(parent,str(options[index]),at+Vector2(inset+index*each,inset),Vector2(each,height-inset*2),_segment_pressed.bind(buttons,thumb,index,callback,at.x+inset,each),"ghost")
+		button.begin_bulk_theme_override()
 		button.add_theme_font_size_override("font_size",15)
 		for state_name in ["normal","pressed","disabled"]: button.add_theme_stylebox_override(state_name,clear)
 		button.add_theme_stylebox_override("hover",hover)
+		button.end_bulk_theme_override()
 		buttons.append(button)
 	paint_segments(buttons,selected)
 	buttons[0].set_meta("thumb",thumb)
@@ -411,8 +549,10 @@ func pick_segment(buttons: Array[Button], index: int) -> void:
 func paint_segments(buttons: Array[Button], selected: int) -> void:
 	for index in range(buttons.size()):
 		var ink := STONE if index==selected else INK_SOFT
+		buttons[index].begin_bulk_theme_override()
 		for color_name in ["font_color","font_hover_color","font_pressed_color","font_hover_pressed_color","font_focus_color"]:
 			buttons[index].add_theme_color_override(color_name,ink if index==selected or color_name=="font_color" else INK)
+		buttons[index].end_bulk_theme_override()
 
 func _segment_pressed(buttons: Array[Button], thumb: Panel, index: int, callback: Callable, left: float, each: float) -> void:
 	if not is_instance_valid(thumb) or int(thumb.get_meta("index",-1))==index: return
@@ -422,8 +562,12 @@ func _segment_pressed(buttons: Array[Button], thumb: Panel, index: int, callback
 	if result is bool and not result: return
 	thumb.set_meta("index",index)
 	thumb.visible = true
+	# One glide at a time: a second tap takes the thumb on from where it is.
+	var running: Variant = thumb.get_meta("glide") if thumb.has_meta("glide") else null
+	if running is Tween and running.is_valid(): running.kill()
 	var tween := thumb.create_tween()
-	tween.tween_property(thumb,"position:x",left+index*each,.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	thumb.set_meta("glide",tween)
+	tween.tween_property(thumb,"position:x",left+index*each,SLIDE).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	paint_segments(buttons,index)
 
 func slider(parent: Node, at: Vector2, width: float, value: float, minimum: float, maximum: float, step: float, format: Callable, callback: Callable) -> RopeSlider:
@@ -467,20 +611,49 @@ func wiggle_soon(badge: Control, message: String) -> void:
 		var tween := badge.create_tween()
 		tween.tween_property(badge,"rotation",.12,.06)
 		tween.tween_property(badge,"rotation",-.1,.09)
-		tween.tween_property(badge,"rotation",0.0,.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tween.tween_property(badge,"rotation",0.0,POP).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	game.toast(message,1.8,"menu")
 
-func coin_amount(parent: Node, value: int, at: Vector2, font_size: int = 17, color: Color = COIN, kind: int = 12) -> void:
+# `room` is the width kept for the number when it will change in place.
+func coin_amount(parent: Node, value: int, at: Vector2, font_size: int = 17, color: Color = COIN, kind: int = 12, room: float = 0.0) -> Label:
 	var icon := font_size+5
 	symbol(parent,kind,at+Vector2(0,(font_size*1.35-icon)*.5),Vector2(icon,icon),color)
-	var width: float = hud.heading_font.get_string_size(str(value),HORIZONTAL_ALIGNMENT_LEFT,-1,font_size).x+4
-	text(parent,str(value),at+Vector2(icon+5,0),Vector2(width,font_size*1.35),font_size,INK,"display")
+	# Measured at the size it is drawn: at large text the number was cut ("30"
+	# for 300 on the wardrobe cards).
+	var width: float = maxf(room,hud.heading_font.get_string_size(str(value),HORIZONTAL_ALIGNMENT_LEFT,-1,scaled(font_size)).x+4)
+	return text(parent,str(value),at+Vector2(icon+5,0),Vector2(width,font_size*1.35),font_size,INK,"display")
+
+# The wallet at the top of a screen. Its numbers are kept: refresh_wallet
+# counts them to the profile's values after a purchase, so the header never
+# has to be rebuilt (and never shows what the player had before).
+const WALLET_KEYS := ["gold","diamonds"]
+var wallet_labels := {}
+var wallet_shown := {}
+var wallet_tweens := {}
 
 func wallet(at: Vector2) -> void:
 	var coins := slab(self,at,Vector2(118,44))
-	coin_amount(coins,int(model.profile["gold"]),Vector2(12,8),17,COIN,12)
+	wallet_labels["gold"] = coin_amount(coins,int(model.profile["gold"]),Vector2(12,8),17,COIN,12,74)
 	var gems := slab(self,at+Vector2(126,0),Vector2(82,44))
-	coin_amount(gems,int(model.profile["diamonds"]),Vector2(10,8),17,CRYSTAL,13)
+	wallet_labels["diamonds"] = coin_amount(gems,int(model.profile["diamonds"]),Vector2(10,8),17,CRYSTAL,13,40)
+	for key in WALLET_KEYS: wallet_shown[key] = float(int(model.profile[key]))
+
+func refresh_wallet() -> void:
+	for key in WALLET_KEYS:
+		var node: Label = wallet_labels.get(key)
+		if not is_instance_valid(node): continue
+		var target := float(int(model.profile[key]))
+		var from := float(wallet_shown.get(key,target))
+		var running: Tween = wallet_tweens.get(key)
+		if running!=null and running.is_valid(): running.kill()
+		wallet_shown[key] = target
+		if is_equal_approx(from,target) or hud.effects_reduced() or not node.is_inside_tree():
+			node.text = str(int(target))
+			continue
+		var tween := node.create_tween()
+		wallet_tweens[key] = tween
+		tween.tween_method(func(shown: float): node.text = str(roundi(shown)),from,target,COUNT).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		hud.pulse(node.get_parent(),.05)
 
 func time_string(seconds: float) -> String:
 	var total := int(seconds)

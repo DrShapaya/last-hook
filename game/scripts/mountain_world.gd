@@ -314,11 +314,44 @@ func update_rope_path(sim: RopeSim) -> bool:
 		sim.request_length(sim.target_length)
 	return not rope_clearance_blocked(sim.effective_anchor(),sim.pos,.045)
 
+# --- First draw in parts ---------------------------------------------------------
+# The first time a mesh is drawn the GPU driver sets it up; a whole prepared
+# mountain shown at once (about 800 meshes) froze a lobby frame for 130-340 ms
+# on a PC. warm_begin hides the meshes, warm_step shows a few per frame while
+# the offscreen warm view draws them, warm_finish shows whatever is left.
+var _warm_hidden: Array[VisualInstance3D] = []
+
+func warm_begin() -> void:
+	warm_finish()
+	_collect_warm(self)
+
+func _collect_warm(node: Node) -> void:
+	for child in node.get_children():
+		if child is VisualInstance3D and child.visible:
+			child.visible = false
+			_warm_hidden.append(child)
+		_collect_warm(child)
+
+# Shows the next `count` meshes; true while some are still hidden.
+func warm_step(count: int) -> bool:
+	while count>0 and not _warm_hidden.is_empty():
+		var node: VisualInstance3D = _warm_hidden.pop_back()
+		if is_instance_valid(node):
+			node.visible = true
+			count -= 1
+	return not _warm_hidden.is_empty()
+
+func warm_finish() -> void:
+	for node in _warm_hidden:
+		if is_instance_valid(node): node.visible = true
+	_warm_hidden.clear()
+
+func warm_left() -> int:
+	return _warm_hidden.size()
+
 func shader(key: String, code: String) -> Shader:
-	if not shaders.has(key):
-		var result := Shader.new()
-		result.code = code
-		shaders[key] = result
+	# Shared across worlds (ShaderBank): a new world draws on compiled shaders.
+	if not shaders.has(key): shaders[key] = ShaderBank.of(code)
 	return shaders[key]
 
 func mat(key: String, color: Color, unlit: bool = false) -> StandardMaterial3D:
@@ -894,7 +927,11 @@ func _run_chunk_job(key: int, chunk: Node3D) -> void:
 			if not await build_pause(chunk): break
 		var scene := ResourceLoader.load_threaded_get(baked) as PackedScene
 		if not build_job_cancelled and is_instance_valid(chunk):
-			if scene!=null: _attach_baked(key,chunk,scene)
+			if scene!=null:
+				_attach_baked(key,chunk,scene)
+				# Instancing a section is one long piece (13 ms on a PC): what
+				# follows waits for the next frame instead of sharing this one.
+				build_deadline = 0
 			else: await visuals.build_chunk(key,chunk)
 	if not build_job_cancelled: await _build_chunk_objects(key,chunk)
 	build_job_key = -1
@@ -943,6 +980,8 @@ func _build_chunk_objects(key: int, chunk: Node3D) -> void:
 		if int(floor(object["top"]/24))!=key: continue
 		if not await build_pause(chunk): return
 		visuals.build_ledge(object,chunk)
+		# A platform is a long piece too (14 ms and more): one per frame.
+		build_deadline = 0
 	if key==0 and layout.finite: visuals.build_base_camp(chunk)
 	for find in finds:
 		if int(floor(find["pos"].y/24))!=key: continue

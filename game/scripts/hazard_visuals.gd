@@ -460,11 +460,18 @@ func update(time: float, hero: Vector2, haze_amount: float, camera: Vector2) -> 
 						spike.scale = Vector3.ONE
 						spike.position = Vector3(float(hazard["x"]),top-.45,parts["z"])
 			"collapse":
+				# The bridge waits for its platform's chunk (empty parts until
+				# then) and has no crack overlay of its own: the timber deck
+				# trembles from where it rests.
 				var parts: Dictionary = entry["parts"]
-				var slab: Node3D = parts["slab"]
-				(parts["cracks"] as Node3D).visible = name=="telegraph"
-				if name=="telegraph" and slab.visible:
-					slab.position = (parts["rest"] as Vector3)+Vector3(sin(time*45.0)*.04*progress,-.03*progress,0)
+				var slab = parts.get("slab")
+				if not is_instance_valid(slab): continue
+				if parts.has("cracks"): (parts["cracks"] as Node3D).visible = name=="telegraph"
+				if not parts.has("rest"): parts["rest"] = (slab as Node3D).position
+				if name=="telegraph" and (slab as Node3D).visible:
+					(slab as Node3D).position = (parts["rest"] as Vector3)+Vector3(sin(time*45.0)*.04*progress,-.03*progress,0)
+				elif (slab as Node3D).position!=parts["rest"]:
+					(slab as Node3D).position = parts["rest"]
 	_update_haze(hero,haze_amount,camera)
 
 func _update_haze(hero: Vector2, amount: float, camera: Vector2) -> void:

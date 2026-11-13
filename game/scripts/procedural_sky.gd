@@ -121,6 +121,9 @@ func _apply_biome_palette(loc: int) -> void:
 			sky_material.set_shader_parameter("snow_amount",0.35)
 
 func _resize() -> void:
+	# A world being let go (main.retire) is out of the tree but still hears
+	# the window.
+	if not is_inside_tree(): return
 	var size := get_viewport().get_visible_rect().size
 	if size.x<1 or size.y<1: return
 	_set_param("aspect",size.x/size.y)

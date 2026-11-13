@@ -28,6 +28,20 @@ var impact_time := -10.0
 var impact_point := Vector2.ZERO
 var impact_kind := ""
 var body_shadow: MeshInstance3D
+# The hero and the rope hang about three units in front of the rock, and the
+# sun shines nearly into the wall, so their own shadows landed some two
+# units below and to the side, as if the hero were far from the mountain.
+# They cast nothing themselves; invisible twins (shadow only) stand
+# SHADOW_GAP in front of the stone behind the hero and cast it there.
+const SHADOW_GAP := .35
+# Where the shadow lands from a twin SHADOW_GAP in front of the stone
+# (main.gd SUN_DIRECTION (.30,-.50,-.81) scaled by .35/.81).
+const SHADOW_DRIFT := Vector2(.13,-.22)
+var host_world: MountainWorld
+var hero_twin: MeshInstance3D
+var rope_twin: MeshInstance3D
+var rope_twin_secondary: MeshInstance3D
+var shadow_shift := NAN
 var visual_quality := "balanced"
 var effects_quality := "full"
 # The 3D hero (HeroModel, docs/CHARACTER_3D_PLAN.md) is the hero since the
@@ -38,6 +52,7 @@ func setup(world: MountainWorld, tips: int = 1) -> void:
 	body = HeroModel.new() if use_3d_hero else preload("res://scenes/player_sprite.tscn").instantiate() as ExplorerRig
 	add_child(body)
 	body.setup()
+	host_world = world
 	rope_material = world.mat("braided_rope",Color.WHITE,false)
 	rope_material.albedo_texture = load(ART+"rope-albedo.png") as Texture2D
 	rope_material.uv1_scale = Vector3(.20,1,1)
@@ -131,8 +146,7 @@ func setup(world: MountainWorld, tips: int = 1) -> void:
 	world.add_child(impact_mesh)
 	var shadow_quad := QuadMesh.new()
 	shadow_quad.size = Vector2(.82,.28)
-	var shadow_shader := Shader.new()
-	shadow_shader.code = "shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_never; void fragment(){ vec2 p=UV*2.0-1.0; float d=length(p*vec2(1.0,.64)); ALBEDO=vec3(.012,.020,.028); ALPHA=smoothstep(1.0,.05,d)*.24; }"
+	var shadow_shader := ShaderBank.of("shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_never; void fragment(){ vec2 p=UV*2.0-1.0; float d=length(p*vec2(1.0,.64)); ALBEDO=vec3(.012,.020,.028); ALPHA=smoothstep(1.0,.05,d)*.24; }")
 	var shadow_material := ShaderMaterial.new()
 	shadow_material.shader = shadow_shader
 	body_shadow = MeshInstance3D.new()
@@ -142,15 +156,65 @@ func setup(world: MountainWorld, tips: int = 1) -> void:
 	body_shadow.position = Vector3(0,-.64,-.18)
 	body_shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(body_shadow)
+	_build_shadow_twins(world)
 	set_visual_quality(world.visual_quality)
 
+func _build_shadow_twins(world: MountainWorld) -> void:
+	var hero_mesh = body.get("mesh") if "mesh" in body else null
+	if hero_mesh is MeshInstance3D and (hero_mesh as MeshInstance3D).skin!=null:
+		var source := hero_mesh as MeshInstance3D
+		source.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# The same skinned mesh on the same skeleton follows every pose.
+		hero_twin = MeshInstance3D.new()
+		hero_twin.name = "Тень героя"
+		hero_twin.mesh = source.mesh
+		hero_twin.skin = source.skin
+		source.get_parent().add_child(hero_twin)
+		hero_twin.skeleton = hero_twin.get_path_to(source.get_node(source.skeleton))
+	rope_twin = MeshInstance3D.new()
+	rope_twin.name = "Тень каната"
+	world.add_child(rope_twin)
+	rope_twin_secondary = MeshInstance3D.new()
+	rope_twin_secondary.name = "Тень каната 2"
+	world.add_child(rope_twin_secondary)
+
+# How far the twins stand behind the hero: SHADOW_GAP in front of the
+# frontmost stone where the shadow lands, eased so it never jumps.
+func _shadow_depth(sim: RopeSim) -> float:
+	var wall := -INF
+	if is_instance_valid(host_world) and host_world.visuals!=null:
+		var land := sim.pos+SHADOW_DRIFT
+		for dx in [-.35,0.0,.35]:
+			for dy in [-.6,-.05,.5]:
+				wall = maxf(wall,host_world.visuals.wall_depth(land+Vector2(dx,dy)))
+	if not is_finite(wall): wall = 0.0
+	var shift := clampf(wall+SHADOW_GAP-position.z,-6.0,0.0)
+	shadow_shift = shift if is_nan(shadow_shift) else lerpf(shadow_shift,shift,.25)
+	return shadow_shift
+
+func _place_shadow_twins(sim: RopeSim) -> void:
+	var shift := _shadow_depth(sim)
+	var casting := visual_quality!="battery"
+	if is_instance_valid(hero_twin):
+		var source: MeshInstance3D = body.get("mesh")
+		hero_twin.visible = casting and source.is_visible_in_tree()
+		hero_twin.global_transform = source.global_transform.translated(Vector3(0,0,shift))
+	for pair in [[rope_twin,rope],[rope_twin_secondary,rope_secondary]]:
+		var twin: MeshInstance3D = pair[0]
+		var line: MeshInstance3D = pair[1]
+		if not is_instance_valid(twin) or not is_instance_valid(line): continue
+		twin.mesh = line.mesh
+		twin.visible = casting and line.visible and line.mesh!=null
+		twin.position = line.position+Vector3(0,0,shift)
+
 func _update_body_shadow(sim: RopeSim) -> void:
-	# The sun casts the hero's real shadow. The contact blob only marks the
-	# feet on a ledge; with shadows off (battery) it stands in for the cast
-	# shadow at the same sun offset, so nothing floats under a hanging hero.
+	# The sun casts the hero's shadow from the twins near the stone. The
+	# contact blob only marks the feet on a ledge; with shadows off (battery)
+	# it stands in for the cast shadow, on the stone just behind the hero.
 	if visual_quality=="battery":
 		body_shadow.visible = true
-		body_shadow.position = Vector3(.42,-.66,-1.6) if not sim.grounded else Vector3(.06,-.62,-.18)
+		var on_stone := Vector3(SHADOW_DRIFT.x,SHADOW_DRIFT.y-.1,_shadow_depth(sim)-SHADOW_GAP+.05)
+		body_shadow.position = on_stone if not sim.grounded else Vector3(.06,-.62,-.18)
 		body_shadow.scale = Vector3(1.15,1.6,1.0) if not sim.grounded else Vector3.ONE
 	else:
 		body_shadow.visible = sim.grounded
@@ -163,13 +227,18 @@ func hero_event(name: String) -> void:
 
 func set_visual_quality(value: String) -> void:
 	visual_quality = value if value in ["high","balanced","battery"] else "balanced"
-	var cast := GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if visual_quality=="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	if is_instance_valid(rope): rope.cast_shadow = cast
-	if is_instance_valid(rope_secondary): rope_secondary.cast_shadow = cast
+	# The rope, the hook and the hero cast nothing themselves: their twins
+	# near the stone do (_place_shadow_twins), and battery has no shadows.
+	var off := GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if is_instance_valid(rope): rope.cast_shadow = off
+	if is_instance_valid(rope_secondary): rope_secondary.cast_shadow = off
 	for head in [bolt,bolt_secondary]:
 		if not is_instance_valid(head): continue
 		for piece in head.get_children():
-			if piece is GeometryInstance3D: piece.cast_shadow = cast
+			if piece is GeometryInstance3D: piece.cast_shadow = off
+	var twin_cast := off if visual_quality=="battery" else GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	for twin in [hero_twin,rope_twin,rope_twin_secondary]:
+		if is_instance_valid(twin): twin.cast_shadow = twin_cast
 
 static func hook_piece(polygon: PackedVector2Array, texture_size: Vector2) -> ArrayMesh:
 	var surface := SurfaceTool.new()
@@ -277,6 +346,7 @@ func draw(sim: RopeSim, target: Vector2, tether: bool, flying_bolt: bool, time: 
 		rope_outer.mesh = rope_strip(points,.047,_mesh_of(rope_outer))
 		rope_outer.position.z = -.045
 	_set_rope_tint(warning)
+	_place_shadow_twins(sim)
 	contact_glow.visible = sim.attached or flying_bolt
 	contact_glow.position = to+Vector3(0,0,.15)
 	if sim.attached and not was_attached: catch_time = time
@@ -325,6 +395,7 @@ func _draw_volley(sim: RopeSim, time: float, warning: bool, volley: Array) -> vo
 		outline.mesh = rope_strip(points,.047,_mesh_of(outline))
 		outline.position.z = -.045
 	_set_rope_tint(warning)
+	_place_shadow_twins(sim)
 	var any_flying := false
 	for item in volley:
 		if str(item.get("state","")) in ["flying","returning"]:

@@ -328,6 +328,72 @@ class LevelIntro extends Control:
 		subtitle.position = Vector2(0,middle+4-amount*28.0)
 		subtitle.size.x = area.x
 
+# The way into a climb: the level start's iris run backwards. It closes on
+# the button that was pressed, the climb is started while the screen is
+# covered (a heavy first frame then shows as a still slate, not a frozen
+# menu), and LevelIntro opens it again on the climber. It takes every touch
+# while it plays, so a second tap cannot start a second run.
+class IrisClose extends Control:
+	const DURATION := .26
+	var iris := ColorRect.new()
+	var iris_material := ShaderMaterial.new()
+	var focus := Vector2.ZERO
+	var then: Callable
+	var covered_frames := -1
+	var amount := 0.0
+	func setup(origin: Vector2, action: Callable) -> void:
+		mouse_filter = Control.MOUSE_FILTER_STOP
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		focus = origin if origin.is_finite() else get_viewport_rect().size*.5
+		then = action
+		iris.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		iris.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		iris_material.shader = preload("res://shaders/level_intro.gdshader")
+		iris_material.set_shader_parameter("tint",MenuSurface.SLATE)
+		iris_material.set_shader_parameter("rim",MenuSurface.HOLD)
+		iris.material = iris_material
+		add_child(iris)
+		set_open(1.0)
+		var tween := create_tween()
+		tween.tween_method(set_open,1.0,0.0,DURATION).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+		tween.tween_callback(func(): covered_frames = 0)
+	# 1 open, 0 covered; the same edge and rim as LevelIntro.
+	func set_open(value: float) -> void:
+		amount = value
+		var area := get_viewport_rect().size
+		var far := 0.0
+		for corner in [Vector2.ZERO,Vector2(area.x,0),Vector2(0,area.y),area]: far = maxf(far,focus.distance_to(corner))
+		var feather := lerpf(10.0,46.0,value)
+		iris_material.set_shader_parameter("size",area)
+		iris_material.set_shader_parameter("center",focus)
+		iris_material.set_shader_parameter("radius",lerpf(-feather*1.5,far+feather*1.5,value))
+		iris_material.set_shader_parameter("feather",feather)
+		iris_material.set_shader_parameter("rim_strength",sin(clampf(value,0,1)*PI)*.9)
+	func covered() -> bool:
+		return covered_frames>=0
+	func _process(_delta: float) -> void:
+		if covered_frames<0: return
+		covered_frames += 1
+		# One whole frame on the covered screen first, so the work below is
+		# done behind a slate already on screen.
+		if covered_frames<2: return
+		set_process(false)
+		var action := then
+		then = Callable()
+		action.call()
+		reopen()
+	# After the action: gone at once if a climb's own intro took over the
+	# screen; opened again on the same spot if nothing started.
+	func reopen() -> void:
+		var hud := get_parent()
+		if is_instance_valid(hud.level_intro):
+			queue_free()
+			return
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var tween := create_tween()
+		tween.tween_method(set_open,0.0,1.0,DURATION).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tween.tween_callback(queue_free)
+
 # Beacon: soft pulsing rings on the two valid exits it found.
 class BeaconMarks extends Control:
 	var points: Array[Vector2] = []
@@ -570,6 +636,14 @@ func slab_style(face: Color, lip: Color, lip_size: int = 4, cut: int = 10) -> St
 	box.border_blend = false
 	return box
 
+# The same box for every slab of one look (MenuSurface.slab): shared, so it
+# must not be changed by the caller. slab_style gives a box of one's own.
+var _slab_boxes := {}
+func slab_box(face: Color, lip: Color, lip_size: int = 4, cut: int = 10) -> StyleBoxFlat:
+	var key := "%s|%s|%d|%d" % [face.to_html(),lip.to_html(),lip_size,cut]
+	if not _slab_boxes.has(key): _slab_boxes[key] = slab_style(face,lip,lip_size,cut)
+	return _slab_boxes[key]
+
 func chip(parent: Node, face: Color) -> PanelContainer:
 	var node := PanelContainer.new()
 	var box := slab_style(Color(face,.92),MenuSurface.SLATE_LIP,3,7)
@@ -652,26 +726,33 @@ func label(parent: Node, text: String, size: int = 17, color: Color = WHITE) -> 
 	parent.add_child(node)
 	return node
 
-func button(parent: Node, text: String, callback: Callable, gold: bool = false) -> Button:
+func button(parent: Node, text: String, callback: Callable, gold: bool = false, tone: String = "") -> Button:
 	var node := Button.new()
 	node.text = text
 	node.custom_minimum_size = Vector2(0,51)
 	node.focus_mode = Control.FOCUS_NONE
-	parent.add_child(node)
 	node.pressed.connect(game.ui_tap)
 	if callback.is_valid(): node.pressed.connect(callback)
-	skin_button(node,"primary" if gold else "secondary")
+	# Skinned before it enters the tree: there every override is a theme
+	# change that the button answers at once.
+	skin_button(node,tone if not tone.is_empty() else "primary" if gold else "secondary")
+	parent.add_child(node)
 	return node
 
 # Tones: primary (hold yellow), secondary (stone), buy (stone on a yellow
 # lip), selected (slate), ghost (text only), dark (slate over the climb).
-func skin_button(node: Button, tone: String = "secondary") -> void:
+# The boxes of a tone are made once and shared by every button of that tone:
+# five new boxes per button made a settings page take 45 ms to build.
+var _skins := {}
+func _skin(tone: String) -> Dictionary:
+	var key := "%s|%s|%s" % [tone,MenuSurface.HOLD.to_html(),MenuSurface.INK.to_html()]
+	if _skins.has(key): return _skins[key]
 	var faces := {"primary":MenuSurface.HOLD,"secondary":MenuSurface.STONE,"buy":BUY_FACE,"selected":MenuSurface.SLATE,"ghost":Color(MenuSurface.STONE,0),"dark":PLAY_PANEL}
 	var lips := {"primary":MenuSurface.HOLD_LIP,"secondary":MenuSurface.STONE_LIP,"buy":MenuSurface.HOLD,"selected":MenuSurface.SLATE_LIP,"ghost":Color.TRANSPARENT,"dark":MenuSurface.SLATE_LIP}
-	var inks := {"primary":MenuSurface.INK,"secondary":MenuSurface.INK,"buy":MenuSurface.INK,"selected":MenuSurface.STONE,"ghost":MenuSurface.INK_SOFT,"dark":MenuSurface.STONE}
 	var face: Color = faces.get(tone,MenuSurface.STONE)
 	var lip: Color = lips.get(tone,MenuSurface.STONE_LIP)
 	var lip_size := 0 if tone=="ghost" else 5 if tone=="primary" else 4
+	var skin := {}
 	for state_name in ["normal","hover","pressed","disabled"]:
 		var fill := face
 		var edge := lip
@@ -699,10 +780,18 @@ func skin_button(node: Button, tone: String = "secondary") -> void:
 		box.content_margin_top = 6+lip_size-depth
 		box.content_margin_bottom = 6
 		if state_name=="pressed": box.expand_margin_top = -float(lip_size-depth)
-		node.add_theme_stylebox_override(state_name,box)
+		skin[state_name] = box
 	var focus := style(Color.TRANSPARENT,9,MenuSurface.INK)
 	focus.set_border_width_all(2)
-	node.add_theme_stylebox_override("focus",focus)
+	skin["focus"] = focus
+	_skins[key] = skin
+	return skin
+
+func skin_button(node: Button, tone: String = "secondary") -> void:
+	var inks := {"primary":MenuSurface.INK,"secondary":MenuSurface.INK,"buy":MenuSurface.INK,"selected":MenuSurface.STONE,"ghost":MenuSurface.INK_SOFT,"dark":MenuSurface.STONE}
+	var skin := _skin(tone)
+	node.begin_bulk_theme_override()
+	for state_name in skin: node.add_theme_stylebox_override(state_name,skin[state_name])
 	var ink: Color = inks.get(tone,MenuSurface.INK)
 	for color_name in ["font_color","font_hover_color","font_pressed_color","font_hover_pressed_color","font_focus_color"]:
 		node.add_theme_color_override(color_name,ink if not (tone=="ghost" and color_name!="font_color") else MenuSurface.INK)
@@ -711,6 +800,7 @@ func skin_button(node: Button, tone: String = "secondary") -> void:
 	# control uses the strong text weight so long labels still fit.
 	node.add_theme_font_override("font",heading_font if tone=="primary" else strong_font)
 	node.add_theme_font_size_override("font_size",18 if tone=="primary" else 16)
+	node.end_bulk_theme_override()
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	node.clip_text = true
 	if not node.has_meta("press_motion"):
@@ -722,10 +812,17 @@ func skin_button(node: Button, tone: String = "secondary") -> void:
 # tap answers in the same physical way.
 func _press_motion(node: Button, down: bool) -> void:
 	if not is_instance_valid(node): return
+	if down: last_press = node.get_global_rect().get_center()
 	node.pivot_offset = node.size*.5
+	# One motion at a time: a quick tap used to leave the sinking and the
+	# springing tweens fighting over the same scale.
+	var running: Variant = node.get_meta("press_tween") if node.has_meta("press_tween") else null
+	if running is Tween and running.is_valid(): running.kill()
 	var tween := node.create_tween()
-	if down: tween.tween_property(node,"scale",Vector2.ONE*.95,.07).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	else: tween.tween_property(node,"scale",Vector2.ONE,.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	node.set_meta("press_tween",tween)
+	if down: tween.tween_property(node,"scale",Vector2.ONE*.95,MenuSurface.PRESS).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	elif effects_reduced(): tween.tween_property(node,"scale",Vector2.ONE,MenuSurface.PRESS).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	else: tween.tween_property(node,"scale",Vector2.ONE,MenuSurface.RELEASE).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 func select_menu(tab: String) -> void:
 	# Taps, swipes and keys slide the section in from its side (menu_slide).
@@ -854,10 +951,32 @@ func play_top(x_from: float, x_to: float, edge: float) -> float:
 
 # The level-start transition over a freshly shown play screen; the HUD
 # itself fades in behind the opening iris.
+# Where the last button was pressed, in viewport pixels: the iris into a
+# climb closes there.
+var last_press := Vector2.INF
+var iris_close: IrisClose
+# Off in headless runs (tests, tools): there the action happens at once.
+var transitions := DisplayServer.get_name()!="headless"
+
+func transition_running() -> bool:
+	return is_instance_valid(iris_close) and not iris_close.is_queued_for_deletion() and iris_close.then.is_valid()
+
+func close_iris(action: Callable, origin: Vector2 = Vector2.INF) -> void:
+	if transition_running(): return
+	if not transitions:
+		action.call()
+		return
+	if is_instance_valid(iris_close): iris_close.queue_free()
+	iris_close = IrisClose.new()
+	add_child(iris_close)
+	iris_close.setup(origin if origin.is_finite() else last_press,action)
+
 func play_intro(origin: Vector2, heading: String, note: String) -> void:
 	if is_instance_valid(level_intro): level_intro.queue_free()
 	level_intro = LevelIntro.new()
 	add_child(level_intro)
+	# Over the closing iris, which goes as soon as this one covers the screen.
+	if is_instance_valid(iris_close): move_child(level_intro,iris_close.get_index()+1)
 	level_intro.setup(origin,heading,note,heading_font,body_font,root.scale.x)
 	content.modulate.a = 0.0
 	create_tween().tween_property(content,"modulate:a",1.0,.3).set_delay(.26)
@@ -1219,10 +1338,15 @@ func show_chip(holder: Control, wanted: bool) -> void:
 	holder.visible = wanted
 
 func pulse(node: Control, amount: float = .08) -> void:
+	if not is_instance_valid(node): return
 	node.pivot_offset = node.size*.5
-	var tween := create_tween()
-	tween.tween_property(node,"scale",Vector2.ONE*(1+amount),.09).set_trans(Tween.TRANS_SINE)
-	tween.tween_property(node,"scale",Vector2.ONE,.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	# One bump at a time, and it always ends at rest.
+	var running: Variant = node.get_meta("pulse_tween") if node.has_meta("pulse_tween") else null
+	if running is Tween and running.is_valid(): running.kill()
+	var tween := node.create_tween()
+	node.set_meta("pulse_tween",tween)
+	tween.tween_property(node,"scale",Vector2.ONE*(1+amount),MenuSurface.PRESS).set_trans(Tween.TRANS_SINE)
+	tween.tween_property(node,"scale",Vector2.ONE,MenuSurface.POP).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 func update_play() -> void:
 	toast_label.visible = game.model.profile.get("notifications",true) and game.hint_timer>0 and game.state in ["play","menu","revive"]
@@ -1489,13 +1613,16 @@ func show_locations() -> void:
 func menu_surface(mode: String) -> ExpeditionMenu:
 	game.ads.set_main_menu(false)
 	game.ads.set_gameplay(false)
+	# The same screen built again in place (the window changed, an ad became
+	# ready) appears at once: its entrance played when it first opened.
+	var again := layout_mode==mode
 	clear()
 	layout_mode = mode
 	fit_viewport()
 	content.position = Vector2.ZERO
 	var screen := ExpeditionMenu.new()
 	content.add_child(screen)
-	screen.prepare(self)
+	screen.prepare(self,not again)
 	return screen
 
 func show_pause() -> void:
@@ -1526,41 +1653,57 @@ func _build_exit_confirmation() -> void:
 	exit_overlay.add_child(veil)
 	exit_dialog = Panel.new()
 	exit_dialog.name = "Диалог выхода"
-	exit_dialog.size = Vector2(430,230)
+	exit_dialog.size = Vector2(430,198)
 	exit_dialog.add_theme_stylebox_override("panel",slab_style(Color("24323df7"),MenuSurface.SLATE_LIP,5,12))
 	exit_dialog.mouse_filter = Control.MOUSE_FILTER_STOP
 	exit_overlay.add_child(exit_dialog)
-	var title := label(exit_dialog,"Выйти из игры?",22,WHITE)
-	title.position = Vector2(24,24)
+	var title := label(exit_dialog,"Выйти из игры?",24,WHITE)
+	title.add_theme_font_override("font",heading_font)
+	title.position = Vector2(24,22)
 	title.size = Vector2(382,34)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var message := label(exit_dialog,"Прогресс текущего восхождения сохранён.",15,MUTED)
-	message.position = Vector2(24,68)
-	message.size = Vector2(382,48)
+	message.position = Vector2(24,62)
+	message.size = Vector2(382,44)
 	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	var stay := button(exit_dialog,"Остаться",hide_exit_confirmation)
-	stay.position = Vector2(24,150)
+	stay.position = Vector2(24,120)
 	stay.size = Vector2(184,54)
 	var leave := button(exit_dialog,"Выйти",game.exit_app,true)
-	leave.position = Vector2(222,150)
+	leave.position = Vector2(222,120)
 	leave.size = Vector2(184,54)
+
+# The dialog is open from the call that shows it to the call that hides it;
+# the veil and the plate only fade behind that, so Back and a second tap
+# always act on the state and never on a half-played animation.
+var exit_open := false
+var exit_tween: Tween
 
 func show_exit_confirmation() -> void:
 	if not is_instance_valid(exit_overlay): return
+	if exit_tween!=null and exit_tween.is_valid(): exit_tween.kill()
+	exit_open = true
 	exit_overlay.visible = true
+	exit_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	exit_overlay.move_to_front()
 	exit_dialog.position = (root.size-exit_dialog.size)*.5
 	exit_dialog.pivot_offset = exit_dialog.size*.5
-	exit_dialog.scale = Vector2.ONE*.92
-	exit_dialog.modulate.a = 0.0
-	var tween := create_tween().set_parallel(true)
-	tween.tween_property(exit_dialog,"scale",Vector2.ONE,.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tween.tween_property(exit_dialog,"modulate:a",1.0,.16).set_trans(Tween.TRANS_SINE)
+	exit_dialog.scale = Vector2.ONE if effects_reduced() else Vector2.ONE*.94
+	exit_overlay.modulate.a = 0.0
+	exit_tween = create_tween().set_parallel(true)
+	exit_tween.tween_property(exit_dialog,"scale",Vector2.ONE,MenuSurface.POP).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	exit_tween.tween_property(exit_overlay,"modulate:a",1.0,MenuSurface.FADE).set_trans(Tween.TRANS_SINE)
 
 func hide_exit_confirmation() -> void:
-	if not is_instance_valid(exit_overlay): return
-	exit_overlay.visible = false
+	if not is_instance_valid(exit_overlay) or not exit_open: return
+	if exit_tween!=null and exit_tween.is_valid(): exit_tween.kill()
+	exit_open = false
+	# Taps go through to the screen at once; the plate fades out behind them.
+	exit_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	exit_tween = create_tween()
+	exit_tween.tween_property(exit_overlay,"modulate:a",0.0,MenuSurface.PRESS*1.5).set_trans(Tween.TRANS_SINE)
+	exit_tween.tween_callback(func(): exit_overlay.visible = false)
 
 func exit_confirmation_visible() -> bool:
-	return is_instance_valid(exit_overlay) and exit_overlay.visible
+	return is_instance_valid(exit_overlay) and exit_open

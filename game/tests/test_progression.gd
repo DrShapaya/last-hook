@@ -166,6 +166,8 @@ func run_tests() -> void:
 	var diamonds_before := int(game.model.profile["diamonds"])
 	game.finish_run(false)
 	check(game.settlement["zone_diamonds"]==3 and game.model.profile["diamonds"]==diamonds_before,"result reports previously banked zone diamonds without paying them again")
+	# The totals count up to their value (MenuSurface.count_up).
+	await create_timer(MenuSurface.COUNT+.4).timeout
 	check(has_label(game,"Новые зоны, уже на счету") and has_label(game,"+3"),"result displays the zone gold row and its diamond reward")
 	game.show_menu()
 	game.hud.touch_controls_hint = true

@@ -34,6 +34,14 @@ func _init(owner_world: Node3D, source: MountainLayout) -> void:
 	stone_material.set_shader_parameter("facet_strength",1.0)
 	stone_material.set_shader_parameter("detail_strength",.45)
 	stone_material.set_shader_parameter("material_tint",1.0)
+	# Grips are small blocks: with the rock's soft form light they took the
+	# fill from every side alike. A deeper drop on faces turned from the light,
+	# a darker floor away from the sun and shade towards the silhouette give
+	# them a lit top and sun side and a dark underside, like the rock masses.
+	stone_material.set_shader_parameter("form_shade",.46)
+	stone_material.set_shader_parameter("form_lit",1.38)
+	stone_material.set_shader_parameter("shade_floor",.22)
+	stone_material.set_shader_parameter("limb_shade",.32)
 	obstacle_material.shader = stone_material.shader
 	obstacle_material.set_shader_parameter("snow_override",0.0)
 	obstacle_material.set_shader_parameter("material_tint",1.0)
@@ -90,17 +98,9 @@ func platform_look(_point: Vector2) -> String:
 func ledge_materials(_profile: GripBiomeProfile, look: String = "") -> Dictionary:
 	var tints: Dictionary = WoodPlatform.LOOKS.get(look,WoodPlatform.LOOKS["summer"])
 	var key := look if look!="" else "bare"
-	var wood: StandardMaterial3D = world.mat("ledge_wood_%s" % key,tints["wood"],false)
-	wood.albedo_texture = load(WoodPlatform.grain_path())
-	wood.vertex_color_use_as_albedo = true
-	wood.roughness = .86
-	var iron: StandardMaterial3D = world.mat("ledge_iron_%s" % key,tints["iron"],false)
-	iron.vertex_color_use_as_albedo = true
-	iron.metallic = .5
-	iron.roughness = .45
-	var rope: StandardMaterial3D = world.mat("ledge_rope_%s" % key,tints["rope"],false)
-	rope.vertex_color_use_as_albedo = true
-	rope.roughness = .95
+	var wood := _timber_material("wood_%s" % key,tints["wood"],.86,0.0,load(WoodPlatform.grain_path()))
+	var iron := _timber_material("iron_%s" % key,tints["iron"],.45,.5,null)
+	var rope := _timber_material("rope_%s" % key,tints["rope"],.95,0.0,null)
 	var result := {"wood":wood,"iron":iron,"nail":iron,"rope":rope}
 	for part in ["snow","ice","sand","moss","vine"]:
 		var dress: StandardMaterial3D = world.mat("ledge_%s" % part,Color.WHITE,false)
@@ -114,6 +114,51 @@ func ledge_materials(_profile: GripBiomeProfile, look: String = "") -> Dictionar
 		result[part] = dress
 	return result
 
+# Timber, iron and rope of the platforms with their own form light. The plain
+# material took the sky fill on every face alike, so a platform read as lit
+# from all sides: here faces turned from the sun (undersides, the far sides
+# of the joists and braces) drop well below the lit tops and fronts, and the
+# deck darkens into its joint with the rock (model z 0 is the back plane).
+const TIMBER_SHADER := """shader_type spatial;
+uniform vec4 tint : source_color = vec4(1.0);
+uniform sampler2D grain : source_color, filter_linear_mipmap, repeat_enable;
+uniform bool use_grain = false;
+uniform float roughness_value = 0.86;
+uniform float metallic_value = 0.0;
+// Where the platforms are lit from: the sun's upper left, a little in front.
+uniform vec3 form_light = vec3(-0.45,0.75,0.5);
+uniform float shade = 0.42;
+uniform float back_shade = 0.5;
+varying float back;
+void vertex() {
+	back = smoothstep(0.0,0.4,VERTEX.z);
+}
+void fragment() {
+	vec3 color = COLOR.rgb*tint.rgb;
+	if (use_grain) { color *= texture(grain,UV).rgb; }
+	vec3 world_normal = normalize((INV_VIEW_MATRIX*vec4(NORMAL,0.0)).xyz);
+	float lit = dot(world_normal,normalize(form_light));
+	color *= mix(shade,1.06,smoothstep(-0.55,0.75,lit));
+	color *= mix(back_shade,1.0,back);
+	ALBEDO = color;
+	ROUGHNESS = roughness_value;
+	METALLIC = metallic_value;
+}
+"""
+var timber_materials := {}
+
+func _timber_material(key: String, tint: Color, roughness: float, metallic: float, grain: Texture2D) -> ShaderMaterial:
+	if timber_materials.has(key): return timber_materials[key]
+	var material := ShaderMaterial.new()
+	material.shader = world.shader("platform_timber",TIMBER_SHADER)
+	material.set_shader_parameter("tint",tint)
+	material.set_shader_parameter("roughness_value",roughness)
+	material.set_shader_parameter("metallic_value",metallic)
+	material.set_shader_parameter("use_grain",grain!=null)
+	if grain!=null: material.set_shader_parameter("grain",grain)
+	timber_materials[key] = material
+	return material
+
 # The platform model of a rest ledge: the style whose supports fit the free
 # face under the ledge, its back plane on the frontmost stone anywhere over
 # its footprint (deck and supports), so no part of it enters the mountain,
@@ -126,9 +171,17 @@ const PLATFORM_WALL_ABOVE := .5
 
 # The back plane of a platform over a ledge: on the frontmost stone of its
 # supports, its deck and the wall just above.
+# Measuring it samples the wall a few hundred times (6-34 ms per platform on
+# a PC, and a section has several). The same route is built again on every
+# return to the camp and every restart, so the answer is kept per level.
 func platform_back(left: float, right: float, top: float, drop: float) -> float:
+	var key := "%d|%d|%d|%d|%s|%s|%s|%.3f|%.3f|%.3f|%.2f" % [world.seed_value,world.location,world.route_index,world.generation_version,str(world.bake!=null),(layout.get_script() as Script).resource_path,quality,left,right,top,drop]
+	var known := BuildCache.get_back(key)
+	if not is_nan(known): return known
 	var reach: float = WoodPlatform.OVERHANG
-	return _front_over(Rect2(left-reach,top-drop-.02,right-left+reach*2.0,drop+.02+PLATFORM_WALL_ABOVE))+PLATFORM_GAP
+	var back := _front_over(Rect2(left-reach,top-drop-.02,right-left+reach*2.0,drop+.02+PLATFORM_WALL_ABOVE))+PLATFORM_GAP
+	BuildCache.put_back(key,back)
+	return back
 
 func _place_platform(holder: Node3D, object: Dictionary, mount: SurfaceMount) -> Node3D:
 	var left: float = object["left"]
@@ -145,7 +198,34 @@ func _place_platform(holder: Node3D, object: Dictionary, mount: SurfaceMount) ->
 	model.position = Vector3(0,-float(model.get_meta("rise",0.0)),back-holder.position.z)
 	holder.add_child(model)
 	object["platform_style"] = style
+	_platform_shade(holder,object,back)
 	return model
+
+# The shade a platform lays on the stone under it: a soft band off to the
+# lower right with the sun, just in front of the rock. The sun's own shadow
+# of thin timber is faint and broken on the facets; this keeps the platform
+# reading as fixed to the wall. Never over open sky.
+func _platform_shade(holder: Node3D, object: Dictionary, back: float) -> void:
+	var left: float = object["left"]
+	var right: float = object["right"]
+	var top: float = object["top"]
+	var size := Vector2(right-left+.5,.95)
+	var center := Vector2((left+right)*.5+.16,top-.5)
+	for dx in [-.5,-.25,0.0,.25,.5]:
+		for dy in [-.4,0.0,.4]:
+			if open_at(center+size*Vector2(dx,dy)): return
+	var quad := QuadMesh.new()
+	quad.size = size
+	var material := ShaderMaterial.new()
+	material.shader = world.shader("contact_shade",CONTACT_SHADER)
+	material.set_shader_parameter("opacity",.42)
+	var shade := MeshInstance3D.new()
+	shade.name = "Тень площадки"
+	shade.mesh = quad
+	shade.material_override = material
+	shade.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	shade.position = Vector3(center.x,center.y,back-.02)-holder.position
+	holder.add_child(shade)
 
 # The platform the hero starts on: the lowest ledge, under the first grip.
 func start_ledge() -> Dictionary:
@@ -547,7 +627,7 @@ func _grip_shadow(holder: Node3D, object: Dictionary, spec: GripVisualSpec, fram
 	quad.size = size
 	var material := ShaderMaterial.new()
 	material.shader = world.shader("contact_shade",CONTACT_SHADER)
-	material.set_shader_parameter("opacity",.36)
+	material.set_shader_parameter("opacity",.42)
 	var shade := MeshInstance3D.new()
 	shade.name = "Тень зацепа"
 	shade.mesh = quad

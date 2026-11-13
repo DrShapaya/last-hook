@@ -21,7 +21,9 @@ static func build(world: MountainWorld, find: Dictionary, holder: Node3D, qualit
 	var item: Dictionary = find["item"]
 	var rare := bool(find.get("rare",false))
 	var kind := TreasureModels.kind_for(item)
-	var shadows := quality!="battery"
+	# Loose coins cast no shadow: with the stronger sun every coin stamped a
+	# dark disc on the stone beside it.
+	var shadows := quality!="battery" and kind!="coin"
 	_pedestal(world,holder,wall_local_z,int(item.get("id",0)),shadows,kind,quality)
 	var treasure := TreasureModels.instantiate(item,shadows)
 	treasure.position = Vector3(0,0,MODEL_LIFT)
@@ -51,7 +53,7 @@ const TAG_SLATE := Color("24323d")
 const TAG_TEXT := Color("fff1c4")
 static var _tag_font: Font
 
-static func price_tag(world: MountainWorld, treasure: Node3D, item: Dictionary, shadows: bool) -> Node3D:
+static func price_tag(world: MountainWorld, treasure: Node3D, item: Dictionary, _shadows: bool) -> Node3D:
 	if _tag_font==null: _tag_font = load("res://assets/fonts/RussoOne.ttf")
 	# The cord hangs from the bottom of the model.
 	var tag := treasure.get_node(TreasureModels.TAG) as Node3D
@@ -69,7 +71,9 @@ static func price_tag(world: MountainWorld, treasure: Node3D, item: Dictionary, 
 	plate.mesh = _tag_mesh(Vector2(width,TAG_HEIGHT),.045,.045,rarity_color(item))
 	plate.material_override = slate
 	plate.position = center
-	plate.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# A price tag is a label over the find, not a thing on the face: with the
+	# stronger sun its plate stamped a dark bar on the rock under every coin.
+	plate.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	tag.add_child(plate)
 	var cord := world.box("Шнурок ценника",Vector3.ZERO,Vector3(.012,TAG_DROP+.02,.012),world.mat("price_tag_cord",Color("5a3b1e")),tag)
 	cord.position = Vector3(0,top*.5+.01,0)

@@ -10,8 +10,10 @@ extends RefCounted
 # The 3D hero too: each run builds a new one, and once the menu had freed
 # the last, its model was read from disk again on the Start press (~100 ms
 # on a PC).
-const FOLDERS := ["res://assets/models","res://assets/sprites","res://assets/hero"]
-const EXTENSIONS := ["glb","png","tres","res"]
+# And the shader files: a shader nobody holds is unloaded with its world and
+# compiled again for the next one (the sky alone took 28 ms on a PC).
+const FOLDERS := ["res://assets/models","res://assets/sprites","res://assets/hero","res://shaders"]
+const EXTENSIONS := ["glb","png","tres","res","gdshader"]
 # Single files the climber builds with on every Start (ExplorerView).
 const FILES := ["res://assets/art/modular-pack-v1/rope-albedo.png","res://assets/art/modular-pack-v1/hook-head.png"]
 
@@ -24,6 +26,11 @@ static func start() -> void:
 	_started = true
 	for folder in FOLDERS: _collect(folder)
 	_pending.append_array(FILES)
+	# The layouts of the levels made in advance (40 KB each): read on the
+	# first switch to a route, they held a lobby frame for 6-23 ms.
+	for entry in ResourceLoader.list_directory(LevelBake.ROOT):
+		var layout := LevelBake.ROOT.path_join(entry.trim_suffix("/")).path_join("layout.res")
+		if entry.ends_with("/") and ResourceLoader.exists(layout): _pending.append(layout)
 	for path in _pending: ResourceLoader.load_threaded_request(path)
 
 static func _collect(folder: String) -> void:

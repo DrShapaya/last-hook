@@ -38,8 +38,12 @@ const CATALOGUE := {
 	"snow_plant":{"folder":"vegetation","mode":"stand","size":[.65,.85],"measure":"height","sway":.03,"use":[1,2,3,4],"sizes":{2:[1.1,1.4],3:[.75,.95],4:[.95,1.2]}},
 	# Vines: most are painted growing upwards from a thick foot; the ivy,
 	# the seed pods and the frosted ones with icicles hang.
-	"vine_green":{"folder":"vegetation","mode":"climb","size":[1.5,2.1],"measure":"height","sway":.04,"modes":{3:"hang"},"sizes":{3:[1.7,2.4]}},
-	"vine_root":{"folder":"vegetation","mode":"climb","size":[1.4,1.9],"measure":"height","sway":.03,"use":[1,2,3,4],"modes":{4:"hang"},"sizes":{4:[1.3,1.7]}},
+	# The thin vine with yellowed leaves (5) reads as dry: left out.
+	"vine_green":{"folder":"vegetation","mode":"climb","size":[1.5,2.1],"measure":"height","sway":.04,"use":[1,2,3,4],"modes":{3:"hang"},"sizes":{3:[1.3,1.9]}},
+	# Not grown anywhere now: the bare thorny roots, the pod vine and the
+	# leafy branch read as the canyon's dry vines (owner, 0.18.3: desert
+	# plants on the standard mountain). The summer climbs with green vines.
+	"vine_root":{"folder":"vegetation","mode":"climb","size":[1.4,1.9],"measure":"height","sway":.03,"use":[5]},
 	"vine_dry":{"folder":"vegetation","mode":"climb","size":[1.4,1.9],"measure":"height","sway":.03,"use":[1,2,3,4,5,6,7,8],"modes":{4:"hang",6:"hang",7:"hang",8:"hang"},"sizes":{4:[1.3,1.7]}},
 	"vine_frost":{"folder":"vegetation","mode":"climb","size":[1.3,1.8],"measure":"height","sway":.03,"use":[1,2,3,4,5,6,7,8],"modes":{1:"hang",4:"hang",6:"hang",7:"hang",8:"hang"},"sizes":{1:[1.2,1.5],4:[1.3,1.7]}},
 	"icicle":{"folder":"vegetation","mode":"hang","size":[.9,1.35],"measure":"height","sway":.0,"use":[1,2,3,4,5,6,7,8],"sizes":{2:[.75,1.0],5:[.7,.95]}},
@@ -64,8 +68,8 @@ const TOPS := {"green":["grass_tuft","grass_tuft","grass_blades","grass_blades",
 # Green tufts and blades a dry place can use: the parched ones.
 const DRY_GRASS := {"grass_tuft":[4],"grass_blades":[5]}
 const GREEN_GRASS := {"grass_tuft":[1,2,3,5],"grass_blades":[1,2,3,4]}
-const CLIMBERS := {"green":["vine_green","vine_root"],"dry":["vine_dry"],"cold":["vine_frost"]}
-const HANGERS := {"green":["vine_green","vine_root"],"dry":["vine_dry"],"cold":["vine_frost","icicle","icicle"]}
+const CLIMBERS := {"green":["vine_green"],"dry":["vine_dry"],"cold":["vine_frost"]}
+const HANGERS := {"green":["vine_green"],"dry":["vine_dry"],"cold":["vine_frost","icicle","icicle"]}
 const STONES := {"green":["stone_grey","scree_grey"],"dry":["stone_desert","scree_desert"],"cold":["stone_snow","scree_snow"]}
 const CRYSTALS := {"green":"crystal_blue","dry":"crystal_amber","cold":"crystal_ice"}
 const TREES := {"green":"tree_green","dry":"tree_dead","cold":"tree_snow"}

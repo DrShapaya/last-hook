@@ -216,7 +216,9 @@ func run_tests() -> void:
 	for quality in ["high","balanced","battery"]:
 		var world := make_world(58273,quality)
 		var total := 0
-		for index in range(1,4): total += int(skin_signature(world,index)[3])
+		# Five sections: three were limited by free places, not by the preset,
+		# and differed by a single piece.
+		for index in range(1,6): total += int(skin_signature(world,index)[3])
 		counts[quality] = total
 		world.free()
 	check(counts["high"]>counts["balanced"] and counts["balanced"]>counts["battery"] and counts["battery"]>0,"decor density follows the graphics preset: %s" % str(counts))
@@ -338,7 +340,7 @@ func run_tests() -> void:
 	var tag := LootVisuals.price_tag(a,treasure,{"kind":"coin","value":1250,"tier":0},true)
 	var tag_label := tag.find_child("Цена",false,false) as Label3D
 	var tag_plate := tag.find_child("Табличка цены",false,false) as MeshInstance3D
-	check(tag.get_parent().name==TreasureModels.PIVOT and tag_label!=null and tag_label.text=="1250" and tag_label.font!=null and tag_plate!=null and tag_plate.cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_ON and tag_plate.material_override is StandardMaterial3D and (tag_plate.material_override as StandardMaterial3D).shading_mode!=BaseMaterial3D.SHADING_MODE_UNSHADED,
+	check(tag.get_parent().name==TreasureModels.PIVOT and tag_label!=null and tag_label.text=="1250" and tag_label.font!=null and tag_plate!=null and tag_plate.cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_OFF and tag_plate.material_override is StandardMaterial3D and (tag_plate.material_override as StandardMaterial3D).shading_mode!=BaseMaterial3D.SHADING_MODE_UNSHADED,
 		"the price is a lit tag hanging from the find, in the HUD font")
 
 	# Grip shells: several visual variants, collision polygon untouched.

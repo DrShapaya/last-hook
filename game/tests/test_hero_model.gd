@@ -66,6 +66,7 @@ func run_tests() -> void:
 	check(skeleton.get_bone_global_pose(hand).origin.distance_to(before)>.03,"bending the elbow moves the hand")
 	hero.queue_free()
 	hero_model_tests()
+	facing_tests()
 	finish()
 
 # HeroModel: every HeroState state has motion, the game's motion picks the
@@ -245,6 +246,76 @@ func game_event_tests() -> void:
 	check(events.state=="summit","the summit event plays the cheer (%s)" % events.state)
 	check(poses[0].distance_to(poses[-1])>.03,"the cheer moves while the game clock is stopped")
 	events.queue_free()
+
+# The hero looks where he is going through a whole throw (the owner: a hook
+# thrown left, the hero flew left facing right). Frames are fed the way
+# ExplorerView does: the aim point while aiming, the hook while it flies, the
+# anchor on the rope.
+func facing_tests() -> void:
+	var hero := HeroModel.new()
+	root.add_child(hero)
+	hero.setup()
+	var sim := RopeSim.new()
+	var clock := [0.0]
+	var run := func(frames: int, target_of: Callable, tether: bool) -> void:
+		for i in range(frames):
+			clock[0] += 1.0/30
+			sim.pos += sim.vel/30
+			hero.animate(sim,target_of.call(),tether,clock[0])
+	# Standing, having walked right.
+	sim.grounded = true
+	sim.vel = Vector2(1.5,0)
+	run.call(6,func(): return sim.pos+Vector2(2,3),false)
+	sim.vel = Vector2.ZERO
+	run.call(6,func(): return sim.pos+Vector2(2,3),false)
+	check(hero.facing>0,"standing after a walk right, he faces right")
+	# Aims up and to the left (steep: more up than sideways).
+	var aim := Vector2(-.4,.92).normalized()
+	hero.flight_info = {"aiming":true,"aim":aim,"shot":0}
+	run.call(8,func(): return sim.pos+aim*3,true)
+	check(hero.facing<0,"aiming up-left turns him left (%s)" % hero.state)
+	# Throws: the hook flies up-left.
+	var anchor := sim.pos+Vector2(-2.6,4.2)
+	hero.flight_info = {"aiming":false,"aim":aim,"shot":1,"velocity":Vector2(-9,15)}
+	run.call(4,func(): return anchor,true)
+	check(hero.facing<0,"throwing left he faces left (%s)" % hero.state)
+	# Caught: the rope pulls him up and left.
+	sim.grounded = false
+	sim.attach(anchor,5.5)
+	hero.flight_info = {"aiming":false,"aim":aim,"shot":1}
+	sim.vel = Vector2(-3.2,3.5)
+	run.call(10,func(): return sim.effective_anchor(),true)
+	check(hero.facing<0,"pulled left on the rope he faces left (%s)" % hero.state)
+	# Lets go and flies on to the left.
+	sim.attached = false
+	sim.vel = Vector2(-4,2.5)
+	run.call(12,func(): return sim.pos+Vector2(-2,3),false)
+	check(hero.facing<0,"flying left after letting go he faces left (%s)" % hero.state)
+	# From the rope, throws to the right: he turns as the hook leaves.
+	sim.attach(sim.pos+Vector2(-.5,3),4.0)
+	sim.vel = Vector2(-.5,0)
+	run.call(8,func(): return sim.effective_anchor(),true)
+	hero.flight_info = {"aiming":false,"aim":Vector2(.7,.7),"shot":2,"velocity":Vector2(10,10)}
+	run.call(4,func(): return sim.effective_anchor(),true)
+	check(hero.facing>0,"a throw to the right from the rope turns him right (%s)" % hero.state)
+	# A new catch on the other side, straight from the rope: he turns to it.
+	hero.flight_info = {"aiming":false,"aim":Vector2(-.7,.7),"shot":3,"velocity":Vector2(-10,10)}
+	run.call(3,func(): return sim.effective_anchor(),true)
+	sim.attach(sim.pos+Vector2(-2.5,3),4.0)
+	hero.flight_info = {"aiming":false,"aim":Vector2(-.7,.7),"shot":3}
+	sim.vel = Vector2(1,0) # Still drifting right from the old swing.
+	run.call(6,func(): return sim.effective_anchor(),true)
+	check(hero.facing<0,"a catch to the left turns him left (%s)" % hero.state)
+	# Straight up: no reason to turn.
+	sim.attached = false
+	sim.grounded = true
+	sim.vel = Vector2.ZERO
+	run.call(10,func(): return sim.pos+Vector2(2,3),false)
+	var before := hero.facing
+	hero.flight_info = {"aiming":true,"aim":Vector2(.02,1),"shot":2}
+	run.call(8,func(): return sim.pos+Vector2(.06,3),true)
+	check(hero.facing==before,"aiming straight up keeps his facing")
+	hero.queue_free()
 
 func finish() -> void:
 	print("HERO_MODEL_TESTS ",checks," checks, ",failures.size()," failures")

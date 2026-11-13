@@ -187,21 +187,47 @@ const CHEER_B := {"upper_arm_near":2.5,"forearm_near":.9,"hand_near":-.3,"upper_
 const CROUCH := {"thigh_near":1.3,"shin_near":-2.0,"foot_near":.75,"thigh_far":1.1,"shin_far":-1.9,"foot_far":.75,
 	"spine":-.35,"chest":-.15,"head":.25,"upper_arm_near":.9,"forearm_near":.9,"upper_arm_far":.6,"forearm_far":.9}
 
-# Clip per HeroState state: [loops, [[time, pose], ...]]. walk, swing, aim and
-# hook_flight are built live from the motion (see _target_pose).
+# Wind-up before the throw: the arm cocked deeper, the body leaning back.
+const WIND := {"upper_arm_near":3.05,"forearm_near":1.75,"hand_near":.45,"spine":.1,"chest":.18,"head":.1,
+	"upper_arm_far":.6,"forearm_far":.6,"thigh_near":.22,"shin_near":-.18,"thigh_far":-.2,"shin_far":-.14}
+# Let go of the rope: legs kick forward, arms open up.
+const KICK := {"upper_arm_near":2.5,"forearm_near":.2,"upper_arm_far":2.1,"forearm_far":.35,
+	"thigh_near":.7,"shin_near":-.25,"thigh_far":.45,"shin_far":-.35,"spine":.1,"head":.08}
+const LAND_TOUCH := {"thigh_near":.45,"shin_near":-.6,"foot_near":.2,"thigh_far":.35,"shin_far":-.55,"foot_far":.2,
+	"spine":-.08,"upper_arm_near":.6,"forearm_near":.4,"upper_arm_far":.4,"forearm_far":.5}
+const STAND_TALL := {"upper_arm_near":.0,"forearm_near":.05,"upper_arm_far":-.08,"forearm_far":.05,"spine":.04,"head":-.04,
+	"thigh_near":.04,"shin_near":-.02,"thigh_far":-.04,"shin_far":-.02}
+
+# Clip per HeroState state: [loops, [[time, pose, ease], ...]]; the ease
+# shapes the way into that key: "io" in and out, "out" a snap that settles,
+# "in" a slow start, "back" an overshoot (follow-through). walk, aim, swing,
+# hook_flight, rise and fall are built live from the motion (_target_pose).
 const CLIPS := {
 	"idle": [true,[[0.0,STAND],[1.8,BREATH],[3.6,STAND]]],
-	"throw": [false,[[0.0,AIM],[.07,RELEASE],[.22,FOLLOW]]],
-	"latch": [false,[[0.0,REACH],[.06,JOLT],[.18,HANG]]],
-	"release": [false,[[0.0,HANG],[.2,OPEN]]],
+	# Wind-up, a snap through the release, then the arm follows through past
+	# the target and settles.
+	"throw": [false,[[0.0,AIM],[.05,WIND,"out"],[.1,RELEASE,"out"],[.22,FOLLOW,"back"]]],
+	# Reach, the rope's jolt, then hanging with an overshoot.
+	"latch": [false,[[0.0,REACH],[.05,JOLT,"out"],[.2,HANG,"back"]]],
+	"release": [false,[[0.0,HANG],[.08,KICK,"out"],[.2,OPEN,"io"]]],
 	"rise": [true,[[0.0,TUCK],[1.0,TUCK]]],
 	"fall": [true,[[0.0,SPREAD_A],[.4,SPREAD_B],[.8,SPREAD_A]]],
-	"land": [false,[[0.0,LAND],[.12,LAND],[.38,STAND]]],
-	"slip": [false,[[0.0,HANG],[.1,SLIP],[.35,SPREAD_A]]],
-	"summit": [true,[[0.0,CHEER_A],[.3,CHEER_B],[.6,CHEER_A]]],
-	"revive": [false,[[0.0,CROUCH],[.45,STAND],[.8,STAND]]],
+	# Touch, sink into the squat, then rise past standing and settle.
+	"land": [false,[[0.0,LAND_TOUCH],[.07,LAND,"out"],[.16,LAND],[.34,STAND_TALL,"io"],[.5,STAND,"io"]]],
+	"slip": [false,[[0.0,HANG],[.1,SLIP,"out"],[.35,SPREAD_A,"io"]]],
+	"summit": [true,[[0.0,CHEER_A],[.3,CHEER_B,"back"],[.6,CHEER_A,"back"]]],
+	"revive": [false,[[0.0,CROUCH],[.38,STAND_TALL,"out"],[.6,STAND,"io"],[.8,STAND]]],
 }
-const LIVE := ["walk","aim","hook_flight","swing"]
+const LIVE := ["walk","aim","hook_flight","swing","rise","fall"]
+
+# Each bone follows its pose through a damped spring: [frequency (rad/s),
+# damping]. Heavy, loose parts (the head, the pack, hands and forearms) are
+# slower and less damped, so they lag and overshoot: overlap and follow-through.
+const SPRINGS := {"spine":[17.0,.85],"chest":[15.0,.8],"neck":[13.0,.75],"head":[10.0,.6],"backpack":[16.0,.85],
+	"upper_arm_near":[16.0,.78],"upper_arm_far":[15.0,.78],"forearm_near":[14.0,.65],"forearm_far":[13.0,.65],
+	"hand_near":[12.0,.6],"hand_far":[12.0,.6],"thigh_near":[15.0,.8],"thigh_far":[15.0,.8],
+	"shin_near":[14.0,.72],"shin_far":[14.0,.72],"foot_near":[13.0,.75],"foot_far":[13.0,.75]}
+const SPRING_DEFAULT := [14.0,.8]
 
 var model: Node3D
 var skeleton: Skeleton3D
@@ -222,6 +248,10 @@ var turn := 0.0
 var stride := 0.0
 var lean := 0.0
 var pack := 0.0
+var jolt := 0.0
+var accel := Vector2.ZERO
+var last_velocity := Vector2.ZERO
+var spring_velocity := {}
 var impact := 0.0
 var last_vertical_speed := 0.0
 var previous_grounded := true
@@ -251,20 +281,16 @@ func setup(close_up: bool = false, full: bool = true) -> void:
 		bone_index[skeleton.get_bone_name(index)] = index
 		bone_rest[index] = skeleton.get_bone_rest(index).basis.get_rotation_quaternion()
 		bone_axis[index] = (skeleton.get_bone_global_rest(index).basis.inverse()*Vector3(0,0,1)).normalized()
-	var shader := Shader.new()
-	shader.code = HERO_SHADER
 	shader_material = ShaderMaterial.new()
-	shader_material.shader = shader
+	shader_material.shader = ShaderBank.of(HERO_SHADER)
 	shader_material.set_shader_parameter("detail_map",load(DETAIL))
 	# The small climbing hero shows the weave only as a texture, not relief.
 	shader_material.set_shader_parameter("detail_depth",1.0 if close_up else .5)
 	# The climb keeps a thin outline: the small hero must read on grey rock.
 	# Close-ups go without (lights and shadows carry the form, as in Blender).
 	if not close_up:
-		var outline_shader := Shader.new()
-		outline_shader.code = OUTLINE_SHADER
 		var outline := ShaderMaterial.new()
-		outline.shader = outline_shader
+		outline.shader = ShaderBank.of(OUTLINE_SHADER)
 		shader_material.next_pass = outline
 	mesh.material_override = shader_material
 	_add_lights(close_up,full)
@@ -356,13 +382,13 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	var now := Time.get_ticks_usec()/1000000.0
 	if dt==0.0 and state=="summit" and last_real>=0: dt = clampf(now-last_real,0,.1)
 	last_real = now
-	# On the rope the hero keeps the facing it caught with: the anchor passes
-	# overhead every half swing, and following it turned the body around twice
-	# a swing (a flat sprite hides that, a 3D body shows its back mid-turn).
-	# Facing changes on the ground, while aiming or throwing, and in flight.
-	if not state in ROPE_STATES:
-		if tether and absf(direction.x)>1.0: facing = signf(direction.x)
-		elif not tether and absf(sim.vel.x)>(.4 if sim.grounded and not sim.attached else 1.5): facing = signf(sim.vel.x)
+	# A throw from the rope: the hero still hangs from the old anchor, so the
+	# hook's own flight tells which way he throws.
+	var toward := direction
+	var bolt: Vector2 = flight_info.get("velocity",Vector2.ZERO)
+	if state in ["throw","hook_flight"] and bolt.length_squared()>.01 and not bool(flight_info.get("returning",false)):
+		toward = bolt.normalized()*maxf(direction.length(),1.0)
+	facing = facing_for(state,facing,sim.pos,sim.vel,toward,tether,sim.grounded,sim.attached)
 	turn = lerpf(turn,0.0 if facing>0 else PI,1-exp(-dt*TURN_SPEED))
 	rotation.y = turn
 	state_time += dt
@@ -375,34 +401,99 @@ func animate(sim: RopeSim, target: Vector2, tether: bool, time: float) -> void:
 	previous_grounded = sim.grounded
 	last_vertical_speed = sim.vel.y
 	impact *= exp(-dt*9)
-	scale = Vector3(1+impact*.6,1-impact,1)
+	# The rope's jolt on a catch stretches the body along it for a moment.
+	if state=="latch" and state_time<=dt+.0001: jolt = 1.0
+	jolt *= exp(-dt*11)
+	# Fast flight stretches him a little along the way he flies.
+	var stretch := clampf((sim.vel.length()-5.0)/8.0,0,1)*.045 if not sim.grounded and not sim.attached else 0.0
+	scale = Vector3(1+impact*.6-jolt*.035-stretch*.5,1-impact+jolt*.06+stretch,1)
+	# Inertia: how the body is being pushed (smoothed), in the hero's own
+	# frame. The head, chest and the pack lag behind it.
+	if dt>0:
+		var raw := ((sim.vel-last_velocity)/dt).limit_length(60.0)
+		accel = accel.lerp(raw,1-exp(-dt*18))
+	last_velocity = sim.vel
+	var push := Vector2(accel.x*facing,accel.y)
 	var desired := _target_pose(sim,direction)
-	var blend := 1-exp(-dt*BLEND_SPEED) if dt>0 else 1.0
-	# A running gait is already smooth; easing it again lags the 1.8 Hz step
-	# and shrinks the stride, which makes the planted foot skate.
-	if state=="walk" and state_time>.15: blend = 1.0
-	for bone in desired:
-		current[bone] = lerpf(float(current.get(bone,0.0)),float(desired[bone]),blend)
-	for bone in current.keys():
-		if not desired.has(bone): current[bone] = lerpf(float(current[bone]),0.0,blend)
-	# Secondary motion: the backpack lags the body, the heavy head nods.
+	desired["head"] = float(desired.get("head",0.0))+clampf(push.x*.012-push.y*.004,-.3,.3)
+	desired["chest"] = float(desired.get("chest",0.0))+clampf(push.x*.004,-.12,.12)
+	# The pack sits on the back under its straps: it only rocks a little
+	# about where the straps hold it (a looser swing lifted it off the back).
+	desired["backpack"] = float(desired.get("backpack",0.0))+clampf(sim.vel.x*facing*.008-sim.vel.y*.004+push.x*.003+push.y*.002,-.07,.07)
+	# Each bone follows its pose through its spring (overlap and follow-
+	# through). A running gait is already smooth: easing the legs again lags
+	# the step and shrinks the stride, so the feet would skate.
+	var direct := state=="walk" and state_time>.15
+	for bone in desired.keys()+current.keys():
+		var goal := float(desired.get(bone,0.0))
+		var x := float(current.get(bone,goal))
+		var v := float(spring_velocity.get(bone,0.0))
+		if dt<=0 or (direct and not bone in ["head","chest","backpack","neck"]):
+			x = goal
+			v = 0.0
+		else:
+			var spec: Array = SPRINGS.get(bone,SPRING_DEFAULT)
+			var omega: float = spec[0]
+			var zeta: float = spec[1]
+			var steps := maxi(1,ceili(dt/(1.0/120)))
+			var h := dt/steps
+			for i in range(steps):
+				v += (omega*omega*(goal-x)-2*zeta*omega*v)*h
+				x += v*h
+		current[bone] = x
+		spring_velocity[bone] = v
 	var desired_lean := clampf(-sim.vel.x*facing*.02,-.18,.18) if not sim.attached else 0.0
-	# On the rope the body hangs along it: tilt toward the anchor. Lean is in
-	# the hero's own frame (rotation.z is applied before the turn).
-	if state=="swing": desired_lean = clampf((direction.angle()-PI*.5)*facing*.6,-.5,.5) if direction.length()>.1 else 0.0
-	lean = lerpf(lean,desired_lean,1-exp(-dt*8))
+	# On the rope the body hangs along it, toward the anchor. Lean is in the
+	# hero's own frame (rotation.z is applied before the turn).
+	if state in ["swing","latch"]: desired_lean = clampf((direction.angle()-PI*.5)*facing*.85,-.9,.9) if direction.length()>.1 else 0.0
+	# Flying, the body tips along the flight.
+	elif not sim.grounded and not sim.attached and sim.vel.length()>2.0:
+		desired_lean = clampf(-sim.vel.x*facing*.04,-.35,.35)
+	lean = lerpf(lean,desired_lean,1-exp(-dt*7))
 	# On the ground the upper body leans from the hips and the feet stay planted;
 	# in the air and on the rope the whole body tilts.
 	rotation.z = 0.0 if sim.grounded else lean
-	pack = lerpf(pack,clampf(sim.vel.x*facing*.03-sim.vel.y*.012,-.18,.18),1-exp(-dt*5))
 	var applied := current.duplicate()
 	if sim.grounded: applied["spine"] = float(applied.get("spine",0.0))+lean
-	applied["backpack"] = float(applied.get("backpack",0.0))+pack
-	applied["head"] = float(applied.get("head",0.0))-pack*.25
 	for bone in pose_offset: applied[bone] = float(applied.get(bone,0.0))+float(pose_offset[bone])
 	_apply(applied)
 	_plant_feet(sim.grounded,dt)
 	grip.position = to_local(grip_position())
+
+# Which way the hero faces (+1 right, -1 left), from the state and the motion.
+# `toward` points from the hero to what he is after: the aim, the flying hook
+# or the anchor he hangs from. The hero looks where he is going through a
+# whole throw: aiming and throwing toward the aim, watching the hook fly, on
+# a catch toward the new anchor, through the swing as he caught, and in the air
+# the way he flies. The rope used to keep the facing from before the throw:
+# he flew left facing right after a throw to the left.
+const AIM_TURN := .25 # Share of the aim that must point sideways to turn.
+const SWING_TRAVEL := 2.2 # Horizontal speed above which the travel decides a catch.
+const AIR_TURN := .8
+static func facing_for(state_: String, current: float, _pos: Vector2, vel: Vector2, toward: Vector2, tether: bool,
+		grounded: bool, attached: bool) -> float:
+	match state_:
+		"aim","throw":
+			if toward.length()>.01 and absf(toward.normalized().x)>AIM_TURN: return signf(toward.x)
+			return current
+		"hook_flight":
+			if absf(toward.x)>.3: return signf(toward.x)
+			if absf(vel.x)>AIR_TURN: return signf(vel.x)
+			return current
+		"latch":
+			if absf(toward.x)>.6: return signf(toward.x)
+			if absf(vel.x)>SWING_TRAVEL: return signf(vel.x)
+			return current
+	if attached:
+		# A swing keeps the facing of the catch: the anchor passes overhead
+		# every half swing, and turning with it showed his back twice a swing.
+		return current
+	if grounded:
+		if absf(vel.x)>.4: return signf(vel.x)
+		if tether and absf(toward.x)>1.0: return signf(toward.x)
+		return current
+	if absf(vel.x)>AIR_TURN: return signf(vel.x)
+	return current
 
 func _target_pose(sim: RopeSim, direction: Vector2) -> Dictionary:
 	if state=="walk":
@@ -423,13 +514,74 @@ func _target_pose(sim: RopeSim, direction: Vector2) -> Dictionary:
 			pose["forearm_near"] = .08
 			pose["upper_arm_far"] = -.6
 			return pose
-		"swing":
-			# Pendulum phase from the speed along the swing: legs thrown forward
-			# when swinging forward, tucked on the way back.
-			var forward := clampf(sim.vel.x*facing/5.0,-1,1)
-			return blend_poses(SWING_BACK,SWING_FORWARD,forward*.5+.5)
+		"swing": return swing_pose(sim,direction,facing,hero.reel_speed,state_time)
+		"rise","fall": return air_pose(sim.vel,state_time)
 	var clip: Array = CLIPS.get(state,CLIPS["idle"])
-	return sample(clip[1],state_time,clip[0])
+	var pose := sample(clip[1],state_time,clip[0])
+	if state=="idle": pose = idle_life(pose,state_time)
+	return pose
+
+# The swing follows the pendulum. Swinging forward the legs kick out ahead
+# (the pump), swinging back they fold under; at the slow ends of a swing the
+# body gathers itself (knees in, arms pull) before the next sweep, and at the
+# bottom, where the rope pulls hardest, it hangs long. The head looks the
+# way he travels. Reeling in, the hands climb the rope one over the other.
+static func swing_pose(sim: RopeSim, _toward: Vector2, facing_: float, reel: float, t: float) -> Dictionary:
+	var forward := clampf(sim.vel.x*facing_/4.5,-1,1)
+	var speed := clampf(sim.vel.length()/5.0,0,1)
+	var pose := blend_poses(SWING_BACK,SWING_FORWARD,smoothstep(-1.0,1.0,forward))
+	# Gathering at the ends (slow), long at the bottom (fast).
+	var gather := 1.0-speed
+	for side in ["near","far"]:
+		pose["shin_"+side] = float(pose.get("shin_"+side,0.0))-.35*gather
+		pose["thigh_"+side] = float(pose.get("thigh_"+side,0.0))+.2*gather
+		pose["forearm_"+side] = float(pose.get("forearm_"+side,0.0))+.35*gather
+	pose["spine"] = float(pose.get("spine",0.0))+.12*forward
+	pose["head"] = float(pose.get("head",0.0))+.14*forward-.06*gather
+	if reel>.3:
+		# Hand over hand up the rope, the legs drawn up.
+		var climb := sin(t*9.0)
+		var pull := clampf(reel/2.0,0,1)
+		pose["upper_arm_near"] = lerpf(float(pose["upper_arm_near"]),2.6+.45*climb,pull)
+		pose["upper_arm_far"] = lerpf(float(pose["upper_arm_far"]),2.6-.45*climb,pull)
+		pose["forearm_near"] = lerpf(float(pose["forearm_near"]),.7-.6*climb,pull)
+		pose["forearm_far"] = lerpf(float(pose["forearm_far"]),.7+.6*climb,pull)
+		pose["thigh_near"] = lerpf(float(pose["thigh_near"]),.75+.2*climb,pull)
+		pose["thigh_far"] = lerpf(float(pose["thigh_far"]),.6-.2*climb,pull)
+		pose["shin_near"] = lerpf(float(pose["shin_near"]),-1.0,pull)
+		pose["shin_far"] = lerpf(float(pose["shin_far"]),-.9,pull)
+	return pose
+
+# In the air the pose follows the vertical speed: tucked while flying up,
+# open at the top, spread and reaching while falling, with the arms and legs
+# never quite still.
+static func air_pose(vel: Vector2, t: float) -> Dictionary:
+	var up := clampf(vel.y/5.0,0,1)
+	var down := clampf(-vel.y/7.0,0,1)
+	var pose := blend_poses(OPEN,TUCK,smoothstep(0.0,1.0,up))
+	if down>0:
+		var spread := blend_poses(SPREAD_A,SPREAD_B,.5+.5*sin(t*TAU/.8))
+		pose = blend_poses(pose,spread,smoothstep(0.0,1.0,down))
+	var flail := .08+.1*down
+	pose["upper_arm_near"] = float(pose.get("upper_arm_near",0.0))+flail*sin(t*7.3)
+	pose["upper_arm_far"] = float(pose.get("upper_arm_far",0.0))+flail*sin(t*6.1+1.7)
+	pose["thigh_near"] = float(pose.get("thigh_near",0.0))+flail*.7*sin(t*5.2+.6)
+	pose["thigh_far"] = float(pose.get("thigh_far",0.0))+flail*.7*sin(t*4.7+2.3)
+	return pose
+
+# Standing still is never frozen: the weight shifts from foot to foot and the
+# head looks about now and then.
+static func idle_life(pose: Dictionary, t: float) -> Dictionary:
+	var sway := sin(t*TAU/4.3)
+	var look := sin(t*TAU/7.1)*smoothstep(.3,.9,absf(sin(t*TAU/14.2)))
+	pose = pose.duplicate()
+	pose["thigh_near"] = float(pose.get("thigh_near",0.0))+.035*sway
+	pose["thigh_far"] = float(pose.get("thigh_far",0.0))+.035*sway
+	pose["spine"] = float(pose.get("spine",0.0))-.03*sway
+	pose["head"] = float(pose.get("head",0.0))+.05*look
+	pose["upper_arm_near"] = float(pose.get("upper_arm_near",0.0))+.03*sway
+	pose["upper_arm_far"] = float(pose.get("upper_arm_far",0.0))-.03*sway
+	return pose
 
 # One gait cycle per TAU of stride. Each leg spends half the cycle planted,
 # its thigh sweeping back at a constant rate (a sine sweep raced at mid-step
@@ -478,8 +630,18 @@ static func sample(keys: Array, time: float, loop: bool) -> Dictionary:
 		var a: Array = keys[index]
 		var b: Array = keys[index+1]
 		if time<=b[0]:
-			return blend_poses(a[1],b[1],smoothstep(0.0,1.0,(time-a[0])/maxf(.0001,b[0]-a[0])))
+			var u := clampf((time-a[0])/maxf(.0001,b[0]-a[0]),0,1)
+			return blend_poses(a[1],b[1],ease_key(u,str(b[2]) if b.size()>2 else "io"))
 	return keys[-1][1]
+
+static func ease_key(u: float, kind: String) -> float:
+	match kind:
+		"out": return 1.0-pow(1.0-u,3.0)
+		"in": return u*u*u
+		"back":
+			var c := 1.7
+			return 1.0+(c+1.0)*pow(u-1.0,3.0)+c*pow(u-1.0,2.0)
+	return smoothstep(0.0,1.0,u)
 
 var plant := 0.0
 # On the ground the body drops so the lower foot stays on the ground: a swinging

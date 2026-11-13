@@ -150,7 +150,19 @@ void fragment() {
 	float limb=1.0-smoothstep(0.1,0.85,clamp(NORMAL.z,0.0,1.0));
 	ALBEDO*=(1.0-rim_shade*rim*rim*shade_side)*(1.0-limb_shade*limb*shade_side);
 	ROUGHNESS=roughness_value;
-	SPECULAR=0.5*light_quality;
+	// Dark stone (the inside of a cave, deep cracks) takes no sheen: on
+	// ultra it turned the black of the caves grey.
+	SPECULAR=0.5*light_quality*smoothstep(0.06,0.25,dot(ALBEDO,vec3(0.3,0.59,0.11)));
+	if(light_quality>0.5){
+		// Depth: the rolled edge of a location's face, set far back, takes a
+		// little of the sky's haze. Caves keep their dark (vertex alpha 1).
+		float recess=smoothstep(-1.5,-7.5,rock_position.z)*(1.0-COLOR.a);
+		ALBEDO=mix(ALBEDO,aerial_color,recess*0.18);
+		// Warm light bounced off the sunlit benches into the undersides, so a
+		// shaded overhang glows faintly instead of going flat.
+		float under=smoothstep(-0.05,-0.75,rock_normal.y);
+		EMISSION=ALBEDO*vec3(0.20,0.12,0.05)*under;
+	}
 	if(light_quality>0.5){
 		// Surface gradient of the stone's height, so its relief catches the real
 		// sun. Only low frequencies: derivatives come in 2x2 pixel blocks, and

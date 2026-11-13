@@ -12,6 +12,9 @@ var prepared_world: MountainWorld
 var prepared_key: Dictionary = {}
 var prepared_seed := 0
 var prepared_rows_left := false
+# A level made in advance waiting to be laid into the prepared world: set up
+# in one frame, its layout loaded in the next (each is a few milliseconds).
+var prepared_level: LevelBake
 # Frames left of the prepared world's warm-up draw (0: not yet, -1: done).
 var prepared_warm := 0
 var warm_view: SubViewport
@@ -402,6 +405,49 @@ func _ready() -> void:
 		# Android UI.  A few devices are slow or unstable during SDK startup.
 		call_deferred("_setup_ads_deferred")
 
+# --- Letting worlds go ------------------------------------------------------------
+# A built mountain is about 1600 nodes. Freed in one go (queue_free), it held
+# a frame for 23-28 ms on a PC: on every location switch, graphics preset
+# change and return to the camp. A retired node leaves the tree at once (out
+# of sight, not processed) and is freed a piece at a time, REAP_USEC a frame.
+const REAP_USEC := 2000
+var _retired: Array[Node] = []
+
+func retire(node: Node) -> void:
+	if not is_instance_valid(node): return
+	if node.get_parent()!=null: node.get_parent().remove_child(node)
+	_retired.append(node)
+
+func _reap(budget_usec: int) -> void:
+	var deadline := Time.get_ticks_usec()+budget_usec
+	while not _retired.is_empty() and (budget_usec<0 or Time.get_ticks_usec()<deadline):
+		# Checked before the typed assignment: a node freed elsewhere (a test
+		# tearing the game down) is an error to assign to a Node variable.
+		var entry = _retired.back()
+		if not is_instance_valid(entry):
+			_retired.pop_back()
+			continue
+		var node: Node = entry
+		var count := node.get_child_count()
+		if count==0:
+			_retired.pop_back()
+			node.free()
+			continue
+		# Leaves first: the last child is detached and freed (or taken
+		# apart) before its parent.
+		var child := node.get_child(count-1)
+		node.remove_child(child)
+		_retired.append(child)
+
+func retired_count() -> int:
+	return _retired.size()
+
+func _exit_tree() -> void:
+	_reap(-1)
+	# Caches that outlive a world are let go with the game.
+	ShaderBank.clear()
+	BuildCache.clear()
+
 func _setup_ads_deferred() -> void:
 	if not preview and is_instance_valid(ads):
 		ads.setup()
@@ -428,7 +474,7 @@ func _setup_lighting() -> void:
 	# Slightly cooler and higher than before, so the flanks of the volumes
 	# stay readable and hollows never drop to near black.
 	environment.ambient_light_color = Color("b6c7d6")
-	environment.ambient_light_energy = .62
+	environment.ambient_light_energy = AMBIENT_ENERGY
 	environment.glow_enabled = true
 	environment.glow_intensity = .10
 	environment.glow_strength = .45
@@ -457,8 +503,12 @@ func _setup_lighting() -> void:
 	add_child(sun_light)
 
 const SUN_DIRECTION := Vector3(.30,-.50,-.81)
-const SUN_ENERGY := .46
-const SUN_ENERGY_ULTRA := .62
+# More of the light comes from the sun than from the fill, so a cast
+# shadow (which only removes the sun) reads on grips, platforms and rock.
+const SUN_ENERGY := .60
+const SUN_ENERGY_ULTRA := .80
+const AMBIENT_ENERGY := .50
+const AMBIENT_ENERGY_ULTRA := .38
 
 func _set_shadow_atlas(atlas_size: int) -> void:
 	if atlas_size==shadow_atlas_size: return
@@ -475,7 +525,7 @@ func _apply_shadow_preset(preset: String) -> void:
 		"ultra":
 			sun_light.shadow_enabled = true
 			# Deeper than high, but finds and tags must not stamp dark shapes on the rock.
-			sun_light.shadow_opacity = .58
+			sun_light.shadow_opacity = .85
 			sun_light.light_energy = SUN_ENERGY
 			sun_light.shadow_bias = .04
 			sun_light.shadow_normal_bias = 1.2
@@ -485,7 +535,7 @@ func _apply_shadow_preset(preset: String) -> void:
 		"high":
 			sun_light.shadow_enabled = true
 			# Readable cast shadows between rock masses; ambient fill keeps them blue-grey.
-			sun_light.shadow_opacity = .46
+			sun_light.shadow_opacity = .70
 			sun_light.light_energy = SUN_ENERGY
 			sun_light.shadow_bias = .04
 			sun_light.shadow_normal_bias = 1.2
@@ -502,7 +552,7 @@ func _apply_shadow_preset(preset: String) -> void:
 			# switch back does not recompile every 3D shader.
 		_:
 			sun_light.shadow_enabled = true
-			sun_light.shadow_opacity = .44
+			sun_light.shadow_opacity = .66
 			sun_light.light_energy = SUN_ENERGY
 			sun_light.shadow_bias = .04
 			sun_light.shadow_normal_bias = 1.2
@@ -520,11 +570,22 @@ func _apply_lighting(lighting: String) -> void:
 	RenderingServer.global_shader_parameter_set("light_quality",1.0 if ultra else 0.0)
 	if ultra: sun_light.light_energy = SUN_ENERGY_ULTRA
 	sun_light.light_specular = .6 if ultra else .35
-	scene_environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY if ultra else Environment.AMBIENT_SOURCE_COLOR
+	# A flat fill on every preset: the sky as the fill source lit the inside
+	# of the caves grey on ultra.
+	scene_environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	# No sky reflections: on ultra they laid a grey sheen over the black of
+	# the caves and the shaded stone. The sun's own highlight stays.
+	scene_environment.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
 	# Half the fill stays neutral: the sky alone turns every rock blue.
 	scene_environment.ambient_light_sky_contribution = .45 if ultra else 1.0
-	scene_environment.ambient_light_color = Color("d6d2c8") if ultra else Color("b6c7d6")
-	scene_environment.ambient_light_energy = .46 if ultra else .62
+	scene_environment.ambient_light_color = Color("c4cdd6") if ultra else Color("b6c7d6")
+	scene_environment.ambient_light_energy = AMBIENT_ENERGY_ULTRA if ultra else AMBIENT_ENERGY
+	# Ultra grades the frame a touch richer and lets lit stone and snow bloom.
+	scene_environment.glow_intensity = .2 if ultra else .10
+	scene_environment.glow_bloom = .04 if ultra else 0.0
+	scene_environment.adjustment_enabled = ultra
+	scene_environment.adjustment_contrast = 1.07
+	scene_environment.adjustment_saturation = 1.12
 	var msaa := Viewport.MSAA_4X if ultra and passes["msaa_4x"] else ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d") as Viewport.MSAA
 	if get_viewport().msaa_3d!=msaa: get_viewport().msaa_3d = msaa
 
@@ -602,10 +663,7 @@ func apply_setting(key: String) -> void:
 		hud.rebuild_all_pages()
 
 func _create_world(seed_number: int, location_number: int, height: float, saved_version: int = 0, menu_preview: bool = false, visual_budget: int = -1, route: int = -1) -> void:
-	if is_instance_valid(world):
-		world.queue_free()
-	if is_instance_valid(explorer):
-		explorer.queue_free()
+	_release_world()
 	world = MountainWorld.new()
 	# Runtime worlds build visual chunks incrementally. Tests and offline tools
 	# keep MountainWorld's default synchronous budget for deterministic queries.
@@ -626,6 +684,20 @@ func _create_world(seed_number: int, location_number: int, height: float, saved_
 	else: world.generate_to(height,run_mode in ["summit","practice"],summit_height)
 	world.generation_row_budget = 1 if visual_budget>=0 and not (world.layout is LegacyMountainLayout) else -1
 	if not menu_preview: _attach_explorer()
+
+# Lets the current world and climber go. What they drew with stays compiled
+# (ShaderBank): the sections a climb streamed in bring materials the start of
+# the next world has not shown yet.
+func _release_world() -> void:
+	if is_instance_valid(world):
+		if world.visuals_enabled: ShaderBank.hold_tree(world)
+		retire(world)
+	world = null
+	# The climber draws into its world: it goes with it, not a frame later.
+	if is_instance_valid(explorer):
+		ShaderBank.hold_tree(explorer)
+		explorer.queue_free()
+	explorer = null
 
 func _attach_explorer() -> void:
 	explorer = ExplorerView.new()
@@ -661,10 +733,11 @@ func _next_run_key() -> Dictionary:
 	return {}
 
 func _discard_prepared_world() -> void:
-	if is_instance_valid(prepared_world): prepared_world.queue_free()
+	if is_instance_valid(prepared_world): retire(prepared_world)
 	prepared_world = null
 	prepared_key = {}
 	prepared_rows_left = false
+	prepared_level = null
 	prepared_warm = 0
 	_end_warm_view()
 
@@ -695,11 +768,16 @@ func _update_prepared_world() -> void:
 		else: prepared_world.setup(prepared_seed,location,0,false,route)
 		_world_graphics(prepared_world)
 		if level!=null:
-			# A level made in advance: its layout is read, not generated.
-			prepared_world.load_bake(level)
-			prepared_world.generation_row_budget = -1
+			# A level made in advance: its layout is read, not generated, in
+			# the next frame.
+			prepared_level = level
 			return
 		prepared_rows_left = true
+		return
+	if prepared_level!=null:
+		prepared_world.load_bake(prepared_level)
+		prepared_world.generation_row_budget = -1
+		prepared_level = null
 		return
 	if prepared_rows_left:
 		# The route graph a few rows per frame, then the summit and loot.
@@ -715,7 +793,10 @@ func _update_prepared_world() -> void:
 # PC, far longer on a phone). Once the prepared start is built, a small
 # offscreen view draws it for a few frames while the menu still covers the
 # screen, so the run opens on shaders that are ready.
+# The meshes come into that view a few per frame (MountainWorld.warm_step):
+# all at once, their first draw froze a lobby frame instead (130-340 ms).
 const WARM_FRAMES := 3
+const WARM_BATCH := 12
 func _warm_prepared_world() -> void:
 	if prepared_warm<0 or preview or DisplayServer.get_name()=="headless": return
 	if prepared_warm==0:
@@ -735,11 +816,15 @@ func _warm_prepared_world() -> void:
 		eye.look_at(Vector3(0,START_CAMERA_Y+camera_view_offset,0))
 		eye.current = true
 		warm_view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		prepared_world.warm_begin()
 		prepared_world.visible = true
 		prepared_warm = WARM_FRAMES
 		return
+	if prepared_world.warm_step(WARM_BATCH): return
 	prepared_warm -= 1
 	if prepared_warm>0: return
+	# Drawn once: its material shaders stay compiled from here on.
+	ShaderBank.hold_tree(prepared_world)
 	prepared_world.visible = false
 	prepared_warm = -1
 	_end_warm_view()
@@ -774,10 +859,15 @@ func _play_level_intro() -> void:
 	_position_camera()
 
 func _adopt_prepared_world() -> void:
+	if prepared_level!=null:
+		prepared_world.load_bake(prepared_level)
+		prepared_world.generation_row_budget = -1
+		prepared_level = null
 	if prepared_rows_left: _prepare_rows(0)
-	if is_instance_valid(world): world.queue_free()
-	if is_instance_valid(explorer): explorer.queue_free()
+	_release_world()
 	world = prepared_world
+	# Taken over in the middle of its first draw: nothing may stay hidden.
+	world.warm_finish()
 	world.build_urgency = true
 	prepared_world = null
 	prepared_key = {}
@@ -2326,6 +2416,14 @@ func unpause() -> void:
 func show_menu() -> void:
 	if ads.fullscreen: return
 	hud.menu_tab = "expedition"
+	# A run's hints stay with the run. Their clock stands still on the pause,
+	# revive and result screens, so "Прицелься и отпусти" lived on into the
+	# camp and showed over the character screen.
+	if state!="menu" and hint_context not in ["menu","save"]:
+		hint = ""
+		hint_context = ""
+		hint_timer = 0.0
+		hud.set_toast("")
 	if state=="play" or state=="pause":
 		save_snapshot()
 	if practice_return_model!=null:
@@ -2359,7 +2457,7 @@ func exit_app() -> void:
 	get_tree().quit()
 
 func go_back() -> void:
-	if ads.fullscreen: return
+	if ads.fullscreen or hud.transition_running(): return
 	if hud.exit_confirmation_visible():
 		hud.hide_exit_confirmation()
 		return
@@ -2402,6 +2500,22 @@ func cycle_location(direction: int) -> bool:
 	if is_instance_valid(world): world.visible = false
 	if is_instance_valid(explorer): explorer.visible = false
 	return true
+
+# Starts a climb through the iris (GameHud.close_iris). One at a time: taps
+# and keys during the transition do nothing.
+func begin_run(action: Callable, origin: Vector2 = Vector2.INF) -> void:
+	if ads.fullscreen or hud.transition_running(): return
+	hud.close_iris(action,origin)
+
+# The lobby's main action: a climb (new or saved) goes through the iris, a
+# purchase of a route happens at once.
+func press_lobby_action() -> void:
+	if not model.profile["active"].is_empty() or model.profile["locations"].has(lobby_location): begin_run(lobby_action)
+	else: lobby_action()
+
+func press_practice() -> void:
+	if model.profile["active"].is_empty(): begin_run(start_practice)
+	else: start_practice()
 
 func lobby_action() -> void:
 	if not model.profile["active"].is_empty():
@@ -2529,6 +2643,7 @@ func _process(delta: float) -> void:
 			summit_scene = .001
 			skip_summit_scene()
 	_update_music()
+	_reap(REAP_USEC)
 	if not AssetWarmup.done(): AssetWarmup.poll()
 	_update_prepared_world()
 	if profile_save_pending:

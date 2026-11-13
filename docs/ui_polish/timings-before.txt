@@ -1,0 +1,52 @@
+01 app start                 frames=   2 median=129.5 worst= 129.5 slow(>=25 ms)=1  #0 129
+02 lobby idle                frames= 277 median=  4.3 worst= 480.9 slow(>=25 ms)=4  #0 26 #66 481 #67 54 #85 39
+03 section -> equipment      frames= 173 median=  4.1 worst=   6.0 slow(>=25 ms)=0  
+03 equipment supplies        frames= 172 median=  4.1 worst=   6.5 slow(>=25 ms)=0  
+03 section -> expedition     frames= 188 median=  3.9 worst=  50.7 slow(>=25 ms)=1  #145 51
+03 section -> settings       frames= 182 median=  4.1 worst=   6.3 slow(>=25 ms)=0  
+04 settings section 1        frames= 135 median=  4.1 worst=  34.1 slow(>=25 ms)=1  #44 34
+04 settings section 2        frames= 136 median=  4.0 worst=  28.6 slow(>=25 ms)=1  #43 29
+04 settings section 3        frames= 238 median=  4.1 worst=  52.5 slow(>=25 ms)=2  #44 50 #174 53
+05 preset 0                  frames= 142 median=  4.2 worst=  15.4 slow(>=25 ms)=0  
+05 preset 1                  frames= 144 median=  4.2 worst=   9.7 slow(>=25 ms)=0  
+05 preset 2                  frames=  75 median=  6.9 worst= 184.2 slow(>=25 ms)=2  #1 41 #74 184
+05 preset 3                  frames= 116 median=  6.8 worst=2437.6 slow(>=25 ms)=5  #0 2438 #1 43 #67 138 #68 39 #69 37
+06 back to expedition        frames= 150 median=  4.1 worst= 186.7 slow(>=25 ms)=1  #25 187
+07 location +1               frames= 169 median=  9.0 worst=  52.6 slow(>=25 ms)=4  #1 53 #43 44 #88 52 #132 49
+07 location -1               frames= 171 median=  8.7 worst= 194.9 slow(>=25 ms)=4  #0 56 #40 45 #74 49 #142 195
+08 character open            frames= 261 median=  4.2 worst=  56.7 slow(>=25 ms)=1  #0 57
+08 character slot            frames= 177 median=  4.1 worst=   5.6 slow(>=25 ms)=0  
+08 character try-on          frames= 192 median=  4.1 worst=  11.6 slow(>=25 ms)=0  
+08 character buy             frames= 224 median=  4.2 worst=   5.5 slow(>=25 ms)=0  
+08 character close           frames= 118 median=  4.0 worst=   6.6 slow(>=25 ms)=0  
+08 character reopen          frames= 226 median=  4.0 worst=  50.2 slow(>=25 ms)=2  #0 36 #20 50
+09 lobby before run l0       frames= 709 median=  4.0 worst=  51.8 slow(>=25 ms)=1  #144 52
+10 start run l0              frames= 454 median=  4.3 worst=  87.7 slow(>=25 ms)=2  #0 88 #1 47
+11 throw and swing l0        frames= 385 median=  4.8 worst=  80.3 slow(>=25 ms)=2  #0 80 #18 25
+12 pause l0                  frames= 142 median=  4.0 worst=  31.1 slow(>=25 ms)=1  #0 31
+12 unpause l0                frames= 114 median=  4.7 worst=   6.2 slow(>=25 ms)=0  
+13 fail l0                   frames=  86 median=  8.0 worst=  81.8 slow(>=25 ms)=2  #0 65 #67 82
+13 revive                    frames= 271 median=  4.9 worst=  60.4 slow(>=25 ms)=2  #0 40 #226 60
+14 restart from revive       frames= 456 median=  4.2 worst= 228.7 slow(>=25 ms)=1  #0 229
+15 summit finish             frames= 906 median=  4.3 worst=  83.0 slow(>=25 ms)=2  #0 43 #62 83
+16 result -> new run         frames= 481 median=  4.4 worst=  23.8 slow(>=25 ms)=0  
+17 take reward l0            frames= 293 median=  4.0 worst=  82.6 slow(>=25 ms)=2  #0 26 #20 83
+18 result -> camp l0         frames= 241 median=  4.3 worst=  52.3 slow(>=25 ms)=1  #130 52
+09 lobby before run l1       frames= 530 median=  4.2 worst= 197.9 slow(>=25 ms)=6  #1 55 #42 51 #66 65 #72 31 #84 25 #93 198
+10 start run l1              frames= 474 median=  4.2 worst=  51.2 slow(>=25 ms)=2  #0 51 #1 48
+11 throw and swing l1        frames= 424 median=  4.5 worst=  19.0 slow(>=25 ms)=0  
+12 pause l1                  frames= 144 median=  3.9 worst=  15.5 slow(>=25 ms)=0  
+12 unpause l1                frames= 110 median=  4.7 worst=   6.8 slow(>=25 ms)=0  
+13 fail l1                   frames=  75 median= 10.2 worst=  44.9 slow(>=25 ms)=1  #39 45
+17 take reward l1            frames= 277 median=  4.1 worst=  73.3 slow(>=25 ms)=2  #3 26 #13 73
+18 result -> camp l1         frames= 223 median=  4.5 worst=  61.5 slow(>=25 ms)=2  #143 62 #156 26
+09 lobby before run l2       frames= 523 median=  4.2 worst= 217.5 slow(>=25 ms)=5  #1 73 #50 41 #56 64 #64 31 #107 218
+10 start run l2              frames= 400 median=  5.0 worst=  55.0 slow(>=25 ms)=2  #0 55 #1 48
+11 throw and swing l2        frames= 383 median=  4.9 worst=  32.6 slow(>=25 ms)=1  #23 33
+12 pause l2                  frames= 143 median=  4.0 worst=  16.0 slow(>=25 ms)=0  
+12 unpause l2                frames= 109 median=  4.9 worst=   6.6 slow(>=25 ms)=0  
+13 fail l2                   frames=  78 median= 10.0 worst=  38.4 slow(>=25 ms)=1  #42 38
+17 take reward l2            frames= 278 median=  4.1 worst=  85.1 slow(>=25 ms)=1  #16 85
+18 result -> camp l2         frames= 232 median=  4.4 worst=  58.3 slow(>=25 ms)=1  #124 58
+19 character after runs      frames= 300 median=  4.0 worst=  22.2 slow(>=25 ms)=0  
+20 exit dialog               frames= 177 median=  3.9 worst=   7.5 slow(>=25 ms)=0  

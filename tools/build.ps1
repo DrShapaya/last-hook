@@ -69,6 +69,7 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_integration.gd') (J
 Invoke-TaskGodot @('--headless','--script','res://tests/test_hook.gd') (Join-Path $taskArtifacts 'build-hook.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_controls.gd') (Join-Path $taskArtifacts 'build-controls.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_platforms.gd') (Join-Path $taskArtifacts 'build-platforms.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_location_decor.gd') (Join-Path $taskArtifacts 'build-location-decor.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_generation.gd') (Join-Path $taskArtifacts 'build-generation.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_masks.gd') (Join-Path $taskArtifacts 'build-masks.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_routes.gd') (Join-Path $taskArtifacts 'build-routes.log')
@@ -89,6 +90,8 @@ Invoke-TaskGodot @('--headless','--script','res://tests/test_hero_model.gd') (Jo
 Invoke-TaskGodot @('--headless','--script','res://tests/test_character_screen.gd') (Join-Path $taskArtifacts 'build-character-screen.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_polish.gd') (Join-Path $taskArtifacts 'build-polish.log')
 Invoke-TaskGodot @('--headless','--script','res://tests/test_audio.gd') (Join-Path $taskArtifacts 'build-audio.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_settings.gd') (Join-Path $taskArtifacts 'build-settings.log')
+Invoke-TaskGodot @('--headless','--script','res://tests/test_ui_flow.gd') (Join-Path $taskArtifacts 'build-ui-flow.log')
 }
 
 if ($Target -in @('All','Windows')) {

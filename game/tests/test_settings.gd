@@ -184,7 +184,7 @@ func test_pages(game) -> void:
 		check(names.has(label),"the graphics page shows "+label)
 	game.set_graphics_preset("high")
 	await open_section(game,"graphics")
-	var glow_off: Button = all_buttons(game)["Вкл"]
+	var glow_off: Button = game.hud.lobby_view.sync_switches["glow"]
 	glow_off.pressed.emit()
 	check(game.model.profile["graphics_quality"]=="custom","a manual change moves the preset to custom")
 	var preset_thumb: Panel = game.hud.lobby_view.preset_buttons[0].get_meta("thumb")
@@ -400,12 +400,12 @@ func test_graphics(game) -> void:
 	check(game.model.profile["graphics_quality"]=="balanced" and game.world.visual_quality=="balanced" and game.sun_light.shadow_enabled and game.scene_environment.glow_enabled,"a preset fills everything")
 	check(is_equal_approx(game.get_viewport().scaling_3d_scale,1.0),"a preset restores render scale")
 	game.set_graphics_preset("ultra")
-	check(game.get_viewport().msaa_3d==Viewport.MSAA_4X and game.scene_environment.ambient_light_source==Environment.AMBIENT_SOURCE_SKY,"ultra turns on the full light model")
+	check(game.get_viewport().msaa_3d==Viewport.MSAA_4X and game.scene_environment.adjustment_enabled and is_equal_approx(game.sun_light.light_energy,game.SUN_ENERGY_ULTRA),"ultra turns on the full light model")
 	check(game.world.visual_quality=="high","ultra plays the high bake")
 	game.set_setting("lighting","standard")
-	check(game.model.profile["graphics_quality"]=="custom" and game.scene_environment.ambient_light_source==Environment.AMBIENT_SOURCE_COLOR,"the light model is its own setting")
+	check(game.model.profile["graphics_quality"]=="custom" and not game.scene_environment.adjustment_enabled,"the light model is its own setting")
 	game.set_graphics_preset("high")
-	check(game.scene_environment.ambient_light_source==Environment.AMBIENT_SOURCE_COLOR and is_equal_approx(game.sun_light.light_energy,game.SUN_ENERGY),"high restores the plain light")
+	check(not game.scene_environment.adjustment_enabled and is_equal_approx(game.scene_environment.ambient_light_energy,game.AMBIENT_ENERGY) and is_equal_approx(game.sun_light.light_energy,game.SUN_ENERGY),"high restores the plain light")
 	check(game.get_viewport().msaa_3d==ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d"),"high restores the project antialiasing")
 
 func test_audio(game) -> void:

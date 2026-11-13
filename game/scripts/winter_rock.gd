@@ -119,7 +119,8 @@ func lumps(low: float, high: float) -> Array:
 			var at := Vector2(x,y+float(shelf[3])*(x-float(shelf[0]))-float(shelf[4])*random.randf_range(.08,.3))
 			if distance(at)<.6 or not _clear_of_grips(at,1.3): continue
 			var small := random.randf_range(.1,.36)
-			result.append([Vector3(at.x,at.y,height(at)+.1),Vector3(small*1.4,small,small)])
+			# Back against the shelf: plants on it stand in front.
+			result.append([Vector3(at.x,at.y,height(at)-small-.25),Vector3(small*1.4,small,small)])
 	return result
 
 func _body(point: Vector2) -> float:

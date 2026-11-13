@@ -201,7 +201,9 @@ func _near_cave(point: Vector2) -> bool:
 		if ((point-Vector2(float(cave[0]),float(cave[1])))/Vector2(float(cave[2])+.9,float(cave[3])+.9)).length()<1.0: return true
 	return false
 
-# Rounded boulders on the ledges and gravel spilled along them.
+# Rounded boulders on the ledges and gravel spilled along them. Each lies
+# back on the bench, its front at the face: plants on the bench stand in
+# front of it, never cut across by a heap (owner, 0.18.3).
 func lumps(low: float, high: float) -> Array:
 	var random := RandomNumberGenerator.new()
 	random.seed = hash(Vector2i(random_seed,roundi(low)))
@@ -213,15 +215,15 @@ func lumps(low: float, high: float) -> Array:
 		if roll<.22:
 			# A heap of sand drifted against the wall behind the ledge.
 			var wide := random.randf_range(1.0,2.0)
-			result.append([Vector3(at.x,at.y+wide*.12,spot.z-.1),Vector3(wide,wide*.28,wide*.6)])
+			result.append([Vector3(at.x,at.y+wide*.12,spot.z-wide*.6-.25),Vector3(wide,wide*.28,wide*.6)])
 		elif roll<.34:
 			# A small round stone, well under the size of a grip block.
 			var size := random.randf_range(.3,.55)
-			result.append([Vector3(at.x,at.y+size*.45,spot.z+.15),Vector3(size*1.2,size*.75,size*.9)])
+			result.append([Vector3(at.x,at.y+size*.45,spot.z-size*.9-.25),Vector3(size*1.2,size*.75,size*.9)])
 		else:
 			for stone in range(random.randi_range(2,5)):
 				var small := random.randf_range(.07,.17)
-				result.append([Vector3(at.x+random.randf_range(-.9,.9),at.y+small*.4+random.randf_range(-.06,.06),spot.z+.12),Vector3(small*1.3,small*.8,small)])
+				result.append([Vector3(at.x+random.randf_range(-.9,.9),at.y+small*.4+random.randf_range(-.06,.06),spot.z-small-.25),Vector3(small*1.3,small*.8,small)])
 		if result.size()>110: break
 	return result
 

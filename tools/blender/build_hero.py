@@ -1521,7 +1521,7 @@ def spiral_end(centre, y_dir, r_out, turns, mat, name, thick=0.0042):
     return finish(obj, mat)
 
 
-PACK_X = -0.183  # The pack's centre line (its back panel rests on the jacket).
+PACK_X = -0.176  # The pack's centre line (its back panel rests on the jacket).
 
 # Pack body, bottom to top: z, outward bulge, back panel, half width, squareness.
 PACK_ROWS = [

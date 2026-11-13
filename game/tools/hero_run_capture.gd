@@ -17,6 +17,15 @@ var target_id := -1
 var target := Vector2.ZERO
 var fired := false
 var mid_turn := 0 # Frames that catch the hero turning around (body edge-on).
+# --no-images: only the counts. --seed=N: another mountain.
+var images := true
+var seed_value := 58273
+# Frames where the hero faces against his flight (in the air, fast sideways)
+# or against the hook he throws.
+var air_frames := 0
+var air_against := 0
+var throw_frames := 0
+var throw_against := 0
 
 func _initialize() -> void:
 	call_deferred("setup")
@@ -25,6 +34,8 @@ func setup() -> void:
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--out="): out = argument.trim_prefix("--out=")
 		if argument.begins_with("--frames="): frames = int(argument.trim_prefix("--frames="))
+		if argument=="--no-images": images = false
+		if argument.begins_with("--seed="): seed_value = int(argument.trim_prefix("--seed="))
 	DirAccess.make_dir_recursive_absolute(out)
 	root.size = Vector2i(720,1280)
 	game = (load("res://scenes/main.tscn") as PackedScene).instantiate()
@@ -34,8 +45,8 @@ func setup() -> void:
 	game.set_process(false)
 	game.model.profile = GameModel.fresh_profile()
 	game.start_run(false)
-	game.run_seed = 58273
-	game._create_world(58273,0,126)
+	game.run_seed = seed_value
+	game._create_world(seed_value,0,126)
 	var initial: Vector2 = game.world.anchors[0]["pos"]
 	game.sim.pos = initial+Vector2(0,-2.8)
 	game.sim.vel = Vector2.ZERO
@@ -55,6 +66,12 @@ func _frame() -> void:
 	process_frame.disconnect(_frame)
 	for i in range(4): _bot_step()
 	game._process(1.0/30)
+	_count_facing()
+	if not images:
+		captured += 1
+		if captured>=frames or game.state!="play": _finish()
+		else: process_frame.connect(_frame)
+		return
 	await RenderingServer.frame_post_draw
 	var image := root.get_texture().get_image()
 	image.save_png(out.path_join("%04d.png" % captured))
@@ -72,11 +89,29 @@ func _frame() -> void:
 		if absf(sin(float(game.explorer.body.get("turn"))))>.3: mid_turn += 1
 	captured += 1
 	if captured>=frames or game.state!="play":
-		print("HERO_RUN frames=%d mid_turn=%d" % [captured,mid_turn])
-		game.queue_free()
-		quit()
+		_finish()
 		return
 	process_frame.connect(_frame)
+
+func _finish() -> void:
+	print("HERO_RUN frames=%d mid_turn=%d" % [captured,mid_turn])
+	print("HERO_FACING air %d/%d against, throw %d/%d against" % [air_against,air_frames,throw_against,throw_frames])
+	game.queue_free()
+	quit()
+
+func _count_facing() -> void:
+	if not is_instance_valid(game.explorer) or not "facing" in game.explorer.body: return
+	var body = game.explorer.body
+	var facing: float = body.get("facing")
+	var state: String = str(body.get("state"))
+	if not game.sim.grounded and not game.sim.attached and absf(game.sim.vel.x)>2.0 and state in ["release","rise","fall","slip"]:
+		air_frames += 1
+		if signf(game.sim.vel.x)!=signf(facing): air_against += 1
+	var info: Dictionary = body.get("flight_info")
+	var bolt: Vector2 = info.get("velocity",Vector2.ZERO)
+	if state in ["throw","hook_flight"] and absf(bolt.x)>absf(bolt.y)*.5 and body.get("state_time")>.1:
+		throw_frames += 1
+		if signf(bolt.x)!=signf(facing): throw_against += 1
 
 # One physics step of the climbing bot (same gestures as the integration bot).
 func _bot_step() -> void:

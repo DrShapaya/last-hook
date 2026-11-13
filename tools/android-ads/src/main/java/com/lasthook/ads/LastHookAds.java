@@ -1,6 +1,9 @@
 package com.lasthook.ads;
 
 import android.app.Activity;
+import android.os.Build;
+import android.view.DisplayCutout;
+import android.view.WindowInsets;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -217,8 +220,12 @@ public final class LastHookAds extends GodotPlugin {
         BannerAdView banner;
         FrameLayout container;
         BannerAdSize size;
-        // Height of the loaded banner in pixels; 0 while nothing is loaded.
+        // Height the screen gives the slot in pixels (the cut-out band over
+        // it plus the banner); 0 while nothing is loaded.
         int loadedHeight;
+        // Pixels between the top of the screen and the banner: the camera
+        // cut-out's band.
+        int inset;
         boolean wanted;
     }
     private final Map<String, BannerSlot> slots = new HashMap<>();
@@ -267,21 +274,28 @@ public final class LastHookAds extends GodotPlugin {
             if (widthPixels <= 0) widthPixels = activity.getResources().getDisplayMetrics().widthPixels;
             float density = activity.getResources().getDisplayMetrics().density;
             if (density <= 0f) density = 1f;
-            int widthDp = Math.round(widthPixels / density);
-            // An inline size as wide as the screen, no taller than the old
-            // strip (55dp, 90dp on tablets). A sticky size picked its height
-            // from the width and grew to about 100dp on a phone, too tall for
-            // the top of the screen. Both placements use the same rule, so
-            // they are the same size.
-            int maxBannerHeightDp = widthDp > 728 ? 90 : 55;
+            // Never a fraction of a dp wider than the screen.
+            int widthDp = (int) Math.floor(widthPixels / density);
+            // An inline size as wide as the screen and as tall as the network's
+            // own creatives (320x50 on a phone, 728x90 on a tablet). Image
+            // creatives keep their proportions: under a taller cap (55dp) a
+            // 320x50 picture was blown up by 10% and came out soft, and a
+            // sticky size grew to about 100dp. Both placements use the same
+            // rule, so they are the same size.
+            int maxBannerHeightDp = widthDp > 728 ? 90 : 50;
             BannerAdSize size = BannerAdSize.inline(activity, widthDp, maxBannerHeightDp);
             slot.size = size;
             slot.loadedHeight = 0;
             slot.banner = new BannerAdView(activity);
             slot.banner.setAdSize(size);
             slot.container = new FrameLayout(activity);
+            // A strip behind the banner from edge to edge: a picture creative
+            // narrower than the screen leaves no bare game showing at its
+            // sides, and the band round a camera cut-out is part of the bar.
+            slot.container.setBackgroundColor(BAR_COLOR);
+            slot.inset = topInset(parent);
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, size.getHeightInPixels(activity));
+                    ViewGroup.LayoutParams.MATCH_PARENT, slot.inset + size.getHeightInPixels(activity));
             // Banners belong to the top safe area, clear of the bottom
             // navigation and the thumb zone.
             params.gravity = Gravity.TOP;
@@ -297,6 +311,9 @@ public final class LastHookAds extends GodotPlugin {
             FrameLayout.LayoutParams childParams = new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, size.getHeightInPixels(activity),
                     Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+            // Below the camera cut-out: the immersive game draws under it, the
+            // banner must not.
+            childParams.topMargin = slot.inset;
             slot.container.addView(slot.banner, childParams);
             // Hidden while loading, but laid out (INVISIBLE, not GONE), so the
             // loaded banner can be measured. The screen moves only once it is.
@@ -332,16 +349,30 @@ public final class LastHookAds extends GodotPlugin {
             // Never give up silently: fall back to the size the slot was made for.
             if (measured <= 0 && slot.size != null) measured = slot.size.getHeightInPixels(getActivity());
             if (measured <= 0) return;
-            slot.loadedHeight = measured;
+            // The screen makes room for the cut-out band and the banner.
+            int total = slot.inset + measured;
+            slot.loadedHeight = total;
             ViewGroup.LayoutParams lp = slot.container.getLayoutParams();
-            if (lp != null && lp.height != measured) {
-                lp.height = measured;
+            if (lp != null && lp.height != total) {
+                lp.height = total;
                 slot.container.setLayoutParams(lp);
             }
             slot.container.setVisibility(slot.wanted ? View.VISIBLE : View.INVISIBLE);
             if (slot.wanted) slot.container.bringToFront();
-            emitHeight(name, measured);
+            emitHeight(name, total);
         });
+    }
+
+    // The game's dark slate (MenuSurface.SLATE, #24323d).
+    private static final int BAR_COLOR = 0xFF24323D;
+
+    /** The camera cut-out's band at the top of the screen, in pixels. */
+    private static int topInset(View root) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return 0;
+        WindowInsets insets = root.getRootWindowInsets();
+        if (insets == null) return 0;
+        DisplayCutout cutout = insets.getDisplayCutout();
+        return cutout != null ? Math.max(0, cutout.getSafeInsetTop()) : 0;
     }
 
     private void destroyBanner(String name) {

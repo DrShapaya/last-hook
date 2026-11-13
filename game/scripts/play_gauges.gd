@@ -56,8 +56,90 @@ static func draw_flag(ci: CanvasItem, pole: Vector2, time: float = 0.0, near: fl
 	ci.draw_colored_polygon(cloth,Color("c98a12"))
 	ci.draw_colored_polygon(PackedVector2Array([cloth[0],cloth[1],cloth[2],pole+Vector2(1,-19)]),MenuSurface.HOLD)
 
+# --- The route bar ----------------------------------------------------------------
+# One drawing for every progress bar (the lobby's route, pause, result, the
+# climb's top gauge): a rounded groove sunk into its plate, the climbed part
+# as a raised fill that warms from copper to hold-gold with a sheen on top,
+# act boundaries as round studs, and the summit as a round slate badge with a
+# flag that the track runs into. All of it is drawn, so it is crisp at any
+# scale and lines up with the track by construction.
+
+const FILL_FROM := Color("c27b31")
+const FILL_TO := Color("f6c32f")
+
+# A horizontal pill: a rectangle with round ends, `y` its centre line.
+static func pill(ci: CanvasItem, left: float, right: float, y: float, thick: float, color: Color) -> void:
+	var r := thick*.5
+	if right-left<thick:
+		ci.draw_circle(Vector2((left+right)*.5,y),r,color,true,-1.0,true)
+		return
+	ci.draw_rect(Rect2(left+r,y-r,right-left-thick,thick),color)
+	ci.draw_circle(Vector2(left+r,y),r,color,true,-1.0,true)
+	ci.draw_circle(Vector2(right-r,y),r,color,true,-1.0,true)
+
+# A pill whose colour runs from `from` at the left to `to` at the right.
+static func gradient_pill(ci: CanvasItem, left: float, right: float, y: float, thick: float, from: Color, to: Color) -> void:
+	var r := thick*.5
+	var width := maxf(right-left,thick)
+	right = left+width
+	ci.draw_circle(Vector2(left+r,y),r,from,true,-1.0,true)
+	ci.draw_circle(Vector2(right-r,y),r,to,true,-1.0,true)
+	if width>thick:
+		ci.draw_polygon(PackedVector2Array([Vector2(left+r,y-r),Vector2(right-r,y-r),Vector2(right-r,y+r),Vector2(left+r,y+r)]),
+			PackedColorArray([from,to,to,from]))
+
+# The groove and its fill from `left` to `right` on the line `y`. `share` is
+# the climbed part (0..1), `marks` the act boundaries (0..1).
+static func draw_track(ci: CanvasItem, left: float, right: float, y: float, share: float, marks: Array, thick: float = 10.0, on_dark: bool = false) -> void:
+	var r := thick*.5
+	var outer_left := left-r
+	var outer_right := right+r
+	# The groove: a dark rim, its face, a shadow along the top inside edge and
+	# a lit lip along the bottom outside edge, so it reads as cut in.
+	if on_dark:
+		pill(ci,outer_left-1.5,outer_right+1.5,y,thick+3,Color(MenuSurface.SLATE_LIP,.85))
+		pill(ci,outer_left,outer_right,y,thick,Color("1a252e"))
+		pill(ci,outer_left+1,outer_right-1,y-thick*.22,thick*.42,Color(0,0,0,.22))
+	else:
+		pill(ci,outer_left,outer_right,y+1.2,thick,Color(MenuSurface.STONE,.9))
+		pill(ci,outer_left,outer_right,y,thick,Color("cfc6b0"))
+		pill(ci,outer_left+1,outer_right-1,y-thick*.2,thick*.45,Color(MenuSurface.STONE_LIP,.55))
+	var fill_right := lerpf(left,right,clampf(share,0,1))
+	if share>0.0:
+		var inset := 1.5
+		var fill_thick := thick-inset*2
+		var end_tone := FILL_FROM.lerp(FILL_TO,clampf(share*1.25,0,1))
+		gradient_pill(ci,outer_left+inset,fill_right+r-inset,y,fill_thick,FILL_FROM,end_tone)
+		# The sheen: a thin light band along the top of the fill.
+		if fill_right+r-inset-(outer_left+inset)>fill_thick:
+			pill(ci,outer_left+inset+fill_thick*.35,fill_right+r-inset-fill_thick*.35,y-fill_thick*.22,maxf(1.4,fill_thick*.26),Color(1,.97,.85,.42))
+	# Act boundaries: studs in the groove, lit once climbed past.
+	for mark in marks:
+		var x := lerpf(left,right,float(mark))
+		var reached := float(mark)<=share
+		ci.draw_circle(Vector2(x,y),r*.62,Color(MenuSurface.SLATE_LIP,.55) if not reached else Color("8a4f16",.55),true,-1.0,true)
+		ci.draw_circle(Vector2(x,y-.4),r*.42,Color("fff1c4") if reached else (Color(MenuSurface.STONE,.5) if on_dark else Color(MenuSurface.STONE,.95)),true,-1.0,true)
+
+# The summit: a round slate badge with a hold-gold rim and a flag in it. The
+# track runs into it from the left. `lit` (0..1) warms it as the summit nears.
+static func draw_summit(ci: CanvasItem, center: Vector2, radius: float = 12.0, lit: float = 0.0, time: float = 0.0) -> void:
+	if lit>0.0:
+		ci.draw_circle(center,radius+5+sin(time*4.0)*1.5,Color(MenuSurface.HOLD,.22*lit),true,-1.0,true)
+	ci.draw_circle(center+Vector2(0,1.5),radius+1.5,Color(MenuSurface.SLATE_LIP,.45),true,-1.0,true)
+	ci.draw_circle(center,radius+1.5,MenuSurface.HOLD_LIP.lerp(MenuSurface.HOLD,.35+.65*lit),true,-1.0,true)
+	ci.draw_circle(center,radius-.5,MenuSurface.SLATE,true,-1.0,true)
+	# A snowy peak in the badge, the flag on its top.
+	var u := radius/12.0
+	var peak := PackedVector2Array([center+Vector2(-8.5,6.5)*u,center+Vector2(-1,-2.5)*u,center+Vector2(2,1)*u,center+Vector2(4,-.5)*u,center+Vector2(8.5,6.5)*u])
+	ci.draw_colored_polygon(peak,Color("5c6f80"))
+	ci.draw_colored_polygon(PackedVector2Array([center+Vector2(-1,-2.5)*u,center+Vector2(2,1)*u,center+Vector2(.6,1.6)*u,center+Vector2(-1.3,.6)*u,center+Vector2(-3,.2)*u]),MenuSurface.STONE)
+	var foot := center+Vector2(-1,-2.5)*u
+	ci.draw_line(foot,foot+Vector2(0,-7.5)*u,MenuSurface.STONE,maxf(1.2,1.4*u),true)
+	var wave := sin(time*3.0)*.6*u
+	ci.draw_colored_polygon(PackedVector2Array([foot+Vector2(.6,-7.5)*u,foot+Vector2(6.5*u,-6*u+wave),foot+Vector2(.6,-4.3)*u]),MenuSurface.HOLD)
+
 # Route from start to summit: zone ticks, record marker, the hero's head at
-# the current height and the summit flag. Crossing a zone flashes its tick.
+# the current height and the summit badge. Crossing a zone flashes its tick.
 class RouteGauge extends Control:
 	var value := 0.0
 	var record := 0.0
@@ -74,72 +156,31 @@ class RouteGauge extends Control:
 		flash = maxf(0,flash-delta*1.6)
 		queue_redraw()
 
+	func track_ends() -> Vector2:
+		return Vector2(10.0,size.x-30.0)
+
 	func _draw() -> void:
-		# A rounded slate groove with a lit top edge; the climbed part is a
-		# twisted rope warming from copper to gold with a light trail at its
-		# end, act notches as small diamonds, the record as a gold pennant,
-		# the hero's head riding the rope and the summit flag at the end.
 		var y := size.y-9.0
-		var left := 6.0
-		var right := size.x-26.0
-		var thick := 12.0
-		var track := Rect2(left-4,y-thick*.5,right-left+8,thick)
-		_pill(track.grow(2),Color(SLATE_LIP,.55))
-		_pill(track,Color(SLATE,.86))
-		_pill(Rect2(track.position+Vector2(2,1),Vector2(track.size.x-4,3)),Color(STONE,.08))
+		var ends := track_ends()
+		var left := ends.x
+		var right := ends.y
 		var share := clampf(value,0,1)
-		var fill_x := lerpf(left,right,share)
-		if fill_x>left+1:
-			var rope := Rect2(left-2,y-4.5,fill_x-left+4,9)
-			_pill(rope,Color("7a4a1c"))
-			# Copper at the start, gold at the climber.
-			var steps := 12
-			for step in range(steps):
-				var x0 := lerpf(left,fill_x,float(step)/steps)
-				var x1 := lerpf(left,fill_x,float(step+1)/steps)
-				var tone := Color("b8692a").lerp(Color("f2b24a"),float(step)/steps)
-				draw_rect(Rect2(x0,y-3,x1-x0+.5,5),tone)
-			draw_line(Vector2(left,y-2.5),Vector2(fill_x,y-2.5),Color("ffe2a0",.55),1.2,true)
-			var twist := left+1
-			while twist<fill_x-3:
-				draw_line(Vector2(twist,y+3),Vector2(twist+4,y-3),Color("6b3c14",.55),1.3,true)
-				twist += 6
-			# A short light trail behind the head.
-			for glow in range(4):
-				draw_circle(Vector2(fill_x-glow*5,y),5.0-glow,Color(HOLD,.22-glow*.05))
+		var marks: Array = []
+		for index in range(1,zones): marks.append(float(index)/zones)
 		if near_summit:
 			var pulse := .55+.45*sin(time*5.0)
 			var from_x := lerpf(left,right,near_from)
-			_pill(Rect2(from_x-2,y-thick*.5-1,right-from_x+6,thick+2),Color("ffd24a",.18+.22*pulse))
-			_pill(Rect2(from_x,y-2,right-from_x+2,4),Color("ffe9a0",.5+.4*pulse))
-		for index in range(1,zones):
-			var at := float(index)/zones
-			var x := lerpf(left,right,at)
-			var reached := at<=share
-			var r := 3.6 if reached else 3.0
-			var diamond := PackedVector2Array([Vector2(x,y-r),Vector2(x+r,y),Vector2(x,y+r),Vector2(x-r,y)])
-			draw_colored_polygon(diamond,Color(SLATE_LIP,.9))
-			var inner := PackedVector2Array([Vector2(x,y-r+1.2),Vector2(x+r-1.2,y),Vector2(x,y+r-1.2),Vector2(x-r+1.2,y)])
-			draw_colored_polygon(inner,HOLD if reached else Color(STONE,.45))
+			PlayGauges.pill(self,from_x-6,right+8,y,16,Color("ffd24a",.14+.18*pulse))
+		PlayGauges.draw_track(self,left,right,y,share,marks,10.0,true)
 		if flash>0:
 			var x := lerpf(left,right,flash_at)
 			draw_arc(Vector2(x,y),6+(1-flash)*16,0,TAU,24,Color(HOLD,flash),2.5,true)
 		if record>0.01 and record<.995:
-			var x := lerpf(left,right,record)
-			draw_line(Vector2(x,y-thick*.5),Vector2(x,y-14),Color(STONE,.8),1.5,true)
-			draw_colored_polygon(PackedVector2Array([Vector2(x,y-14),Vector2(x+8,y-11.5),Vector2(x,y-9)]),Color("b88a12"))
-			draw_colored_polygon(PackedVector2Array([Vector2(x,y-13.5),Vector2(x+6.5,y-11.5),Vector2(x,y-10)]),HOLD)
-		# The climber's cube head rides the end of the rope.
-		PlayGauges.draw_head(self,Vector2(fill_x,y-8+sin(time*5)*1.0))
-		# The summit: a flag on its pole, catching the light as it nears.
-		PlayGauges.draw_flag(self,Vector2(size.x-13,y+6),time,smoothstep(.85,1.0,share))
-
-	func _pill(rect: Rect2, color: Color) -> void:
-		var box := StyleBoxFlat.new()
-		box.bg_color = color
-		box.set_corner_radius_all(int(rect.size.y*.5))
-		box.anti_aliasing = true
-		draw_style_box(box,rect)
+			PlayGauges.draw_crown(self,Vector2(lerpf(left,right,record),y-6),.62)
+		PlayGauges.draw_summit(self,Vector2(size.x-13,y),11.0,smoothstep(.85,1.0,share),time)
+		# The climber's cube head rides the end of the fill, standing on it.
+		var fill_x := lerpf(left,right,share)
+		PlayGauges.draw_head(self,Vector2(fill_x,y-3+sin(time*5)*.8),.95)
 
 # Lower danger edge, shown only while the view has sunk below it after a
 # landing: a dashed warning line with a dark veil over the ground under it.

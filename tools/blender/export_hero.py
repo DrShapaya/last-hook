@@ -75,7 +75,9 @@ def define_bones():
     BONES["chest"] = (Vector((0, 0, 0.565)), Vector((0.005, 0, HJ.NECK - 0.03)), "spine")
     BONES["neck"] = (Vector((0.005, 0, HJ.NECK - 0.03)), Vector((0.01, 0, HJ.HEAD_BOTTOM - 0.01)), "chest")
     BONES["head"] = (Vector((0.01, 0, HJ.HEAD_BOTTOM - 0.01)), Vector((0.03, 0, HJ.HEAD_TOP)), "neck")
-    BONES["backpack"] = (Vector((-0.19, 0, 0.45)), Vector((-0.19, 0, 0.75)), "chest")
+    # The pack turns about where its straps press it to the back, so a rock
+    # never lifts it off the jacket.
+    BONES["backpack"] = (Vector((-0.104, 0, 0.66)), Vector((-0.104, 0, 0.44)), "chest")
     for side in ("near", "far"):
         sh, el, wr = arm(side)
         down = (wr - el).normalized()

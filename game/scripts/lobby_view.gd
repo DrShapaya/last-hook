@@ -27,6 +27,9 @@ class Backdrop extends Control:
 		[Color("7290d8"),Color("e6edf9"),Color("bccbe8"),Color("5e6f9c"),Color("ffffff")],
 	]
 	const MOTES := [Color(1,.97,.8,.14),Color(1,.9,.7,.18),Color(1,1,1,.4)]
+	# Snow on the far peaks: a little in summer, none on the desert's sand,
+	# heavy in winter.
+	const SNOW := [.28,0.0,.9]
 	const FALLS := [.25,.05,1.0]
 	var veil := false:
 		set(value):
@@ -100,6 +103,7 @@ class Backdrop extends Control:
 		var mote: Color = MOTES[index]
 		art_mat.set_shader_parameter("mote_"+side,Vector4(mote.r,mote.g,mote.b,mote.a))
 		art_mat.set_shader_parameter("fall_"+side,FALLS[index])
+		art_mat.set_shader_parameter("snow_"+side,SNOW[index])
 
 	# Shows the blend between two routes: 0 is all `from`, 1 all `to`.
 	func show_routes(from: int, to: int, amount: float) -> void:
@@ -473,6 +477,7 @@ func update_layout() -> void:
 		_build_screen()
 	else:
 		layout_navigation()
+	if is_instance_valid(character_screen) and not character_screen.closing: character_screen.relayout(self)
 
 func update_banner_inset(_pixels: float = 0.0) -> void:
 	update_layout()
@@ -510,6 +515,9 @@ func refresh_screen() -> void:
 	_collect_body()
 	if is_instance_valid(navigation_bar): paint_navigation()
 	else: build_navigation()
+	# The header is kept, so its wallet is brought up to date here: it used
+	# to show the gold from before a purchase until the lobby was left.
+	refresh_wallet()
 	hud.backdrop.fade_to(game.lobby_location)
 	if is_instance_valid(old):
 		if direction!=0:
@@ -774,6 +782,13 @@ func spring_back() -> void:
 
 func _input(event: InputEvent) -> void:
 	if not is_inside_tree() or hud.layout_mode!="menu" or game.state!="menu" or game.ads.fullscreen: return
+	# The iris into a climb is closing: the lobby takes no swipe or key now.
+	if hud.transition_running():
+		get_viewport().set_input_as_handled()
+		return
+	# A focused slider takes the arrows itself (MenuSurface.RopeSlider).
+	var focused := get_viewport().gui_get_focus_owner()
+	if focused is RopeSlider and (event.is_action("ui_left") or event.is_action("ui_right")): return
 	if event is InputEventKey and not rebinding_action.is_empty():
 		_rebind_input(event)
 		return
@@ -887,7 +902,7 @@ func _navigation_input(event: InputEvent) -> void:
 		# Keyboard start never buys a locked route; that stays a deliberate tap.
 		if not model.profile["active"].is_empty() or model.profile["locations"].has(game.lobby_location):
 			get_viewport().set_input_as_handled()
-			game.lobby_action()
+			game.begin_run(game.lobby_action,start_button.get_global_rect().get_center())
 		return
 	if direction==0: return
 	get_viewport().set_input_as_handled()
@@ -909,7 +924,7 @@ func build_header() -> void:
 	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	character.add_child(mark)
 	profile_mark = mark
-	text(character,"Персонаж",Vector2(52,4),Vector2(120,24),18,INK,"display")
+	fit_text(text(character,"Персонаж",Vector2(52,4),Vector2(140,24),18,INK,"display"))
 	text(character,"Гардероб и герой",Vector2(52,27),Vector2(140,18),12,INK_SOFT)
 	symbol(character,11,Vector2(200,12),Vector2(24,24),INK_SOFT)
 	wallet(Vector2(size.x-236,top+3))
@@ -920,6 +935,7 @@ func open_character() -> void:
 	if is_instance_valid(character_screen):
 		# A tap during the closing fade opens a fresh screen instead of being lost.
 		if not character_screen.closing: return
+		character_screen.release_stage()
 		character_screen.queue_free()
 	character_screen = CharacterScreen.new()
 	get_parent().add_child(character_screen)
@@ -928,7 +944,9 @@ func open_character() -> void:
 	visible = false
 	character_screen.closed.connect(func():
 		set_process_input(true)
-		visible = true)
+		visible = true
+		# What was spent in the wardrobe counts down here.
+		refresh_wallet())
 
 # Back closes the character screen first. Returns true when it did.
 func close_character() -> bool:
@@ -1058,11 +1076,14 @@ func route_card(parent: Node, location: int, dimensions: Vector2) -> Panel:
 		var acts: Array = LevelCatalog.level(location).get("acts",[])
 		var route_tag := slab(frame,Vector2(16,16),Vector2(82,34),Color(SLATE,.88),SLATE_LIP,3)
 		text(route_tag,"%d акта" % int(acts.size()),Vector2(0,6),Vector2(82,22),14,STONE,"strong").horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	text(frame,str(definition["name"]),Vector2(22,inner.y-94),Vector2(inner.x-44,48),36,STONE,"display")
 	var total: int = model.balance["locations"].size()
-	# Act names wrap to a second line before the route pager.
+	# Act names wrap to a second line before the route pager. They sit on the
+	# card's bottom edge and the name above them, however many lines they take
+	# (at large text they ran out of the card).
 	var pager_left := inner.x-22-(total-1)*18-6
-	paragraph(frame," · ".join(LevelCatalog.act_names(location)),Vector2(23,inner.y-46),Vector2(pager_left-10-23,40),15,Color("e3e8ea"))
+	var acts_text := paragraph(frame," · ".join(LevelCatalog.act_names(location)),Vector2(23,0),Vector2(pager_left-10-23,40),15,Color("e3e8ea"))
+	acts_text.position.y = minf(inner.y-46,inner.y-6-acts_text.size.y)
+	fit_text(text(frame,str(definition["name"]),Vector2(22,acts_text.position.y-48),Vector2(inner.x-44,48),36,STONE,"display"),22)
 	for index in range(total):
 		var center := Vector2(inner.x-22-(total-1-index)*18,inner.y-34)
 		var points := PackedVector2Array([center+Vector2(0,-6),center+Vector2(6,0),center+Vector2(0,6),center+Vector2(-6,0)])
@@ -1130,7 +1151,7 @@ func build_expedition() -> void:
 		var finish := action(self,"Завершить забег",Vector2(x,mode_y+128),Vector2(width,52),game.finish_saved_run)
 		finish.tooltip_text = "Завершить сохранённую попытку и оформить награду за текущий прогресс."
 	else:
-		var practice := action(self,"Тренировка: 16 зацепов",Vector2(x,mode_y+128),Vector2(width,52),game.start_practice)
+		var practice := action(self,"Тренировка: 16 зацепов",Vector2(x,mode_y+128),Vector2(width,52),game.press_practice)
 		practice.tooltip_text = "Короткий маршрут с базовым снаряжением. Кошелёк не меняется."
 
 # Route panel: the bar with its caption; acts rows extend it downwards.
@@ -1218,7 +1239,7 @@ func build_location_actions(parent: Node) -> void:
 	if unlock.has("gold"): cost_parts.append("%d золота" % int(unlock["gold"]))
 	if unlock.has("diamonds"): cost_parts.append("%d алм." % int(unlock["diamonds"]))
 	var action_text := "Продолжить восхождение" if active else "Начать восхождение" if owned else "Открыть за "+" + ".join(cost_parts) if ready else "Нужно: "+model.location_requirement(game.lobby_location)
-	var start := action(parent,action_text,Vector2(x,mode_y+54),Vector2(width,64),game.lobby_action,"primary")
+	var start := action(parent,action_text,Vector2(x,mode_y+54),Vector2(width,64),game.press_lobby_action,"primary")
 	start_button = start
 	start.add_theme_font_size_override("font_size",21 if action_text.length()<26 else 15)
 	start.disabled = not active and not owned and not ready
@@ -1246,7 +1267,8 @@ func _endless_soon() -> void:
 
 func build_equipment() -> void:
 	var active: bool = not model.profile["active"].is_empty()
-	title(self,"Снаряжение",Vector2(28,80),300,32)
+	# Clear of the switch on its right, at any text size.
+	title(self,"Снаряжение",Vector2(28,80),size.x-56-260-12,32)
 	# "Сборы" (run profiles, items, stock) is not open yet: its tab answers a
 	# tap with a "Скоро" note and the upgrades stay on screen.
 	hud.equipment_view = "upgrades"
@@ -1474,42 +1496,26 @@ static func seconds_text(seconds: float) -> String:
 func settings_switch(parent: Node, title_text: String, subtitle: String, at: Vector2, width: float, enabled: bool, callback: Callable) -> Button:
 	text(parent,title_text,at+Vector2(0,0 if not subtitle.is_empty() else 10),Vector2(width-104,24),16,INK,"strong")
 	if not subtitle.is_empty(): text(parent,subtitle,at+Vector2(0,24),Vector2(width-120,20),13,INK_SOFT)
-	var left := at.x+width-96
-	var track := slab(parent,Vector2(left,at.y),Vector2(96,44),Color(MOSS,.35) if enabled else STONE_SHADE,Color.TRANSPARENT,0)
-	# A switch: the raised block slides right and turns slate when the option
-	# is on. It flips in place; the page is not rebuilt.
-	var toggle := action(parent,"Вкл" if enabled else "Выкл",Vector2(left+(36 if enabled else 4),at.y+4),Vector2(56,36),Callable(),"selected" if enabled else "secondary")
-	toggle.set_meta("on",enabled)
-	toggle.set_meta("track",track)
-	toggle.set_meta("left",left)
+	# A switch (MenuSurface.Toggle). It flips in place; the page is not rebuilt.
+	var toggle := MenuSurface.Toggle.new()
+	toggle.position = Vector2(at.x+width-MenuSurface.Toggle.SIZE.x,at.y)
+	toggle.tooltip_text = title_text
+	toggle.set_on(enabled,false)
+	toggle.pressed.connect(game.ui_tap)
 	toggle.pressed.connect(_flip_switch.bind(toggle,callback))
-	_tight_knob(toggle)
+	parent.add_child(toggle)
 	return toggle
-
-# The knob is narrow: thin side padding keeps "Выкл" whole.
-func _tight_knob(toggle: Button) -> void:
-	toggle.add_theme_font_size_override("font_size",15)
-	for state_name in ["normal","hover","pressed","disabled"]:
-		var box := toggle.get_theme_stylebox(state_name).duplicate() as StyleBoxFlat
-		box.content_margin_left = 2
-		box.content_margin_right = 2
-		toggle.add_theme_stylebox_override(state_name,box)
 
 func _flip_switch(toggle: Button, callback: Callable) -> void:
 	show_switch(toggle,not bool(toggle.get_meta("on",false)))
+	# A tap never leaves the focus ring on it; keys keep it.
+	if not keyboard_focus and toggle.has_focus(): toggle.release_focus()
 	callback.call()
 
 # Moves a switch to a state without running its callback.
 func show_switch(toggle: Button, on: bool) -> void:
 	if not is_instance_valid(toggle) or bool(toggle.get_meta("on",false))==on: return
-	var left: float = toggle.get_meta("left")
-	var track: Panel = toggle.get_meta("track")
-	toggle.set_meta("on",on)
-	toggle.create_tween().tween_property(toggle,"position:x",left+(36 if on else 4),.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	track.add_theme_stylebox_override("panel",hud.slab_style(Color(MOSS,.35) if on else STONE_SHADE,Color.TRANSPARENT,0))
-	toggle.text = "Вкл" if on else "Выкл"
-	hud.skin_button(toggle,"selected" if on else "secondary")
-	_tight_knob(toggle)
+	(toggle as MenuSurface.Toggle).set_on(on,true,not hud.effects_reduced())
 
 func section(parent: Node, value: String) -> void:
 	text(parent,value,Vector2(20,14),Vector2(400,24),17,INK,"display")

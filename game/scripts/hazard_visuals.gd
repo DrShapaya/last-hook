@@ -4,9 +4,8 @@ extends RefCounted
 const FloraModels := preload("res://scripts/flora_models.gd")
 
 # Telegraphs of the act hazards (ActHazards decides, this only shows):
-#   wind      flags on posts and leaves streaming along the pocket, always
-#   storm     ribbons and mirrors turn, dust streaks thicken, far haze
-#   gust      snow streaks along the gust line before and during a gust
+#   (field pockets wind, storm, gust are not built any more: weather lives in
+#   WeatherBands)
 #   cactus    one large cactus with red-tipped spines
 #   scorpion  the tail rises and glows before it strikes
 #   icicle    crack, shadow line on the wall, delay, fall on that line
@@ -79,6 +78,7 @@ func build_near(center_y: float, limit: int = -1, reach: float = 40.0) -> bool:
 	var pending := false
 	for hazard in layout.hazards:
 		var id: int = hazard["id"]
+		if hazard["kind"]=="field": continue # weather is WeatherBands now
 		if built.has(id):
 			# A streamed bridge may be discovered one frame before its ledge
 			# chunk. Retry the visual hookup once the normal platform exists.
@@ -290,7 +290,7 @@ func _build_cactus(hazard: Dictionary, node: Node3D, random: RandomNumberGenerat
 	var at: Vector2 = hazard["pos"]
 	var holder := Node3D.new()
 	holder.name = "Крупный кактус"
-	holder.position = Vector3(at.x,at.y-.55,_surface_z(at)+.1)
+	holder.position = Vector3(at.x,at.y-.55,_front_of_grips(Rect2(at.x-1.0,at.y-.55,2.0,3.2),_surface_z(at)+.1))
 	holder.scale = Vector3.ONE*1.9
 	node.add_child(holder)
 	world.visuals._build_cactus(holder,random,world.profile_at(at.y),true)
@@ -299,6 +299,21 @@ func _build_cactus(hazard: Dictionary, node: Node3D, random: RandomNumberGenerat
 	for index in range(7):
 		var angle := TAU*index/7.0
 		world.sphere("Колючка",Vector3.ZERO,Vector3.ONE*.07,spines,holder).position = Vector3(cos(angle)*.17,.35+index*.12,.12+sin(angle)*.05)
+
+# A depth in front of every grip block over an area: a tall hazard cactus
+# standing under a grip had its top cut off by the block (owner, 0.18.4).
+# A block stands out of its stone by its protrusion (under a metre) plus the
+# mount's standoff.
+func _front_of_grips(area: Rect2, z: float) -> float:
+	for anchor in world.nearby_anchors(area.position.y-1.5,area.end.y+1.5):
+		var p: Vector2 = anchor["pos"]
+		var size: Vector2 = anchor.get("dimensions",Vector2(1.6,.65))
+		if not Rect2(p-size*.5-Vector2(.4,1.0),size+Vector2(.8,1.4)).intersects(area): continue
+		# A location's own face carries its grips; the frame behind it does not.
+		var stone: float = world.visuals.wall_depth(p)
+		if world.visuals is MassifVisuals and (world.visuals as MassifVisuals)._seen_rock()!=null: stone = maxf(stone,(world.visuals as MassifVisuals)._seen_rock().height(p))
+		z = maxf(z,stone+1.6)
+	return z
 
 func _build_scorpion(hazard: Dictionary, entry: Dictionary, random: RandomNumberGenerator) -> void:
 	var node: Node3D = entry["node"]

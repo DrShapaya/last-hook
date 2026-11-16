@@ -891,13 +891,45 @@ func _taken_by_others(index: int, rect: Rect2, clump: String) -> bool:
 			if (rects[k] as Rect2).intersects(rect): return true
 	return false
 
+# The frontmost stone over a piece, as the face's mesh draws it. The facets
+# are straight between corners up to a cell apart, so across the hollow
+# under a ledge a facet stands in front of the rounded face the rock's height
+# describes; a cactus set by that height had its top cut off by the ledge
+# above, most on the coarse balanced and battery faces (owner, 0.18.4).
+# Whether a piece would stand behind a grip's block. The block is wider
+# than its hitbox and drops up to a metre under it (GripVisualSpec); a cactus
+# there was cut in two by it (owner, 0.18.4). Pieces that are seated already
+# keep a wider halo (_decor_blocked).
+func _under_grip(rect: Rect2) -> bool:
+	for id in layout.nearby_ids(rect.position.y-2.5,rect.end.y+1.5):
+		var grip: Dictionary = layout.anchors[id]
+		if grip.get("hidden",false): continue
+		var p: Vector2 = grip["pos"]
+		var size: Vector2 = grip.get("dimensions",Vector2(1.6,.65))
+		if Rect2(p.x-size.x*.65,p.y-size.y*.5-1.1,size.x*1.3,size.y+1.3).intersects(rect): return true
+	return false
+
+func _decor_front(rect: Rect2) -> float:
+	if _seen_rock()==null: return _front_over(rect)
+	var cell := .42 if quality=="high" else .6 if quality=="balanced" else 1.0
+	var front := _front_over(rect.grow(cell*1.25))
+	# And in front of a loose stone or sand heap across it, where the face
+	# rolls back at the outline behind the heap.
+	for band in range(int(floor(rect.position.y/BAND))-1,int(floor(rect.end.y/BAND))+1):
+		if not lump_bands.has(band): lump_bands[band] = _seen_rock().lumps(band*BAND,(band+1)*BAND)
+		for lump: Array in lump_bands[band]:
+			var center: Vector3 = lump[0]
+			var half: Vector3 = lump[1]
+			if Rect2(center.x-half.x,center.y-half.y,half.x*2.0,half.y*2.0).intersects(rect): front = maxf(front,center.z+half.z)
+	return front
+
 func _plant_desert(index: int, parent: Node3D, name: String, entry: Array, seat: Vector2, rect: Rect2, scale: float, lift: float, clump: String = "") -> void:
 	var holder := Node3D.new()
 	holder.name = name
 	parent.add_child(holder)
 	# In front of all the stone the piece covers; pieces of one group a hair
 	# apart, so none flickers through the next.
-	holder.position = Vector3(seat.x,seat.y,_front_over(rect)+.05+lift)
+	holder.position = Vector3(seat.x,seat.y,_decor_front(rect)+.05+lift)
 	FloraModels.plant(holder,entry,quality!="battery",scale)
 	_take(index,rect,clump)
 
@@ -935,7 +967,7 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 				point = _top_seat(point+Vector2(0,.2),size.x*.6,size.x,.6,.3)
 				if not point.is_finite(): continue
 		var rect := Rect2(point.x-size.x*.5,point.y,size.x,size.y)
-		if _taken(index,rect.grow(gap)) or (seated and not on_lens and not _decor_fits(rect,false)): continue
+		if _taken(index,rect.grow(gap)) or (seated and not on_lens and not _decor_fits(rect,false)) or _under_grip(rect): continue
 		# On the snow peak the ice comes later and needs its room too; in the
 		# desert the groups stand first and keep theirs.
 		if (layout as MaskLayout).rock_form in ["winter","desert"] and _would_crowd(index,rect.get_center()): continue
@@ -943,7 +975,7 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 		holder.name = "Растение_%d" % placed
 		parent.add_child(holder)
 		# In front of all the stone the piece covers, never inside it.
-		holder.position = Vector3(point.x,point.y,(_front_over(rect) if seated else spot.z)+.05)
+		holder.position = Vector3(point.x,point.y,(_decor_front(rect) if seated else spot.z)+.05)
 		FloraModels.plant(holder,entry,quality!="battery",scale)
 		_take(index,rect)
 		placed += 1
@@ -966,9 +998,9 @@ func _build_ledge_plants(index: int, parent: Node3D) -> void:
 		if seated:
 			point = _hang_seat(point,size)
 			if not point.is_finite(): continue
-			spot.z = _front_over(Rect2(point.x-.2,point.y,.4,.3))
+			spot.z = _decor_front(Rect2(point.x-.2,point.y,.4,.3))
 		var rect := Rect2(point.x-size.x*.5,point.y-size.y,size.x,size.y)
-		if _taken(index,rect.grow(gap*.5 if cold and seated else .04)) or (cold and seated and (_would_crowd(index,rect.get_center()) or not _decor_fits(rect,true))): continue
+		if _taken(index,rect.grow(gap*.5 if cold and seated else .04)) or (cold and seated and (_would_crowd(index,rect.get_center()) or not _decor_fits(rect,true))) or _under_grip(rect): continue
 		var holder := Node3D.new()
 		holder.name = "Подвес_%d_0" % hanging
 		parent.add_child(holder)
@@ -1010,11 +1042,11 @@ func _build_crystals(index: int, parent: Node3D) -> void:
 			point = _top_seat(point+Vector2(0,.2),.5,.9,.6,.35)
 			if not point.is_finite() or _kin_near(index,"crystal",point): continue
 		var rect := Rect2(point.x-size.x*.5,point.y,size.x,size.y)
-		if _taken(index,rect.grow(gap)) or (seated and not _decor_fits(rect,false)): continue
+		if _taken(index,rect.grow(gap)) or (seated and not _decor_fits(rect,false)) or _under_grip(rect): continue
 		var holder := Node3D.new()
 		holder.name = "Кристалл_%d" % grown
 		parent.add_child(holder)
-		holder.position = Vector3(point.x,point.y,(_front_over(rect) if seated else spot.z)+.05)
+		holder.position = Vector3(point.x,point.y,(_decor_front(rect) if seated else spot.z)+.05)
 		FloraModels.plant(holder,entry,quality!="battery",1.3)
 		_take(index,rect)
 		if seated: _take_kin(index,"crystal",point)
@@ -1049,7 +1081,7 @@ func _shelf_icicles(index: int, parent: Node3D, random: RandomNumberGenerator) -
 			var holder := Node3D.new()
 			holder.name = "Подвес_полки_%d" % placed
 			parent.add_child(holder)
-			holder.position = Vector3(root.x,root.y,_front_over(Rect2(root.x-.3,root.y,.6,.35))+.05)
+			holder.position = Vector3(root.x,root.y,_decor_front(Rect2(root.x-.3,root.y,.6,.35))+.05)
 			FloraModels.plant(holder,entry,quality!="battery",scale)
 			_take(index,rect)
 			placed += 1
@@ -1122,7 +1154,7 @@ func _summer_tufts(index: int, surface: SurfaceTool) -> int:
 				var height := random.randf_range(.3,.52)*(1.1 if joint else .9)
 				# In front of the stone its blades cover: in a joint they rise over
 				# the foot of the boulder above, which stands further forward.
-				var front := maxf(hit.position.z,_front_over(Rect2(at.x-.3,at.y,.6,height)))
+				var front := maxf(hit.position.z,_decor_front(Rect2(at.x-.3,at.y,.6,height)))
 				emitted += RockMassBuilder.emit_tuft(surface,Vector3(at.x,at.y,front+.04),height,random.randf_range(.45,.75),MOSS_TOP.lightened(.12),MOSS_DARK,random.randi_range(0,9999))
 				placed += 1
 	return emitted
@@ -1777,7 +1809,7 @@ func _decor_fits(rect: Rect2, hanging: bool, climbing: bool = false) -> bool:
 			if open_at(Vector2(rect.get_center().x,rect.position.y+rect.size.y*share)): return false
 	for share in [.1,.5,.9]:
 		if _decor_blocked(Vector2(rect.get_center().x,rect.position.y+rect.size.y*share),rect.size.x*.5): return false
-	return true
+	return not _under_grip(rect)
 
 # Loose stones and sand heaps of the face (RockSurface.lumps) per band.
 var lump_bands: Dictionary = {}
@@ -1973,7 +2005,7 @@ func _landmark_spot(at: Vector2, family: String, reach: float, clear: Callable, 
 func _stand_landmark(index: int, holder: Node3D, family: String, seat: Vector2, random: RandomNumberGenerator) -> void:
 	var rect := _landmark_rect(seat,family)
 	var rooted: bool = family in LandmarkVisuals.TREES
-	holder.position = Vector3(seat.x,seat.y-(.28 if rooted else 0.0),_front_over(rect.grow_individual(0,0,0,-.5) if rooted else rect)+.05)
+	holder.position = Vector3(seat.x,seat.y-(.28 if rooted else 0.0),_decor_front(rect.grow_individual(0,0,0,-.5) if rooted else rect)+.05)
 	LandmarkVisuals.build_family(self,family,holder,random,quality!="battery")
 	_take(index,rect.grow(.8))
 
@@ -2118,7 +2150,7 @@ func _build_decor(index: int, parent: Node3D) -> void:
 		# In front of every stone the piece covers, never inside one. A vine
 		# stays behind the stone at its foot.
 		var covered := rect.grow_individual(0,0,0,-.35) if seated and climbs else rect
-		holder.position = Vector3(anchor.x,anchor.y,maxf(hit.position.z,_front_over(covered))+.03)
+		holder.position = Vector3(anchor.x,anchor.y,maxf(hit.position.z,_decor_front(covered))+.03)
 		if not prop.is_empty(): ActProps.build(self,prop,holder,random,profile,detail)
 		else: FloraModels.plant(holder,entry,quality!="battery",scale)
 		_take(index,rect)
@@ -2303,7 +2335,8 @@ func _landmark_clear(point: Vector2, height: float) -> bool:
 	for step in range(4):
 		var probe := point+Vector2(0,height*step/3.0)
 		if _decor_blocked(probe,1.0) or not _decor_route_clear(probe,3.0): return false
-	return true
+	# Pieces stand beside a set piece up to a metre and more off its seat.
+	return not _under_grip(Rect2(point.x-2.0,point.y-.3,4.0,height+.3))
 
 # An act landmark marks a place on the route, so it may stand nearer to it
 # than an island set piece, still clear of every gameplay object.

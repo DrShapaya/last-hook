@@ -353,3 +353,117 @@ class DiscardGhost extends Control:
 		var drop := Vector2(10*t,-14*sin(t*PI*.6)+60*t*t)
 		modulate.a = 1-t
 		LootIcon.draw(self,item,drop,40*(1-.3*t),0,t*1.4)
+
+# --- Weather chip and cold gauge ------------------------------------------------
+# The chip stands at the right under the rope gauge: the weather's icon inside
+# a ring (the wait for the next gust, then the gust running out) and the
+# direction of the coming gust underneath.
+
+const COLD_ICE := Color("8fd3ff")
+const COLD_FROST := Color("e6f6ff")
+
+class WeatherChip extends Control:
+	# Redrawn on a change of what it shows; every frame only while it blinks.
+	var kind := "":
+		set(value):
+			if value!=kind: queue_redraw()
+			kind = value
+	var direction := 1.0:
+		set(value):
+			if value!=direction: queue_redraw()
+			direction = value
+	var phase_name := "calm":
+		set(value):
+			if value!=phase_name: queue_redraw()
+			phase_name = value
+	var ring := 0.0:
+		set(value):
+			if value!=ring: queue_redraw()
+			ring = value
+	var blink := false:
+		set(value):
+			if value!=blink: queue_redraw()
+			blink = value
+	var time := 0.0
+
+	func _process(delta: float) -> void:
+		time += delta
+		if blink and visible: queue_redraw()
+
+	func tone() -> Color:
+		match kind:
+			"sand_storm": return Color("e8b765")
+			"blizzard": return COLD_FROST
+		return Color("bfe3ee")
+
+	func _draw() -> void:
+		var pulse := .72+.28*sin(time*9.0) if blink else 1.0
+		PlayGauges.slab(self,Rect2(Vector2.ZERO,size),Color("24323deb"),SLATE_LIP,4,8)
+		var centre := Vector2(size.x*.5,size.x*.5+2)
+		var radius := size.x*.5-6
+		draw_arc(centre,radius,0,TAU,32,Color(SLATE_LIP,.9),4,true)
+		var color := WARN if phase_name!="calm" else HOLD
+		if ring>0.0: draw_arc(centre,radius,-PI*.5,-PI*.5+TAU*clampf(ring,0,1),32,Color(color,pulse),4,true)
+		draw_icon(centre,radius-6.0)
+		# The gust's side: a chevron arrow, brighter once the gust is near.
+		var arrow := Vector2(size.x*.5,size.y-14)
+		var lit := Color(STONE,pulse) if phase_name!="calm" else Color(STONE,.6)
+		var side := 1.0 if direction>=0 else -1.0
+		draw_line(arrow+Vector2(-9*side,0),arrow+Vector2(8*side,0),lit,2.4,true)
+		draw_polyline(PackedVector2Array([arrow+Vector2(3*side,-5),arrow+Vector2(9*side,0),arrow+Vector2(3*side,5)]),lit,2.4,true)
+
+	func draw_icon(c: Vector2, r: float) -> void:
+		var ink := tone()
+		match kind:
+			"blizzard":
+				for index in range(3):
+					var a := PI*index/3.0+.3
+					var d := Vector2(cos(a),sin(a))*r
+					draw_line(c-d,c+d,ink,2,true)
+				draw_circle(c,2.0,ink)
+			"sand_storm":
+				for row in range(3):
+					var y := c.y+(row-1)*r*.62
+					var pts := PackedVector2Array()
+					for step in range(9):
+						var x := c.x-r+2.0*r*step/8.0
+						pts.append(Vector2(x,y+sin(step*1.3+row)*1.6))
+					draw_polyline(pts,ink if row!=1 else Color(ink,.65),2,true)
+				draw_circle(c+Vector2(r*.5,-r*.9),1.6,ink)
+			_:
+				for row in range(3):
+					var y := c.y+(row-1)*r*.6
+					var length := r*(1.0 if row!=1 else .7)
+					draw_line(Vector2(c.x-r,y),Vector2(c.x-r+length*1.6,y),ink,2,true)
+					draw_arc(Vector2(c.x-r+length*1.6,y-3.5),3.5,PI*.5,PI*2.1,8,ink,2,true)
+
+# A thermometer: the tube fills from the bulb as the hero freezes.
+class ColdGauge extends Control:
+	# Redrawn only when shown and the value moved over 0.005 since the last draw.
+	var value := 0.0:
+		set(next):
+			value = next
+			if is_visible_in_tree() and absf(next-_drawn)>.005: queue_redraw()
+	var _drawn := -1.0
+
+	func _notification(what: int) -> void:
+		if what==NOTIFICATION_VISIBILITY_CHANGED and is_visible_in_tree() and absf(value-_drawn)>.0001: queue_redraw()
+
+	func _draw() -> void:
+		_drawn = value
+		PlayGauges.slab(self,Rect2(Vector2.ZERO,size),Color("24323deb"),SLATE_LIP,4,8)
+		var centre := size.x*.5
+		var top := 9.0
+		var bulb := Vector2(centre,size.y-14)
+		var bottom := bulb.y-6
+		draw_rect(Rect2(centre-4,top,8,bottom-top),Color(SLATE_LIP,.9))
+		draw_circle(bulb,7.5,Color(SLATE_LIP,.9),true,-1.0,true)
+		var level := clampf(value,0,1)
+		var tone := COLD_ICE.lerp(COLD_FROST,level)
+		var fill_top := lerpf(bottom,top,level)
+		draw_rect(Rect2(centre-2.6,fill_top,5.2,bottom-fill_top),tone)
+		draw_circle(bulb,5.2,tone,true,-1.0,true)
+		for index in range(1,4):
+			var y := lerpf(bottom,top,index*.25)
+			draw_line(Vector2(centre+6,y),Vector2(centre+10,y),Color(STONE,.55),1.4)
+		if level>.75: draw_rect(Rect2(centre-4,top-3,8,2),WARN)

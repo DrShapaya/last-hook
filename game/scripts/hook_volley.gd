@@ -5,11 +5,11 @@ extends RefCounted
 # to the climb controller; events are ordered by time, never by array index.
 var shots: Array[Dictionary] = []
 
-func launch(origin: Vector2, directions: Array[Vector2], speed: float, velocity: Vector2) -> void:
+func launch(origin: Vector2, directions: Array[Vector2], speed: float, velocity: Vector2, wind: Vector2 = Vector2.ZERO) -> void:
 	shots.clear()
 	for direction in directions:
 		var flight := HookFlight.new()
-		flight.launch(origin,direction,speed,velocity)
+		flight.launch(origin,direction,speed,velocity,wind)
 		shots.append({"flight":flight,"state":"flying","return_velocity":Vector2.ZERO,"anchor_id":-1})
 
 func has_state(state: String) -> bool:
@@ -69,7 +69,7 @@ func snapshot() -> Array:
 		var flight: HookFlight = shot["flight"]
 		var returning: Vector2 = shot["return_velocity"]
 		result.append({"x":flight.position.x,"y":flight.position.y,"vx":flight.velocity.x,"vy":flight.velocity.y,
-			"age":flight.age,"state":shot["state"],"anchor_id":shot["anchor_id"],"rx":returning.x,"ry":returning.y})
+			"age":flight.age,"wx":flight.wind.x,"wy":flight.wind.y,"state":shot["state"],"anchor_id":shot["anchor_id"],"rx":returning.x,"ry":returning.y})
 	return result
 
 func restore(data: Array) -> void:
@@ -79,6 +79,7 @@ func restore(data: Array) -> void:
 		flight.position = Vector2(item["x"],item["y"])
 		flight.velocity = Vector2(item["vx"],item["vy"])
 		flight.age = float(item["age"])
+		flight.wind = Vector2(float(item.get("wx",0.0)),float(item.get("wy",0.0)))
 		flight.trail = PackedVector2Array([flight.position])
 		shots.append({"flight":flight,"state":str(item["state"]),"anchor_id":int(item["anchor_id"]),
 			"return_velocity":Vector2(item["rx"],item["ry"])})

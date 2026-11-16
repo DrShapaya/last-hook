@@ -19,7 +19,9 @@ const PATTERNS := {
 	"knock":[[0,70,1.0]],
 	"fail":[[0,90,1.0],[150,60,.5],[260,40,.25]],
 	"win":[[0,40,.5],[110,40,.65],[220,110,1.0]],
-	"revive":[[0,30,.4],[90,50,.7]]}
+	"revive":[[0,30,.4],[90,50,.7]],
+	"weather_warn":[[0,25,.3]],
+	"weather_hit":[[0,45,.55]]}
 # A new pulse would cut the running one short, so the light events wait.
 const MIN_GAP := .06
 const HEAVY := ["spring","knock","fail","win","revive"]

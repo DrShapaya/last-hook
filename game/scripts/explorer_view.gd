@@ -44,6 +44,8 @@ var rope_twin_secondary: MeshInstance3D
 var shadow_shift := NAN
 var visual_quality := "balanced"
 var effects_quality := "full"
+# Weather at the hero: the wind bows the rope's straight runs (visual only).
+var wind_bow := 0.0
 # The 3D hero (HeroModel, docs/CHARACTER_3D_PLAN.md) is the hero since the
 # owner accepted it on 2026-11-07; --hero2d brings back the painted one.
 static var use_3d_hero := not "--hero2d" in OS.get_cmdline_user_args()
@@ -327,14 +329,14 @@ func draw(sim: RopeSim, target: Vector2, tether: bool, flying_bolt: bool, time: 
 				# game scale and lets the line visibly rest against the stone.
 				var approach := corner-incoming*.035
 				var depart := corner+outgoing*.035
-				points.append_array(rope_points(previous,approach,slack))
+				points.append_array(bowed(rope_points(previous,approach,slack),wind_bow))
 				points.append_array(rope_corner_points(approach,corner,depart))
 				slack = 0
 				previous = depart
 		if flying_bolt:
 			points.append_array(flight_rope_points(previous,rope_end,float(flight.get("age",0)),bool(flight.get("returning",false))))
 		else:
-			points.append_array(rope_points(previous,rope_end,slack))
+			points.append_array(bowed(rope_points(previous,rope_end,slack),wind_bow))
 			# The catch sends a small wave toward the hand, then settles.
 			var catch_age := time-catch_time
 			if catch_age<.35 and sim.rope_pivots.is_empty():
@@ -353,6 +355,20 @@ func draw(sim: RopeSim, target: Vector2, tether: bool, flying_bolt: bool, time: 
 	was_attached = sim.attached
 	contact_glow.scale = Vector3.ONE*(.75+.30*exp(-maxf(0,time-catch_time)*9))
 	_draw_effects(flight,flying_bolt,time)
+
+# WeatherBands.presence at the hero: signed wind (direction*amount).
+func set_weather(presence: Dictionary) -> void:
+	var kind := str(presence.get("kind",""))
+	wind_bow = float(presence.get("direction",1.0))*clampf(float(presence.get("amount",0.0)),0.0,1.0) if kind!="" else 0.0
+
+# A straight run pushed downwind: its middle moves 0.08 of its length times
+# the wind, the ends stay put.
+static func bowed(points: PackedVector3Array, wind: float) -> PackedVector3Array:
+	if absf(wind)<.001 or points.size()<3: return points
+	var push := .08*points[0].distance_to(points[points.size()-1])*wind
+	for index in range(1,points.size()-1):
+		points[index].x += push*sin(PI*float(index)/(points.size()-1))
+	return points
 
 func _draw_volley(sim: RopeSim, time: float, warning: bool, volley: Array) -> void:
 	# Each line has its own head and rope. An attached shot remains on the

@@ -65,8 +65,9 @@ func traverse(game, route: Array) -> int:
 				var sight: Dictionary = game.world.cast_hook(game.sim.pos,target,game.model.hook_radius(),ignored)
 				var toward: Vector2 = (target-game.sim.pos).normalized()
 				var timed_exit: bool = int(current.get("kind",0))==1 or GripSpec.plate(current)
-				# A careful player waits out a storm on the grip it holds.
-				var calm: bool = game.world.hazards.calm_for(game.sim.pos,game.hazard_clock,1.6) and game.world.hazards.calm_for(target,game.hazard_clock,1.6)
+				# A careful player waits out a storm and a gust on the grip it
+				# holds (never on a timed one, see RouteBot.waits_out_weather).
+				var calm: bool = game.world.hazards.calm_for(game.sim.pos,game.hazard_clock,1.6) and game.world.hazards.calm_for(target,game.hazard_clock,1.6) and not RouteBot.waits_out_weather(game,target)
 				if calm and int(sight.get("object",{}).get("id",-1))==target_id and game.sim.pos.distance_to(target)<5.2 and game.shot_window_open(target) and (game.sim.vel.dot(toward)>.5 or timed_exit):
 					game.release_hook()
 					game.fire_hook(game.direction_to_target(target))
@@ -122,6 +123,62 @@ func hold_at(game, grip: Dictionary) -> void:
 	game.hazard_clock = 0.0
 	game.camera_y = grip["pos"].y+2.5
 	game.state = "play"
+
+# The route bot waits out a gust on a permanent grip, never on a timed one,
+# and its reach check carries the wind of the throw.
+func test_bot_weather(game) -> void:
+	game.selected_location = 0
+	game.start_run(false)
+	var total := float(LevelCatalog.level(0)["height_units"])
+	game._create_world(58273,0,total+6)
+	var weather: WeatherBands = game.world.weather
+	var band: Dictionary = weather.bands_of_cycle(0)[1]
+	var middle := (float(band["bottom"])+float(band["top"]))*.5
+	var stone: Dictionary = {}
+	var timed: Dictionary = {}
+	for grip in game.world.anchors:
+		var inside: bool = float(grip["pos"].y)>float(band["bottom"])+1.0 and float(grip["pos"].y)<float(band["top"])-4.0
+		if not inside: continue
+		if stone.is_empty() and grip.get("permanent",false) and GripSpec.kind_of(grip)==GripSpec.STONE: stone = grip
+		if timed.is_empty() and not grip.get("permanent",true): timed = grip
+	var cycle := float(band["calm"])+float(band["telegraph"])+float(band["active"])
+	var base := cycle*2.0-float(band["phase_shift"])
+	var gust := base+float(band["calm"])+float(band["telegraph"])+float(band["active"])*.5
+	var calm := base+.5
+	check(not stone.is_empty() and not timed.is_empty(),"L0 act 2 band has a stone grip and a timed grip")
+	if stone.is_empty() or timed.is_empty(): return
+	var above: Vector2 = stone["pos"]+Vector2(1.5,3.0)
+	hold_at(game,stone)
+	game.hazard_clock = gust
+	var waits_gust := RouteBot.waits_out_weather(game,above)
+	game.hazard_clock = calm
+	var waits_calm := RouteBot.waits_out_weather(game,above)
+	game.hazard_clock = base+float(band["calm"])-1.0
+	var waits_short := RouteBot.waits_out_weather(game,above)
+	hold_at(game,timed)
+	game.hazard_clock = gust
+	var waits_timed := RouteBot.waits_out_weather(game,timed["pos"]+Vector2(1.5,3.0))
+	check(waits_gust and not waits_calm and waits_short and not waits_timed,"the bot waits on a stone grip through a gust and a calm ending within 2 s, throws in a long calm and never waits on a timed grip (%s %s %s %s)" % [waits_gust,waits_calm,waits_short,waits_timed])
+	# Reach with the wind: the farthest still-in-reach goal against the gust
+	# without weather falls out of reach once the gust blows it away.
+	var side := weather.direction(band,int(weather.phase(band,gust)["gust"]))
+	game.sim = RopeSim.new()
+	game._configure_rope()
+	game.sim.pos = Vector2(0,middle)
+	game.sim.vel = Vector2.ZERO
+	game.sim.attach(game.sim.pos+Vector2(0,2.0),game.model.shot_range())
+	game.hazard_clock = gust
+	var kept: WeatherBands = game.world.weather
+	game.world.weather = null
+	var edge := 0.0
+	for step in range(400):
+		var distance := 2.0+step*.02
+		if RouteBot.stays_in_reach(game,game.sim.pos+Vector2(-side*distance,1.0)): edge = distance
+	game.world.weather = kept
+	var windy := RouteBot.stays_in_reach(game,game.sim.pos+Vector2(-side*edge,1.0))
+	var downwind := RouteBot.stays_in_reach(game,game.sim.pos+Vector2(side*edge,1.0))
+	check(edge>2.0 and not windy and downwind,"the reach check moves the hero with the gust (edge %.2f m, against %s, along %s)" % [edge,windy,downwind])
+	game.model.profile["active"] = {}
 
 func run_tests() -> void:
 	var directory := OS.get_environment("LASTHOOK_SAVE_DIR")
@@ -319,14 +376,15 @@ func run_tests() -> void:
 	var storm: Dictionary = {}
 	for hazard in storm_world.layout.hazards:
 		if hazard["def"]=="storm_cycle": storm = hazard
-	var directions := {}
+	var pushed := false
 	var phases := {}
 	for step in range(200):
 		var time := step*.1
 		var effect: Dictionary = storm_world.hazards.step(time,(storm["rect"] as Rect2).get_center(),false)
 		phases[storm_world.hazards.phase(storm,time)["name"]] = true
-		if (effect["force"] as Vector2).length()>.01: directions[signf(effect["force"].x)] = true
-	check(phases.has("calm") and phases.has("telegraph") and phases.has("active") and directions.size()==1,"a storm cycles calm, telegraph and storm, and never turns after it starts")
+		if (effect["force"] as Vector2).length()>.01: pushed = true
+	# Old field pockets are inert now (weather is WeatherBands, see test_weather.gd).
+	check(phases.has("calm") and phases.has("telegraph") and phases.has("active") and not pushed,"a storm_cycle field still cycles its phases but never pushes")
 	check(HazardVisuals.HAZE_CLEAR>rope+1.0,"storm haze never veils a grip within the base rope")
 	storm_world.free()
 	# --- Real runs: menu, hazards, bot traversal ------------------------------------------
@@ -428,6 +486,7 @@ func run_tests() -> void:
 	game.save_snapshot()
 	check(game.state=="play" and normal!=null and absf(float(game.model.profile["active"].get("hazard_clock",-1.0))-float(normal))<.0001,"the hazard clock is saved with the attempt")
 	game.model.profile["active"] = {}
+	test_bot_weather(game)
 	# The base kit climbs the whole main line of every expedition, hazards on.
 	for location in range(3):
 		for seed_number in [58273,4242]:

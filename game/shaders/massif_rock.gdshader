@@ -51,6 +51,10 @@ global uniform float light_quality;
 
 varying vec3 rock_position;
 varying vec3 rock_normal;
+// Ultra: shade of the clouds drifting between the sun and the mountain, 1 in
+// full sun. Worked out per pixel, used on the sun's light only.
+varying float cloud_light;
+uniform float cloud_shade : hint_range(0.0,1.0) = 0.5;
 
 float hash31(vec3 p) {
 	p=fract(p*0.1031);
@@ -149,6 +153,12 @@ void fragment() {
 	float rim=1.0-COLOR.a;
 	float limb=1.0-smoothstep(0.1,0.85,clamp(NORMAL.z,0.0,1.0));
 	ALBEDO*=(1.0-rim_shade*rim*rim*shade_side)*(1.0-limb_shade*limb*shade_side);
+	cloud_light=1.0;
+	if(light_quality>0.5 && cloud_shade>0.0){
+		vec2 drift=p.xy*vec2(0.11,0.15)+vec2(TIME*0.035,TIME*0.008);
+		float cloud=noise3(vec3(drift,3.7))*0.65+noise3(vec3(drift*2.3,9.1))*0.35;
+		cloud_light=1.0-smoothstep(0.42,0.6,cloud)*cloud_shade;
+	}
 	ROUGHNESS=roughness_value;
 	// Dark stone (the inside of a cave, deep cracks) takes no sheen: on
 	// ultra it turned the black of the caves grey.
@@ -184,9 +194,9 @@ void fragment() {
 void light() {
 	float wrapped = mix(shade_floor,1.0,clamp((dot(NORMAL,LIGHT)+1.0)/2.0,0.0,1.0));
 	float direct = clamp((dot(NORMAL,LIGHT)+0.3)/1.3,0.0,1.0);
-	DIFFUSE_LIGHT += LIGHT_COLOR*ATTENUATION*mix(wrapped,direct,light_quality)/PI;
+	DIFFUSE_LIGHT += LIGHT_COLOR*ATTENUATION*cloud_light*mix(wrapped,direct,light_quality)/PI;
 	if(light_quality>0.5){
 		float gloss = mix(48.0,6.0,ROUGHNESS);
-		SPECULAR_LIGHT += LIGHT_COLOR*ATTENUATION*pow(clamp(dot(NORMAL,normalize(LIGHT+VIEW)),0.0,1.0),gloss)*(1.0-ROUGHNESS*0.8)*0.3;
+		SPECULAR_LIGHT += LIGHT_COLOR*ATTENUATION*cloud_light*pow(clamp(dot(NORMAL,normalize(LIGHT+VIEW)),0.0,1.0),gloss)*(1.0-ROUGHNESS*0.8)*0.3;
 	}
 }

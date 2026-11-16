@@ -30,8 +30,12 @@ const PRESETS := {
 # What the ultra light adds on top of the shader. Phones keep the shader and
 # the plain render path: the first ultra build broke the frame on a real
 # device (jagged silhouettes, the sky showing through facets).
+# Ultra smooths edges by drawing the 3D frame 1.25 times larger and scaling
+# it down (FXAA does not exist under Compatibility; 4x MSAA broke the frame
+# on a real phone). Not yet checked on a phone: set "supersample" to 1.0
+# here if it is too slow or blurs there.
 static func ultra_passes(mobile: bool) -> Dictionary:
-	return {"msaa_4x":not mobile,"shadow_atlas":4096 if mobile else 8192}
+	return {"msaa_4x":not mobile,"supersample":1.25,"shadow_atlas":4096 if mobile else 8192}
 
 static func defaults() -> Dictionary:
 	var values: Dictionary = PRESETS["high"].duplicate()

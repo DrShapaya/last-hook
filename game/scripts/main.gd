@@ -24,7 +24,11 @@ var camera: Camera3D
 var scene_environment: Environment
 var shadow_atlas_size := 0
 var sun_light: DirectionalLight3D
+# Ultra: soft rays of the sun over the frame (see _sun_shafts).
+var sun_shafts: MeshInstance3D
 var hud: GameHud
+# Full-screen weather right under the HUD (WeatherOverlay).
+var weather_overlay: WeatherOverlay
 var state := "menu"
 var run_mode := "summit"
 # The summit scene (docs/LEVEL_OBJECTS_PLAN.md, stage 5): seconds left before
@@ -171,6 +175,17 @@ var current_act := -1
 # motion slows storms and icicles together with the hero. run_seconds stays
 # real time for the result screen.
 var hazard_clock := 0.0
+# Weather kinds already announced in this run.
+var weather_seen := {}
+var weather_phase := ""
+# Plants and rope follow an eased weather drive (0..1) on the gust's side.
+var weather_drive := 0.0
+var weather_side := 1.0
+var weather_drive_kind := ""
+var cold := ColdMeter.new()
+var base_swing_force := 0.0
+var base_reel_in := 0.0
+var base_reel_out := 0.0
 # The grip the hero left last: a branch pocket keeps drifting it in flight.
 var last_anchor_id := -1
 # Chat 4: the active items carried this run ({"id","used"}), the running effect
@@ -210,6 +225,8 @@ func _ready() -> void:
 	camera.near = .1
 	camera.far = 120
 	add_child(camera)
+	# The lighting was applied before the camera existed.
+	_sun_shafts(str(_settings()["lighting"])=="ultra")
 	camera.current = true
 	_setup_audio_buses()
 	sounds = SoundBank.new()
@@ -225,6 +242,9 @@ func _ready() -> void:
 	add_child(hud)
 	_apply_accessibility()
 	hud.setup(self)
+	weather_overlay = WeatherOverlay.new()
+	weather_overlay.layer = hud.layer-1
+	add_child(weather_overlay)
 	if model.save_blocked:
 		toast(model.save_error,6.0,"save")
 	_create_world(58273,0,36,0,true)
@@ -588,6 +608,31 @@ func _apply_lighting(lighting: String) -> void:
 	scene_environment.adjustment_saturation = 1.12
 	var msaa := Viewport.MSAA_4X if ultra and passes["msaa_4x"] else ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d") as Viewport.MSAA
 	if get_viewport().msaa_3d!=msaa: get_viewport().msaa_3d = msaa
+	_sun_shafts(ultra)
+
+const SHAFTS_SHADER := "shader_type spatial; render_mode unshaded, cull_disabled, shadows_disabled, depth_draw_never, depth_test_disabled, blend_add; uniform float strength = .13; void fragment(){ vec2 dir = normalize(vec2(.5,.86)); float across = dot(UV,vec2(dir.y,-dir.x)); float along = clamp(dot(UV,dir),0.0,1.0); float wave = sin(across*5.3+TIME*.05)*1.7; float rays = pow(.5+.5*sin(across*17.0+wave+TIME*.06),6.0)*.65+pow(.5+.5*sin(across*31.0+1.3-TIME*.045),9.0)*.35; float fade = (1.0-along*.8)*smoothstep(-.2,.25,across)*smoothstep(1.1,.6,across); ALBEDO = vec3(1.0,.92,.74); ALPHA = rays*fade*strength; }"
+
+# Ultra: soft, slowly swaying rays of the sun falling from the upper left over
+# the whole frame. One additive quad on the camera: a single full-screen pass
+# of a few sines, nothing on the other presets.
+func _sun_shafts(enabled: bool) -> void:
+	if not enabled:
+		if is_instance_valid(sun_shafts): sun_shafts.visible = false
+		return
+	if not is_instance_valid(camera): return
+	if not is_instance_valid(sun_shafts):
+		var quad := QuadMesh.new()
+		quad.size = Vector2(90,90)
+		var material := ShaderMaterial.new()
+		material.shader = ShaderBank.of(SHAFTS_SHADER)
+		sun_shafts = MeshInstance3D.new()
+		sun_shafts.name = "Солнечные лучи"
+		sun_shafts.mesh = quad
+		sun_shafts.material_override = material
+		sun_shafts.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		sun_shafts.position = Vector3(0,0,-4)
+		camera.add_child(sun_shafts)
+	sun_shafts.visible = true
 
 func _settings() -> Dictionary:
 	return model.profile["settings"]
@@ -615,7 +660,10 @@ func _apply_graphics() -> void:
 	_apply_lighting(str(settings["lighting"]))
 	# Glow is a chain of full-screen blur passes.
 	if scene_environment!=null: scene_environment.glow_enabled = bool(settings["glow"])
-	if not is_equal_approx(get_viewport().scaling_3d_scale,float(settings["render_scale"])): get_viewport().scaling_3d_scale = float(settings["render_scale"])
+	# Ultra draws the 3D frame larger and scales it down: smoother edges.
+	var render_scale := float(settings["render_scale"])
+	if str(settings["lighting"])=="ultra": render_scale = maxf(render_scale,float(GameSettings.ultra_passes(OS.has_feature("mobile"))["supersample"]))
+	if not is_equal_approx(get_viewport().scaling_3d_scale,render_scale): get_viewport().scaling_3d_scale = render_scale
 	if is_instance_valid(world): _world_graphics(world)
 	if is_instance_valid(explorer): _explorer_graphics()
 
@@ -635,11 +683,19 @@ func _world_graphics(target: MountainWorld) -> void:
 	var settings := _settings()
 	target.set_sky_quality(str(settings["sky"]))
 	target.set_effects_quality(str(settings["particles"]))
+	target.set_reduce_effects(bool(settings.get("reduce_effects",false)))
 	target.set_visual_quality(str(settings["decor"]))
 
 func _explorer_graphics() -> void:
 	explorer.set_visual_quality("battery" if str(_settings()["shadows"])=="off" else "high")
 	explorer.effects_quality = str(_settings()["particles"])
+	# Ultra: a warm rim of sunlight round the hero's silhouette on the sun's
+	# side (the shader's own rim, which the character screen also uses), so
+	# he stands out of the rock. Off on the other presets.
+	var hero := explorer.body as HeroModel
+	if hero!=null and hero.shader_material!=null:
+		hero.shader_material.set_shader_parameter("rim_color",Color(.78,.66,.46) if str(_settings()["lighting"])=="ultra" else Color(0,0,0))
+		hero.shader_material.set_shader_parameter("rim_power",2.4)
 
 func set_graphics_preset(preset: String) -> void:
 	_apply_graphics_quality(preset)
@@ -819,6 +875,9 @@ func _warm_prepared_world() -> void:
 		prepared_world.warm_begin()
 		prepared_world.visible = true
 		prepared_warm = WARM_FRAMES
+		# The weather layer and the campfire compile their shaders here too.
+		weather_overlay.warm_up()
+		CampfireVisuals.warm(self)
 		return
 	if prepared_world.warm_step(WARM_BATCH): return
 	prepared_warm -= 1
@@ -892,6 +951,8 @@ func start_run(endless: bool) -> void:
 	if ads.fullscreen: return
 	summit_scene = 0.0
 	summit_pull = 0.0
+	weather_seen = {}
+	weather_phase = ""
 	if is_instance_valid(hud): hud.set_play_hidden(false)
 	ads.preload_fullscreen()
 	if endless and not model.profile["summit_cleared"]:
@@ -961,6 +1022,7 @@ func start_run(endless: bool) -> void:
 	hazard_cooldown = 0.0
 	run_seconds = 0
 	hazard_clock = 0.0
+	cold.cold = 0.0
 	shots = 0
 	catches = 0
 	failure_reason = ""
@@ -1019,6 +1081,7 @@ func resume_run() -> void:
 	run_seconds = float(snapshot.get("run_seconds",0))
 	# Saves from before the separate clock ran the hazards on run_seconds.
 	hazard_clock = float(snapshot.get("hazard_clock",run_seconds))
+	cold.cold = clampf(float(snapshot.get("cold",0)),0.0,1.0)
 	shots = int(snapshot.get("shots",0))
 	catches = int(snapshot.get("catches",0))
 	failure_reason = snapshot.get("failure_reason","")
@@ -1092,8 +1155,9 @@ func resume_run() -> void:
 	bolt_direction = Vector2(snapshot.get("bolt_dx",0),snapshot.get("bolt_dy",1))
 	bolt_travel = float(snapshot.get("bolt_travel",0))
 	hook_flight.position = bolt_pos
-	hook_flight.velocity = Vector2(snapshot.get("bolt_vx",bolt_direction.x*model.throw_speed()),snapshot.get("bolt_vy",bolt_direction.y*model.throw_speed()))
+	hook_flight.velocity = Vector2(snapshot.get("bolt_vx",bolt_direction.x*throw_speed()),snapshot.get("bolt_vy",bolt_direction.y*throw_speed()))
 	hook_flight.age = float(snapshot.get("bolt_age",0))
+	hook_flight.wind = Vector2(float(snapshot.get("bolt_wx",0.0)),float(snapshot.get("bolt_wy",0.0)))
 	hook_flight.trail = PackedVector2Array([bolt_pos])
 	bolt_returning = bool(snapshot.get("bolt_returning",false)) and not sim.attached and not bolt_active
 	return_velocity = Vector2(snapshot.get("return_vx",0),snapshot.get("return_vy",0))
@@ -1319,6 +1383,9 @@ func _configure_rope() -> void:
 	sim.reel_in_speed = model.reel_in_speed()
 	sim.reel_out_speed = model.reel_out_speed()
 	sim.swing_force = model.swing_force()
+	base_reel_in = sim.reel_in_speed
+	base_reel_out = sim.reel_out_speed
+	base_swing_force = sim.swing_force
 	sim.fall_speed_limit = float(model.balance["fall_speed_limit_units"])
 	sim.gravity = float(model.balance["gravity"])
 
@@ -1346,12 +1413,14 @@ func fire_hook(direction: Vector2) -> void:
 	bolt_direction = direction.normalized()
 	bolt_travel = 0
 	bolt_returning = false
-	hook_flight.launch(sim.pos,bolt_direction,model.throw_speed(),throw_carry_velocity())
+	# The wind at the throw is held for the whole flight, as the forecast assumes.
+	var wind := weather_wind()
+	hook_flight.launch(sim.pos,bolt_direction,throw_speed(),throw_carry_velocity(),wind)
 	hook_volley = null
 	volley_primary = 0
 	if model.hook_count()==2:
 		hook_volley = HookVolley.new()
-		hook_volley.launch(sim.pos,model.hook_directions(direction),model.throw_speed(),throw_carry_velocity())
+		hook_volley.launch(sim.pos,model.hook_directions(direction),throw_speed(),throw_carry_velocity(),wind)
 		_sync_volley()
 	shot_serial += 1
 	_sfx("launch")
@@ -1392,7 +1461,7 @@ func edge_room(direction: float) -> float:
 func walk_velocity(current: float, input: float, step: float) -> float:
 	# Platform walking: eased start, quicker turn, braking stop. Landing momentum
 	# above walking speed keeps the original, softer slide.
-	var target := input*WALK_SPEED
+	var target := input*WALK_SPEED*cold.walk_scale()
 	if input!=0:
 		if not ground_ahead(signf(input)):
 			# Safety net for steps and odd contours: never walk off a support.
@@ -1412,8 +1481,24 @@ func walk_velocity(current: float, input: float, step: float) -> float:
 func throw_carry_velocity() -> Vector2:
 	return sim.vel
 
+# Hook speed of the model, slowed by cold.
+func throw_speed() -> float:
+	return model.throw_speed()*cold.throw_scale()
+
+# The hero is within warming reach of a blizzard campfire.
+func near_campfire() -> bool:
+	if world==null or world.weather==null: return false
+	for fire in world.campfires():
+		if sim.pos.distance_to(fire)<=2.2: return true
+	return false
+
+# Sideways push of the weather band at the hero now; zero without weather.
+func weather_wind() -> Vector2:
+	if world==null or world.weather==null: return Vector2.ZERO
+	return world.weather.wind_at(sim.pos,hazard_clock)
+
 func direction_to_target(target: Vector2) -> Vector2:
-	return HookFlight.aim_solution(sim.pos,target,model.throw_speed(),throw_carry_velocity())["direction"]
+	return HookFlight.aim_solution(sim.pos,target,throw_speed(),throw_carry_velocity(),weather_wind())["direction"]
 
 func _shot_forecast_hero() -> RopeSim:
 	var forecast := RopeSim.new()
@@ -1424,9 +1509,10 @@ func _shot_forecast_hero() -> RopeSim:
 	forecast.grounded = sim.grounded
 	return forecast
 
-func _advance_forecast(forecast: RopeSim, dt: float) -> void:
+func _advance_forecast(forecast: RopeSim, dt: float, wind := Vector2.ZERO) -> void:
 	var previous := forecast.pos
 	if forecast.grounded: forecast.vel.x = move_toward(forecast.vel.x,0,dt*7)
+	else: forecast.vel += wind*dt
 	forecast.tick(dt,0,0)
 	var motion := world.move_player(previous,forecast.pos,forecast.vel)
 	forecast.pos = motion["position"]
@@ -1448,14 +1534,15 @@ func predict_shot(direction: Vector2) -> Dictionary:
 	return result
 
 func _predict_single_shot(direction: Vector2) -> Dictionary:
+	var wind := weather_wind()
 	var flight := HookFlight.new()
-	flight.launch(sim.pos,direction,model.throw_speed(),throw_carry_velocity())
+	flight.launch(sim.pos,direction,throw_speed(),throw_carry_velocity(),wind)
 	var forecast := _shot_forecast_hero()
 	var points := PackedVector2Array([sim.pos])
 	var result := {"points":points,"contact":sim.pos,"time":0.0,"collision":{},"reachable":true}
 	for index in range(240):
 		var previous := flight.position
-		_advance_forecast(forecast,HookFlight.STEP)
+		_advance_forecast(forecast,HookFlight.STEP,wind)
 		flight.advance(HookFlight.STEP)
 		var fraction := HookFlight.range_fraction(previous,flight.position,forecast.pos,model.shot_range())
 		var end := previous.lerp(flight.position,fraction)
@@ -1474,13 +1561,14 @@ func _predict_single_shot(direction: Vector2) -> Dictionary:
 	return result
 
 func shot_window_open(contact: Vector2) -> bool:
-	var solution := HookFlight.aim_solution(sim.pos,contact,model.throw_speed(),throw_carry_velocity())
+	var wind := weather_wind()
+	var solution := HookFlight.aim_solution(sim.pos,contact,throw_speed(),throw_carry_velocity(),wind)
 	var flight := HookFlight.new()
-	flight.launch(sim.pos,solution["direction"],model.throw_speed(),throw_carry_velocity())
+	flight.launch(sim.pos,solution["direction"],throw_speed(),throw_carry_velocity(),wind)
 	var forecast := _shot_forecast_hero()
 	while flight.age<float(solution["time"])-.00001:
 		var dt := minf(HookFlight.STEP,float(solution["time"])-flight.age)
-		_advance_forecast(forecast,dt)
+		_advance_forecast(forecast,dt,wind)
 		flight.advance(dt)
 		if flight.position.distance_to(forecast.pos)>model.shot_range()+.001: return false
 	return true
@@ -1658,6 +1746,14 @@ func _physics_process(delta: float) -> void:
 	hazard_clock += step
 	var hazard_effect := world.step_hazards(hazard_clock,sim.pos,sim.grounded,anchor_id if sim.attached else -1,last_anchor_id)
 	sim.vel += (hazard_effect["force"] as Vector2)*step
+	# The weather band's gust pushes the hero off a support.
+	if not sim.grounded: sim.vel += weather_wind()*step
+	# Cold of the blizzard slows swing, reel, throw and walking.
+	var weather_now := world.weather.presence(sim.pos,hazard_clock) if world.weather!=null else {"kind":""}
+	cold.step(step,weather_now,sim.grounded,near_campfire())
+	sim.swing_force = base_swing_force*cold.swing_scale()
+	sim.reel_in_speed = base_reel_in*cold.reel_scale()
+	sim.reel_out_speed = base_reel_out*cold.reel_scale()
 	if not hazard_effect["knock"].is_empty() and hazard_cooldown<=0: _hazard_knock(hazard_effect["knock"])
 	if not sim.attached and not sim.grounded: _apply_item_effect(step)
 	var was_grounded := sim.grounded
@@ -2559,14 +2655,14 @@ func save_snapshot() -> void:
 		"camera_y":camera_y,"camera_x":camera_x,"camera_dip":camera_dip,
 		"x":sim.pos.x,"y":sim.pos.y,"vx":sim.vel.x,"vy":sim.vel.y,"length":sim.length,"target_length":sim.target_length,"reel_velocity":sim.reel_velocity,
 		"highest":sim.highest,"flight_peak":sim.flight_peak,"launched":sim.launched,"grounded":sim.grounded,
-		"run_seconds":run_seconds,"hazard_clock":hazard_clock,"shots":shots,"catches":catches,"failure_reason":failure_reason,"zone_gold":zone_gold,"zone_diamonds":zone_diamonds,
+		"run_seconds":run_seconds,"hazard_clock":hazard_clock,"cold":cold.cold,"shots":shots,"catches":catches,"failure_reason":failure_reason,"zone_gold":zone_gold,"zone_diamonds":zone_diamonds,
 		"anchor_id":anchor_id,"anchor_time":anchor_time,"contact_x":anchor_contact.x,"contact_y":anchor_contact.y,"rope_pivots":pivots,
 		"safe_contact_x":safe_contact.x,"safe_contact_y":safe_contact.y,"focus_remaining":focus_remaining,"focus_active":focus_remaining>0.0,"focus_cooldown":focus_cooldown,"focus_duration":focus_duration,"safe_anchor_id":safe_anchor_id,
 		"safe_x":safe_position.x,"safe_y":safe_position.y,"revive_used":revive_used,"awaiting_revive":state=="revive","ad_revive_earned":ad_revive_pending,
 		"bag":model.bag.duplicate(true),"picked":model.picked.duplicate(),"broken":broken,"active_reserves":active_reserves,"collapsed_hazards":world.hazards.collapsed_ids(),
 		"bolt_active":bolt_active,"bolt_x":bolt_pos.x,"bolt_y":bolt_pos.y,"bolt_ox":bolt_origin.x,"bolt_oy":bolt_origin.y,
 		"bolt_dx":bolt_direction.x,"bolt_dy":bolt_direction.y,"bolt_travel":bolt_travel,
-		"bolt_vx":hook_flight.velocity.x,"bolt_vy":hook_flight.velocity.y,"bolt_age":hook_flight.age,
+		"bolt_vx":hook_flight.velocity.x,"bolt_vy":hook_flight.velocity.y,"bolt_age":hook_flight.age,"bolt_wx":hook_flight.wind.x,"bolt_wy":hook_flight.wind.y,
 		"bolt_returning":bolt_returning,"return_vx":return_velocity.x,"return_vy":return_velocity.y}
 	model.profile["active"]["hook_volley"] = hook_volley.snapshot() if hook_volley!=null else []
 	model.profile["active"]["volley_primary"] = volley_primary
@@ -2664,6 +2760,7 @@ func _process(delta: float) -> void:
 			save_snapshot()
 	_move_camera(delta)
 	_refresh_aim()
+	_update_weather(delta)
 	if is_instance_valid(world):
 		world.update_visibility(camera_y,camera_x,1)
 		if is_instance_valid(world.sky_backdrop): world.sky_backdrop.advance(animation_time,delta)
@@ -2709,6 +2806,86 @@ func _process(delta: float) -> void:
 	if not capture_path.is_empty() and elapsed>1.1 and not capture_queued:
 		capture_queued = true
 		_capture_frame()
+
+# The weather at the hero: the full-screen layer, plants and rope in the
+# wind, and the small gust shake on top of the freshly placed camera.
+func _update_weather(delta: float) -> void:
+	if weather_overlay==null: return
+	var settings := _settings()
+	var preset := str(model.profile.get("graphics_quality","high"))
+	if not GameSettings.PRESETS.has(preset): preset = str(settings["decor"])
+	weather_overlay.configure(str(settings["particles"]),preset,bool(settings.get("reduce_effects",false)))
+	var climbing := state in ["play","pause","revive"]
+	var presence := {"kind":""}
+	if climbing and is_instance_valid(world) and world.weather!=null:
+		presence = world.weather.presence(sim.pos,hazard_clock)
+		if presence["kind"]!="": presence["strength"] = world.weather.strength(world.weather.band_at(sim.pos.y,WeatherBands.EDGE),hazard_clock)
+	_weather_toast(presence)
+	_weather_feedback(presence)
+	var hero := camera.unproject_position(Vector3(sim.pos.x,sim.pos.y,3.2))
+	var metre := hero.distance_to(camera.unproject_position(Vector3(sim.pos.x,sim.pos.y+1.0,3.2)))
+	weather_overlay.update(presence,cold.cold if climbing else 0.0,hero,1.0/maxf(.001,metre),0.0 if state=="pause" else delta)
+	_ease_weather_drive(presence,0.0 if state=="pause" else delta)
+	if is_instance_valid(world): world.set_weather_wind(weather_drive)
+	if is_instance_valid(explorer): explorer.set_weather({"kind":weather_drive_kind,"amount":weather_drive,"direction":weather_side})
+	if state=="play":
+		var shake := weather_overlay.shake_offset()
+		camera.position += Vector3(shake.x,shake.y,0)
+
+const WEATHER_DRIVE_RATE := 2.0
+
+# The drive eases toward the presence amount (the active gust weighted by its
+# own envelope, never under the warning's 0.4), so plants and the rope never
+# snap at a phase edge; the peak stays the full gust. The side is the gust's,
+# kept while it fades (calm already names the next gust's side).
+func _ease_weather_drive(presence: Dictionary, delta: float) -> void:
+	var kind := str(presence.get("kind",""))
+	var amount := clampf(float(presence.get("amount",0.0)),0.0,1.0)
+	var target := amount
+	if kind!="" and str(presence["phase"]["name"])=="active":
+		target = amount*maxf(.4,clampf(float(presence.get("strength",0.0)),0.0,1.0))
+	weather_drive = move_toward(weather_drive,target,WEATHER_DRIVE_RATE*delta)
+	if kind!="" and amount>0.0:
+		weather_side = 1.0 if float(presence.get("direction",1.0))>=0.0 else -1.0
+		weather_drive_kind = kind
+	elif weather_drive<=0.0: weather_drive_kind = ""
+
+const WEATHER_SOUND_KINDS := {"wind":"wind","sand_storm":"sand","blizzard":"blizzard"}
+const CAMPFIRE_NEAR := 2.2
+const CAMPFIRE_FAR := 5.0
+
+# Storm loop level, the warning and gust cues at phase changes in the band,
+# and the crackle beside a campfire.
+func _weather_feedback(presence: Dictionary) -> void:
+	var kind := str(presence["kind"])
+	var loud := int(_settings()["sfx_volume"])>0 and state=="play"
+	var level := 0.0
+	if kind!="" and loud: level = float(presence["amount"])*(.35+.65*float(presence.get("strength",0.0))/1.15)
+	sounds.set_weather(str(WEATHER_SOUND_KINDS.get(kind,"")),level)
+	sounds.set_campfire(_campfire_level() if loud else 0.0)
+	var phase := str(presence["phase"]["name"]) if kind!="" and presence.get("inside",false) else ""
+	if phase!="" and weather_phase!="":
+		if weather_phase=="calm" and phase=="telegraph": _haptic("weather_warn")
+		elif weather_phase=="telegraph" and phase=="active":
+			_sfx("gust")
+			_haptic("weather_hit")
+	weather_phase = phase
+
+# 1 within 2.2 m of a campfire, fading to 0 at 5 m.
+func _campfire_level() -> float:
+	if state!="play" or world==null or world.weather==null: return 0.0
+	var nearest := CAMPFIRE_FAR
+	for fire in world.campfires(): nearest = minf(nearest,sim.pos.distance_to(fire))
+	return clampf((CAMPFIRE_FAR-nearest)/(CAMPFIRE_FAR-CAMPFIRE_NEAR),0,1)
+
+const WEATHER_TOASTS := {"wind":"Ветер сносит в полёте — прыгай в затишье","sand_storm":"Буря скрывает верх — держись ближних зацепов","blizzard":"Холод замедляет — грейся у костра"}
+
+# Once per run, the first time the hero is inside a band of each kind.
+func _weather_toast(presence: Dictionary) -> void:
+	var kind := str(presence["kind"])
+	if kind=="" or not presence.get("inside",false) or weather_seen.has(kind): return
+	weather_seen[kind] = true
+	toast(WEATHER_TOASTS[kind],3.0,"hazard")
 
 # The camp theme plays in the menus, the expedition's own theme on the climb;
 # pause, revive and result screens lower it.

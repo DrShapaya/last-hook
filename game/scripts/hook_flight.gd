@@ -11,20 +11,24 @@ const RETURN_SPEED := 42.0
 var position := Vector2.ZERO
 var velocity := Vector2.ZERO
 var age := 0.0
+# Weather wind taken at the throw and held for the whole flight.
+var wind := Vector2.ZERO
 var trail := PackedVector2Array()
 
 static func inherited_velocity(hero_velocity: Vector2) -> Vector2:
 	return (hero_velocity*INHERITANCE).limit_length(3.0)
 
-func launch(origin: Vector2, direction: Vector2, speed: float, hero_velocity: Vector2) -> void:
+func launch(origin: Vector2, direction: Vector2, speed: float, hero_velocity: Vector2, wind_force: Vector2 = Vector2.ZERO) -> void:
 	position = origin
 	velocity = direction.normalized()*speed+inherited_velocity(hero_velocity)
+	wind = wind_force
 	age = 0
 	trail = PackedVector2Array([origin])
 
 func advance(dt: float) -> void:
-	position += velocity*dt+GRAVITY*(dt*dt*.5)
-	velocity += GRAVITY*dt
+	var acceleration := GRAVITY+wind
+	position += velocity*dt+acceleration*(dt*dt*.5)
+	velocity += acceleration*dt
 	age += dt
 	trail.append(position)
 	if trail.size()>15: trail.remove_at(0)
@@ -39,22 +43,23 @@ static func range_fraction(from: Vector2, to: Vector2, hero: Vector2, maximum: f
 	var b := offset.dot(delta)
 	return clampf((-b+sqrt(maxf(0,b*b-a*(offset.length_squared()-maximum*maximum))))/a,0,1)
 
-static func aim_solution(origin: Vector2, target: Vector2, speed: float, hero_velocity: Vector2) -> Dictionary:
+static func aim_solution(origin: Vector2, target: Vector2, speed: float, hero_velocity: Vector2, wind_force: Vector2 = Vector2.ZERO) -> Dictionary:
 	var offset := target-origin
 	if offset.length_squared()<.000001: return {"direction":Vector2.UP,"time":0.0}
 	var inherited := inherited_velocity(hero_velocity)
+	var acceleration := GRAVITY+wind_force
 	var low := .0001
 	# First root is the fast, shallow arc. No homing or mid-flight steering.
 	for index in range(1,401):
 		var high := index*.005
-		var required := offset/high-GRAVITY*high*.5-inherited
+		var required := offset/high-acceleration*high*.5-inherited
 		if required.length()<=speed:
 			for iteration in range(16):
 				var middle := (low+high)*.5
-				if (offset/middle-GRAVITY*middle*.5-inherited).length()>speed:
+				if (offset/middle-acceleration*middle*.5-inherited).length()>speed:
 					low = middle
 				else:
 					high = middle
-			return {"direction":(offset/high-GRAVITY*high*.5-inherited).normalized(),"time":high}
+			return {"direction":(offset/high-acceleration*high*.5-inherited).normalized(),"time":high}
 		low = high
 	return {"direction":offset.normalized(),"time":offset.length()/speed}

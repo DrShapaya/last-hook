@@ -38,6 +38,18 @@ var far_bands: Dictionary = {}
 var camera_center := Vector2(0,7)
 # Environmental hazards of the acts (v14); empty on older generators.
 var hazards: ActHazards
+# Weather bands of the expedition acts; disabled on other layouts.
+var weather: WeatherBands
+# WeatherBands.campfires() rebuilds its list: kept here per layout state and
+# for the cycles round the view (an endless climb repeats them).
+var _campfires: Array[Vector2] = []
+var _campfires_known := false
+var _campfires_cycle := -1
+# reduce_effects: campfire lights burn steady.
+var reduce_effects := false
+# Per loaded section, the materials the wind bends (plants) and flaps (cloth).
+var weather_materials := {}
+var _wind_applied := 0.0
 var hazard_visuals: HazardVisuals
 var show_loot_prices := true
 var visual_quality := "balanced"
@@ -131,6 +143,8 @@ func setup(world_seed: int, world_location: int, saved_version: int = 0, practic
 	# their own; they get the same rock-mass mountain round their route line.
 	if layout is LegacyMountainLayout or practice: visuals = LegacyMountainVisuals.new(self,layout)
 	hazards = ActHazards.new(self,layout)
+	weather = WeatherBands.new(layout)
+	_campfires_known = false
 	if visuals_enabled:
 		_build_sky()
 		if layout is ExpeditionLayout: hazard_visuals = HazardVisuals.new(self,layout)
@@ -178,6 +192,7 @@ func generate_to(height: float, finite: bool, summit: float = 120) -> void:
 	layout.generation_row_budget = generation_row_budget
 	layout.generate_to(target,finite,summit)
 	route_edges = layout.edges
+	_campfires_known = false
 	if generation_row_budget>=0 and not layout.summit_added and layout.row>0:
 		# The layout may intentionally build only a few rows this call. Expose
 		# the actual frontier so the caller can request the next slice next tick.
@@ -201,6 +216,7 @@ func load_bake(level: LevelBake) -> void:
 	bake = level
 	LevelBake.apply(layout,level.layout_data)
 	route_edges = layout.edges
+	_campfires_known = false
 	_mark_summit()
 	generated_height = maxf(generated_height,minf(level.height+6,layout.summit+6))
 	stream_pending = true
@@ -761,6 +777,7 @@ func _release_chunk(key: int) -> void:
 	for object in ledges:
 		if int(floor(float(object["top"])/24))==key: object["visual"] = null
 	var chunk: Node3D = chunks[key]
+	weather_materials.erase(key)
 	if key==build_job_key: build_job_cancelled = true
 	remove_child(chunk)
 	chunk.queue_free()
@@ -983,6 +1000,7 @@ func _build_chunk_objects(key: int, chunk: Node3D) -> void:
 		# A platform is a long piece too (14 ms and more): one per frame.
 		build_deadline = 0
 	if key==0 and layout.finite: visuals.build_base_camp(chunk)
+	_build_campfires(key,chunk)
 	for find in finds:
 		if int(floor(find["pos"].y/24))!=key: continue
 		if not await build_pause(chunk): return
@@ -993,6 +1011,103 @@ func _build_chunk_objects(key: int, chunk: Node3D) -> void:
 		# The summit flag: a tall mast with the expedition's hook on its cloth.
 		FloraModels.flag(chunk,"mast_high","yellow",Vector3(p.x,p.y,2),3.0,1.0,visual_quality!="battery","hook")
 		_build_summit_beacon(chunk,p)
+
+# Blizzard campfires of the cycle in view and its neighbours, computed once
+# per layout state and view cycle.
+func campfires() -> Array[Vector2]:
+	var cycle := _view_cycle()
+	if not _campfires_known or cycle!=_campfires_cycle:
+		_campfires = weather.campfires(cycle-1,cycle+1,generated_height) if weather!=null else ([] as Array[Vector2])
+		_campfires_known = true
+		_campfires_cycle = cycle
+	return _campfires
+
+func _view_cycle() -> int:
+	var total := weather.cycle_height() if weather!=null else 0.0
+	return maxi(0,int(floor(camera_center.y/total))) if total>0.0 else 0
+
+func set_reduce_effects(value: bool) -> void:
+	if value==reduce_effects: return
+	reduce_effects = value
+	for fire in get_tree().get_nodes_in_group("campfire") if is_inside_tree() else []:
+		if is_ancestor_of(fire): CampfireVisuals.set_flicker(fire,not reduce_effects)
+
+# The section's campfires stand on their ledges, mid-deck like the base camp,
+# and go with the section.
+func _build_campfires(key: int, chunk: Node3D) -> void:
+	for fire in campfires():
+		if int(floor(fire.y/24))!=key: continue
+		CampfireVisuals.build(chunk,fire,_campfire_depth(fire),visual_quality!="battery",reduce_effects)
+
+func _campfire_depth(fire: Vector2) -> float:
+	if not visuals is MountainVisuals: return 2.0
+	var mountain := visuals as MountainVisuals
+	for ledge in ledges:
+		var left := float(ledge["left"])
+		var right := float(ledge["right"])
+		var top := float(ledge["top"])
+		if absf(top-fire.y)>.01 or absf((left+right)*.5-fire.x)>.01: continue
+		var drop: float = MountainVisuals.WoodPlatform.DROP[str(ledge.get("platform_style","braced"))]
+		var back := mountain.platform_back(left,right,top,drop)
+		var depth: float = MountainVisuals.WoodPlatform.DEPTH
+		var front := back+depth*clampf((MountainVisuals.PLATFORM_FRONT-back)/depth,.55,1.0)
+		return (back+front)*.5
+	return 2.0
+
+# How hard the weather blows at the hero (0..1): plants bend and sway more
+# (wind = 1+3*amount), cloth flaps harder (x(1+2*amount)). A section's
+# materials are found once, when it is complete, one section per call;
+# values change only on a step over 0.05 (or back to calm). Nothing at all
+# without weather.
+func set_weather_wind(amount: float) -> void:
+	if weather==null or not weather.enabled(): return
+	var update_all := absf(amount-_wind_applied)>.05 or (amount==0.0 and _wind_applied!=0.0)
+	if update_all: _wind_applied = amount
+	elif weather_materials.size()>=chunks.size(): return
+	var scanned := false
+	for key in chunks:
+		if not weather_materials.has(key):
+			if scanned or not chunk_complete(key): continue
+			scanned = true
+			weather_materials[key] = _wind_materials(chunks[key])
+			# Shared materials may still carry another world's gust.
+			_apply_wind(weather_materials[key],_wind_applied)
+		elif update_all: _apply_wind(weather_materials[key],_wind_applied)
+
+# Shared plant and cloth materials go back to calm with the world, so a
+# world without weather never inherits a gust.
+func _exit_tree() -> void:
+	if _wind_applied==0.0: return
+	for materials in weather_materials.values(): _apply_wind(materials,0.0)
+	_wind_applied = 0.0
+
+func _wind_materials(chunk: Node3D) -> Dictionary:
+	var plants := {}
+	var cloths := {}
+	var seen := {}
+	for node: GeometryInstance3D in chunk.find_children("*","GeometryInstance3D",true,false):
+		var material := node.material_override as ShaderMaterial
+		if material==null and node is MeshInstance3D and (node as MeshInstance3D).mesh!=null and (node as MeshInstance3D).mesh.get_surface_count()>0:
+			material = (node as MeshInstance3D).get_active_material(0) as ShaderMaterial
+		if material==null or material.shader==null: continue
+		var id := material.get_instance_id()
+		if seen.has(id): continue
+		seen[id] = true
+		var names := {}
+		for uniform in material.shader.get_shader_uniform_list(): names[str(uniform["name"])] = true
+		if not names.has("wind"): continue
+		if not material.has_meta("weather_wind"):
+			var base: Variant = material.get_shader_parameter("wind")
+			material.set_meta("weather_wind",float(base) if base!=null else 1.0)
+		if names.has("sway"): plants[id] = material
+		elif names.has("hang"): cloths[id] = material
+	return {"plants":plants.values(),"cloths":cloths.values()}
+
+static func _apply_wind(materials: Dictionary, amount: float) -> void:
+	for material: ShaderMaterial in materials["plants"]:
+		material.set_shader_parameter("wind",float(material.get_meta("weather_wind"))*(1.0+3.0*amount))
+	for material: ShaderMaterial in materials["cloths"]:
+		material.set_shader_parameter("wind",float(material.get_meta("weather_wind"))*(1.0+2.0*amount))
 
 # The last grip of the main route is the summit's own (docs/LEVEL_OBJECTS_PLAN.md,
 # stage 5); -1 until the summit is laid out.

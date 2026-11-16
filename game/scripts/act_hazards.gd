@@ -4,9 +4,8 @@ extends RefCounted
 # Runtime of the act hazards a v14 layout placed (see LevelCatalog.HAZARDS).
 # Phases come from the run clock only, so a resumed attempt sees the same
 # storm window; the one-time collapse is the only stored state.
-#   field     wind, storm, gust: drift while the hero is airborne in the zone;
-#             a branch pocket only moves the hero who took its branch (held
-#             or just left), a main-path storm moves everyone in it
+#   field     wind_pocket, storm_cycle...: switched off, kept in the list for
+#             their ids only; weather (wind, sand, blizzard) is WeatherBands
 #   contact   cactus, scorpion: a knock while the hazard is active
 #   falling   icicle: the hero's weight on its branch grip cracks it ->
 #             crack and shadow -> fall on a fixed line
@@ -82,15 +81,7 @@ func step(time: float, hero: Vector2, grounded: bool, held_anchor: int = -1, las
 	for hazard in list:
 		var now := phase(hazard,time)
 		match str(hazard["kind"]):
-			"field":
-				var rect: Rect2 = hazard["rect"]
-				var branch := int(hazard.get("branch_anchor",-1))
-				var takes := bool(hazard.get("affects_main",false)) or (branch>=0 and (held_anchor==branch or last_anchor==branch))
-				if now["name"]=="active" and takes and rect.has_point(hero) and not grounded:
-					result["force"] += hazard["force"]
-				if bool(hazard.get("haze",false)) and rect.grow(4.0).has_point(hero):
-					var amount := 1.0 if now["name"]=="active" else float(now["progress"]) if now["name"]=="telegraph" else 0.0
-					result["haze"] = maxf(float(result["haze"]),amount)
+			"field": continue # weather is WeatherBands now
 			"contact":
 				if now["name"]=="active" and hero.distance_to(hazard["pos"])<float(hazard["radius"])+BODY_RADIUS and result["knock"].is_empty():
 					result["knock"] = {"hazard":hazard["id"],"push":(hero-hazard["pos"]).normalized()*3.2+Vector2(0,-1.0)}
@@ -115,35 +106,20 @@ func step(time: float, hero: Vector2, grounded: bool, held_anchor: int = -1, las
 					result["collapsed"].append(hazard["id"])
 	return result
 
-# A careful player waits on a grip until every cyclic storm covering it is
-# calm for `need` seconds. Constant pockets never block waiting.
-func calm_for(point: Vector2, time: float, need: float) -> bool:
-	for hazard in list:
-		if hazard["kind"]!="field" or is_inf(float(hazard["active_time"])): continue
-		# A storm over the main path is waited out near it; a branch storm only
-		# matters inside its own sector.
-		var zone: Rect2 = (hazard["rect"] as Rect2).grow(1.0 if bool(hazard.get("affects_main",false)) else 0.0)
-		if not zone.has_point(point): continue
-		var now := phase(hazard,time)
-		if now["name"]!="calm" or float(now["left"])<need: return false
+# Field pockets are off (WeatherBands owns the weather and its own calm_for),
+# so nothing here ever asks a player to wait.
+func calm_for(_point: Vector2, _time: float, _need: float) -> bool:
 	return true
 
 func hint(point: Vector2, time: float) -> String:
 	for hazard in list:
-		if not _near(hazard,point,2.5): continue
+		if hazard["kind"]=="field" or not _near(hazard,point,2.5): continue
 		var now := phase(hazard,time)
 		match str(hazard["def"]):
-			"sand_storm", "storm_cycle":
-				if now["name"]=="telegraph": return "Идёт буря — держись за камень"
-				if now["name"]=="active": return "Буря сносит в сторону — жди затишья"
-			"blizzard_gust":
-				if now["name"]=="telegraph": return "Порыв метели!"
 			"icicle":
 				if now["name"]=="telegraph": return "Сосулька треснула — уйди с линии"
 			"sand_bridge":
 				if now["name"]=="telegraph": return "Перемычка осыпается — цепляйся выше"
-			"wind_pocket":
-				return "Ветровой карман: флаги показывают снос"
 	return ""
 
 func knock_message(id: int) -> String:

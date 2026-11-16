@@ -6,6 +6,22 @@ extends RefCounted
 # is climbable with the kit it is given; it does not judge how hard or how
 # pleasant that is for a person. Shared by tests and level tools.
 
+# Longest wait for the weather on one grip: 20 s at 120 frames per second.
+const WAIT_FRAMES := 2400
+# Calm the bot asks of the band at the hero and at the goal before a throw.
+const CALM_NEED := 2.0
+
+# A careful climber waits out a gust on a permanent grip: true while the
+# hero holds one and the band at the hero or at the goal is not calm for
+# the next CALM_NEED seconds. A timed grip (crumbling, ice, plate) is never
+# waited on.
+static func waits_out_weather(game, goal: Vector2) -> bool:
+	var weather = game.world.weather
+	if weather==null or not game.sim.attached: return false
+	var current: Dictionary = game.world.anchor_by_id(game.anchor_id)
+	if not current.get("permanent",false) or GripSpec.timed(current) or GripSpec.kind_of(current)==GripSpec.ICE or GripSpec.plate(current): return false
+	return not (weather.calm_for(game.sim.pos,game.hazard_clock,CALM_NEED) and weather.calm_for(goal,game.hazard_clock,CALM_NEED))
+
 # Throws with the one-finger gesture, as a player would.
 static func touch_throw(game, target: Vector2) -> void:
 	var origin := Vector2(150,400)
@@ -27,7 +43,12 @@ static func climb_route(game, count: int, log: Array = [], route: Array = []) ->
 		var target_id: int = path[route_index]
 		var target: Vector2 = game.world.anchor_by_id(target_id)["pos"]
 		var fired := false
-		for frame in range(1200):
+		var waited := 0
+		var frame := -1
+		# Frames spent waiting out the weather do not count against the 1200,
+		# up to WAIT_FRAMES of them per grip.
+		while frame<1199+waited:
+			frame += 1
 			if game.state!="play":
 				log.append("stopped before grip %d (%s) at %s" % [route_index,game.state,str(game.sim.pos)])
 				return reached
@@ -52,7 +73,9 @@ static func climb_route(game, count: int, log: Array = [], route: Array = []) ->
 						goal = hit["pos"]
 						clear_shot = true
 				var toward: Vector2 = (goal-game.sim.pos).normalized()
-				if clear_shot and game.sim.pos.distance_to(goal)<5.2 and game.sim.vel.dot(toward)>.5 and stays_in_reach(game,goal):
+				if waited<WAIT_FRAMES and waits_out_weather(game,goal):
+					waited += 1
+				elif clear_shot and game.sim.pos.distance_to(goal)<5.2 and game.sim.vel.dot(toward)>.5 and stays_in_reach(game,goal):
 					touch_throw(game,goal)
 					fired = true
 			game._physics_process(1.0/120)
@@ -73,8 +96,10 @@ static func climb_route(game, count: int, log: Array = [], route: Array = []) ->
 # still in reach where the hero, falling free once the throw lets go of the
 # rope, will be when the hook gets there.
 static func stays_in_reach(game, goal: Vector2) -> bool:
-	var flight: float = float(HookFlight.aim_solution(game.sim.pos,goal,float(game.model.throw_speed()),game.sim.vel)["time"])
-	var later: Vector2 = game.sim.pos+game.sim.vel*flight+Vector2(0,-game.sim.gravity)*(flight*flight*.5)
+	# The gust at the throw is held for the flight, as the throw itself does.
+	var wind: Vector2 = game.weather_wind()
+	var flight: float = float(HookFlight.aim_solution(game.sim.pos,goal,float(game.throw_speed()),game.sim.vel,wind)["time"])
+	var later: Vector2 = game.sim.pos+game.sim.vel*flight+(Vector2(0,-game.sim.gravity)+wind)*(flight*flight*.5)
 	return later.distance_to(goal)<float(game.model.shot_range())-.25
 
 # The main route with every split taken instead of its main stretch.

@@ -36,6 +36,12 @@ func test_assets() -> void:
 			check(ResourceLoader.exists("res://assets/sfx/%s_%d.wav" % [sound,take]),"%s take %d exists" % [sound,take])
 	var wind := load("res://assets/sfx/wind_1.wav") as AudioStreamWAV
 	check(wind!=null and wind.loop_mode==AudioStreamWAV.LOOP_FORWARD,"wind loops")
+	check(SoundBank.SOUNDS.has("gust"),"the gust sound is in the table")
+	for loop in ["weather_wind","weather_sand","weather_blizzard","campfire"]:
+		var stream := load("res://assets/sfx/%s_1.wav" % loop) as AudioStreamWAV
+		check(stream!=null and stream.loop_mode==AudioStreamWAV.LOOP_FORWARD,"%s loops" % loop)
+	var gust := load("res://assets/sfx/gust_1.wav") as AudioStreamWAV
+	check(gust!=null and gust.get_length()>.6 and gust.get_length()<1.0,"the gust is under a second")
 
 func test_music() -> void:
 	var music := MusicPlayer.new()
@@ -110,8 +116,24 @@ func test_sound_bank() -> void:
 	var loudest := bank.wind.volume_db
 	bank._process(.4)
 	check(bank.wind.volume_db>loudest,"wind swells instead of popping in")
+	bank.set_weather("sand",.8)
+	bank.set_campfire(1.0)
+	bank._process(.5)
+	check(bank.weather.playing and bank.weather.stream.resource_path.ends_with("weather_sand_1.wav"),"the weather loop plays the kind's file")
+	check(bank.weather.volume_db>SoundBank.WIND_SILENT_DB and bank.campfire.playing,"weather and campfire loops rise")
+	var storm_db := bank.weather.volume_db
+	bank.set_weather("sand",.2)
+	bank._process(1.0)
+	check(bank.weather.volume_db<storm_db,"a calmer storm is quieter")
+	bank.set_weather("",0.0)
+	bank.set_campfire(0.0)
+	bank._process(5.0)
+	check(not bank.weather.playing and not bank.campfire.playing,"weather and campfire fade out to silence")
+	bank.set_weather("wind",1.0)
+	bank.set_campfire(1.0)
+	bank._process(.5)
 	bank.stop_all()
-	check(not bank.wind.playing,"everything can be silenced")
+	check(not bank.wind.playing and not bank.weather.playing and not bank.campfire.playing,"everything can be silenced")
 	bank.queue_free()
 
 func test_haptics() -> void:
@@ -124,6 +146,7 @@ func test_haptics() -> void:
 	haptics.enabled = false
 	check(not haptics.play("win"),"the setting turns vibration off")
 	haptics.enabled = true
+	check(Haptics.PATTERNS.has("weather_warn") and Haptics.PATTERNS.has("weather_hit"),"weather has its warning and hit patterns")
 	check(not haptics.play("nothing"),"an unknown pattern is ignored")
 	var strongest := {}
 	for name in Haptics.PATTERNS:

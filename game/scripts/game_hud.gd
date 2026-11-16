@@ -33,6 +33,8 @@ func summit_marker_text() -> String:
 func set_play_hidden(hidden: bool) -> void:
 	content.visible = not hidden
 var rope_gauge: PlayGauges.RopeGauge
+var weather_chip: PlayGauges.WeatherChip
+var cold_gauge: PlayGauges.ColdGauge
 var danger_edge: PlayGauges.DangerEdge
 var danger_timer: PlayGauges.TimerBar
 var height_plate: Panel
@@ -877,6 +879,8 @@ func clear() -> void:
 	summit_label = null
 	climb_bar = null
 	rope_gauge = null
+	weather_chip = null
+	cold_gauge = null
 	danger_edge = null
 	danger_timer = null
 	height_plate = null
@@ -1060,6 +1064,20 @@ func show_play() -> void:
 	rope_gauge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rope_gauge.visible = false
 	content.add_child(rope_gauge)
+	# Under the rope gauge, in its column; the cold gauge stands left of the chip
+	# so that the bag tray below keeps clear on short screens.
+	weather_chip = PlayGauges.WeatherChip.new()
+	weather_chip.position = Vector2(width-EDGE-44,rope_gauge.position.y+rope_gauge.size.y+8.0)
+	weather_chip.size = Vector2(44,72)
+	weather_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	weather_chip.visible = false
+	content.add_child(weather_chip)
+	cold_gauge = PlayGauges.ColdGauge.new()
+	cold_gauge.position = Vector2(weather_chip.position.x-8.0-44.0,weather_chip.position.y)
+	cold_gauge.size = Vector2(44,72)
+	cold_gauge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cold_gauge.visible = false
+	content.add_child(cold_gauge)
 	var notes := VBoxContainer.new()
 	notes.position = Vector2(EDGE,below)
 	notes.add_theme_constant_override("separation",6)
@@ -1320,6 +1338,29 @@ func _discard(index: int) -> void:
 	refresh_bag()
 	game.save_snapshot()
 
+# The weather chip follows the band at the hero (6 m margin); the cold gauge
+# shows in a blizzard band or while there is cold left.
+func update_weather_widgets() -> void:
+	var weather: WeatherBands = game.world.weather if is_instance_valid(game.world) else null
+	var band := weather.band_at(game.sim.pos.y,6.0) if weather!=null else {}
+	weather_chip.visible = not band.is_empty()
+	if not band.is_empty():
+		var info := weather.phase(band,game.hazard_clock)
+		var phase_now := str(info["name"])
+		weather_chip.kind = str(band["kind"])
+		weather_chip.phase_name = phase_now
+		weather_chip.direction = weather.direction(band,int(info["gust"]))
+		var ring := 0.0
+		if phase_now=="calm": ring = clampf(1.0-float(info["left"])/4.0,0.0,1.0)
+		elif phase_now=="telegraph": ring = float(info["progress"])
+		else: ring = 1.0-float(info["progress"])
+		weather_chip.ring = ring
+		weather_chip.blink = phase_now=="telegraph" and not effects_reduced()
+	var cold: float = game.cold.cold
+	cold_gauge.visible = cold>.01 or (not band.is_empty() and band["kind"]=="blizzard")
+	# The gauge redraws itself on a visible change of value.
+	cold_gauge.value = cold
+
 # Note chips wrap before the rope gauge instead of running under it or off
 # the screen; short notes keep their natural single line.
 func fit_notes() -> void:
@@ -1449,6 +1490,7 @@ func update_play() -> void:
 	rope_gauge.ratio = rope_out/maxf(.1,game.model.shot_range())
 	rope_gauge.meters = roundi(rope_out*10)
 	rope_gauge.direction = reel
+	update_weather_widgets()
 	aim_overlay.aim_color = MenuSurface.HOLD
 	if aim_overlay.active:
 		# The forecast sweeps up to 240 steps per hook. Rebuild it about 20 times

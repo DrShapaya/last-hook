@@ -3,11 +3,12 @@
 # so a repeat is never the same recording twice. Tonal sounds (catch, coin,
 # pickup, win, revive) are written on C: SoundBank transposes them into the key
 # of the music that is playing. Needs numpy only. Run: python tools/make_sfx.py
+# (or python tools/make_sfx.py --only gust,campfire for just those sounds).
 import os, struct, sys
 import numpy as np
 
 SR = 44100
-OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "game", "assets", "sfx")
+OUT = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "game", "assets", "sfx")
 C5, E5, G5, C6, E6, G6, C7 = 523.25, 659.26, 783.99, 1046.5, 1318.5, 1568.0, 2093.0
 
 def timeline(seconds):
@@ -210,6 +211,53 @@ def wind():
     gust = .6 + .4 * np.sin(2 * np.pi * 3 * t / 8.0 + 1.1)
     return low * swell * .8 + mid * gust * .3
 
+def weather_wind():
+    # A low howl that breathes: band-limited noise, slow whole-cycle swells.
+    n, t = timeline(10.0)
+    low = noise(n, 70, 480, 970)
+    mid = noise(n, 300, 1100, 971)
+    swell = .7 + .3 * np.sin(2 * np.pi * 2 * t / 10.0)
+    gust = .55 + .45 * np.sin(2 * np.pi * 5 * t / 10.0 + .7)
+    return low * swell * .9 + mid * gust * .35
+
+def weather_sand():
+    # Driven grains: bright hiss that flutters faster than the wind does.
+    n, t = timeline(8.0)
+    hiss = noise(n, 1800, 7500, 980)
+    body = noise(n, 400, 1800, 981)
+    flutter = .65 + .2 * np.sin(2 * np.pi * 11 * t / 8.0) + .15 * np.sin(2 * np.pi * 3 * t / 8.0 + 1.3)
+    return hiss * flutter * .8 + body * (.6 + .4 * np.sin(2 * np.pi * t / 8.0)) * .35
+
+def weather_blizzard():
+    # A thin wail: narrow noise bands that glide, over a soft roar.
+    n, t = timeline(10.0)
+    roar = noise(n, 80, 500, 990)
+    wail = noise(n, 650, 900, 991) + noise(n, 1100, 1350, 992) * .6
+    glide = .55 + .45 * np.sin(2 * np.pi * 3 * t / 10.0 + .4)
+    swell = .75 + .25 * np.sin(2 * np.pi * 2 * t / 10.0)
+    return roar * swell * .6 + wail * glide * .8
+
+def campfire():
+    # Quiet embers: a soft rumble and random pops that wrap around the loop.
+    n, t = timeline(8.0)
+    out = noise(n, 60, 350, 1000) * .18
+    rng = np.random.default_rng(1001)
+    tt = np.arange(int(.05 * SR)) / SR
+    for index in range(46):
+        pop = noise(len(tt), 900, 5000, 2000 + index) * np.exp(-tt * rng.uniform(120, 320)) * rng.uniform(.25, 1.0)
+        start = int(rng.uniform(0, 8.0) * SR)
+        idx = (start + np.arange(len(tt))) % n
+        out[idx] += pop
+    return out
+
+def gust():
+    # A rising whistle on air that dies away fast.
+    n, t = timeline(.8)
+    air = noise(n, 400, 2600, 1010)
+    whistle = sweep(500, 1500, t, .8, 1.6)
+    rise = np.sin(np.pi * np.minimum(t / .8, 1.0) ** 1.5) ** 1.2
+    return (air * .6 + whistle * .35) * rise
+
 def write_wav(path, data, loop=False):
     pcm = (np.clip(data / (np.max(np.abs(data)) + 1e-9), -1, 1) * 23000).astype("<i2").tobytes()
     chunks = b""
@@ -235,12 +283,23 @@ TAKES = {"launch":(launch,3),"catch":(catch,3),"release":(release,2),"return":(r
 SINGLE = {"focus_in":focus_in,"focus_out":focus_out,"coin":coin,"pickup":pickup,"item_arm":item_arm,"item_fire":item_fire,
           "knock":knock,"fail":fail,"win":win,"revive":revive}
 
+LOOPS = {"wind":wind,"weather_wind":weather_wind,"weather_sand":weather_sand,"weather_blizzard":weather_blizzard,"campfire":campfire}
+SINGLE["gust"] = gust
+
 if __name__ == "__main__":
+    # --only a,b writes just the named sounds and leaves the other files alone.
+    only = None
+    if "--only" in sys.argv:
+        position = sys.argv.index("--only") + 1
+        only = sys.argv[position].split(",") if position < len(sys.argv) else []
     os.makedirs(OUT, exist_ok=True)
+    wanted = lambda name: only is None or name in only
     for name, (make, count) in TAKES.items():
+        if not wanted(name): continue
         for take in range(count):
             write_wav(os.path.join(OUT, f"{name}_{take + 1}.wav"), fade_end(make(take)))
     for name, make in SINGLE.items():
-        write_wav(os.path.join(OUT, f"{name}_1.wav"), fade_end(make()))
-    write_wav(os.path.join(OUT, "wind_1.wav"), wind(), True)
+        if wanted(name): write_wav(os.path.join(OUT, f"{name}_1.wav"), fade_end(make()))
+    for name, make in LOOPS.items():
+        if wanted(name): write_wav(os.path.join(OUT, f"{name}_1.wav"), make(), True)
     print("sfx written:", len(os.listdir(OUT)))

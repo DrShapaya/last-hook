@@ -16,6 +16,7 @@ var route_index := 1
 var target_id := -1
 var target := Vector2.ZERO
 var fired := false
+var waited := 0 # Frames spent waiting out the weather at this grip (RouteBot.WAIT_FRAMES cap).
 var mid_turn := 0 # Frames that catch the hero turning around (body edge-on).
 # --no-images: only the counts. --seed=N: another mountain.
 var images := true
@@ -60,6 +61,7 @@ func _next_target() -> void:
 	target_id = game.world.main_route[route_index]
 	target = game.world.anchor_by_id(target_id)["pos"]
 	fired = false
+	waited = 0
 	step = 0
 
 func _frame() -> void:
@@ -132,7 +134,10 @@ func _bot_step() -> void:
 			if not clear and int(hit["id"])!=game.anchor_id and hit["pos"].distance_to(target)<game.sim.anchor.distance_to(target)-.3:
 				goal = hit["pos"]
 				clear = true
-		if clear and game.sim.pos.distance_to(goal)<5.2 and game.sim.vel.dot((goal-game.sim.pos).normalized())>.5:
+		# Waits out a gust on a permanent grip, as the route bot does.
+		var waiting: bool = clear and waited<RouteBot.WAIT_FRAMES and RouteBot.waits_out_weather(game,goal)
+		if waiting: waited += 1
+		if clear and not waiting and game.sim.pos.distance_to(goal)<5.2 and game.sim.vel.dot((goal-game.sim.pos).normalized())>.5:
 			_touch_throw(goal)
 			fired = true
 	game._physics_process(1.0/120)

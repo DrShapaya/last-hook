@@ -49,6 +49,8 @@ func run_tests() -> void:
 			flight.advance(solution["time"])
 			solved = solved and flight.position.distance_to(target)<.001
 	check(solved,"point aiming solves the shallow arc while accounting for inherited momentum")
+	test_hook_wind_flight()
+	test_aim_with_wind()
 	check(is_equal_approx(HookFlight.range_fraction(Vector2.ZERO,Vector2(8,0),Vector2.ZERO,5.5),5.5/8),"payout clips the swept arc at the actual available rope")
 	var wave := ExplorerView.flight_rope_points(Vector3.ZERO,Vector3(0,4,0),.12,false)
 	check(wave[0]==Vector3.ZERO and wave[-1]==Vector3(0,4,0) and absf(wave[8].x)>.01,"flying rope has a visible wave while preserving both endpoints")
@@ -207,3 +209,31 @@ func run_tests() -> void:
 	report.store_string(JSON.stringify({"checks":checks,"failures":failures,"passed":failures.is_empty()},"\t"))
 	print("HOOK_TESTS ",checks," checks, ",failures.size()," failures")
 	quit(0 if failures.is_empty() else 1)
+
+# A held wind adds to gravity: over 0.4 s it carries the hook 0.5*a*t^2 further.
+func test_hook_wind_flight() -> void:
+	var calm := HookFlight.new()
+	calm.launch(Vector2.ZERO,Vector2.RIGHT,16,Vector2.ZERO)
+	var windy := HookFlight.new()
+	windy.launch(Vector2.ZERO,Vector2.RIGHT,16,Vector2.ZERO,Vector2(7,0))
+	check(windy.wind==Vector2(7,0),"the flight keeps the wind it was thrown into")
+	for index in range(48):
+		calm.advance(HookFlight.STEP)
+		windy.advance(HookFlight.STEP)
+	var drift := windy.position.x-calm.position.x
+	check(absf(drift-.5*7*.16)<=.01,"wind carries the hook 0.5*7*0.16 m further in 0.4 s (%.4f)" % drift)
+	check(absf(windy.position.y-calm.position.y)<.0001,"a sideways wind leaves the drop alone")
+
+# The aim solution knows the wind: the stepped flight lands on the target.
+func test_aim_with_wind() -> void:
+	var worst := 0.0
+	for wind in [Vector2(7,0),Vector2(-7,0),Vector2(4.9,0)]:
+		for velocity in [Vector2.ZERO,Vector2(5,-3)]:
+			for target in [Vector2(4,2),Vector2(-4,3),Vector2(0,5),Vector2(6,1)]:
+				var solution := HookFlight.aim_solution(Vector2.ZERO,target,16,velocity,wind)
+				var flight := HookFlight.new()
+				flight.launch(Vector2.ZERO,solution["direction"],16,velocity,wind)
+				while flight.age<float(solution["time"])-.00001:
+					flight.advance(minf(HookFlight.STEP,float(solution["time"])-flight.age))
+				worst = maxf(worst,flight.position.distance_to(target))
+	check(worst<.05,"aiming into the wind still hits the target (%.4f)" % worst)
